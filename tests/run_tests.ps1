@@ -4977,15 +4977,6 @@ if ($Category -in @("all", "run", "bas")) {
         "UDTMOD-6 v=111 err=438",
         "UDTMOD-7 isobj=True err=0",
         "UDTMOD-DONE")
-    # 第一百一十三刀 (§11.95): 内建 Collection 的未知名成员 —— 真机 probe112 P3 = 438 且不写目标。
-    # 修前宿主模型对 Collection 任何未知成员 `return 1`（答了但没答），438 收口走不到。
-    Add-BasTest "test_collmiss" "$Tests\test_collmiss.bas" @(
-        "CM-1 count=1",
-        "CM-2 item=5",
-        "CM-3 v=[111] err=438",
-        "CM-4 count=1 err=0",
-        "CM-5 v=[222] err=438",
-        "COLLMISS-DONE")
     # <vbeclipse>: Array() 空数组那一形 (UBound=-1/LBound=0/For Each 零次) 与"未分配 →
     # 运行时错误 9"两形; 读数全取自真实输出。常量实参那形见 arr_n01_ubound_vbnull。
     Add-BasTest "test_arr_empty" "$Tests\test_arr_empty.bas" @("EA-ub=-1", "EA-lb=0", "EA-n=0", "EA-isarr=True", "EA-join=[", "EA-fe=0", "EA-vub=-1", "EA-3ub=2", "EA-e2=9", "EA-rb-lb=1", "EA-rb-ub=3", "EA-err=9", "EA-ea-nullread=9", "EA-ea-nullwrite=9",

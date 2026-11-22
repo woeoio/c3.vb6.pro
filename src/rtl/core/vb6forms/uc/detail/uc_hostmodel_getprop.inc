@@ -16,13 +16,16 @@
     }
     if (vb6_uc_isColl(obj)) {   // Fix 112c: RTL Collection
         if (_wcsicmp(name, L"Count") == 0) { vb6_ho_setVariantLong(out, vb6_Collection_Count(obj)); return 1; }
-        /* 第一百一十三刀 (§11.95): 真机 probe112「P3 `Set v = col.NoSuchProperty`」= `v=[111] err=438`。
-           以前这里对**任何**未知成员都 `return 1`（答了但没答），于是 vb6_ComGetPropRcv 宿主
-           分支的 `hgot < 0` 那条 438 收口永远走不到：本机 `v=[] err=0`，而且把目标写了
-           （真机 438 不写目标）。Collection 的属性面只有 `Count`（`Item` 走参数化那一岔，
-           `Add`/`Remove` 走方法那一岔），其余名字就是**成员不存在** ⇒ -1。 */
-        vb6_ho_report438(L"GetProp", name, obj);
-        return -1;
+        /* 第一百一十三刀 (§11.95): 真机 probe112「P3 `Set v = col.NoSuchProperty`」= `v=[111] err=438`，
+           本机这一格本该回 **-1**（= 成员不存在，由 vb6_ComGetPropRcv 的 `hgot < 0` 那条收口抛 438）。
+           实测切不动：改成 -1 之后 Charts2020 的 GUI 格当场红（exit=438）。根因不在这一格，而在
+           生成码：`With <UDT>: .Prop.Add …`（`Prop As Collection`）当前发成
+              vb6_ComCall(vb6_ComGetObjectProp(_vb6_with_N->Prop, L"Prop"), L"Add", …)
+           —— 多出来的一层 `ComGetObjectProp(……, L"Prop")` 拿 Collection 问它自己叫不叫 Prop。
+           以前这一层被这里的宽容吞掉（接收者变 NULL，那一串 Add 全是空转），§11.95 让它报 438 之后
+           就变成进程级错误。即：**这一格是那处发错误的勒索对象**（冤）—— 先把发错误修好
+           （第一百一十四刀，复现器 `.temp/k113/wuc2.bas`，五行），再把这里改回 -1。 */
+        return 1;
     }
     if (vb6_uc_isFont(obj)) {
         /* 账 #305 第二百七十六刀: 认得就答、认不出**先报数** —— 第二百七十三刀给方法

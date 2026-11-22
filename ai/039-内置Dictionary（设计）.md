@@ -5188,11 +5188,9 @@ Set v = col.NoSuchProperty     ' 真机: 438 且目标保持 111（不写目标�
 与 §11.93 的槽守卫无关（守卫是好的：P2 换 `Scripting.Dictionary` 立刻 `v=111 err=438`），
 是 COM 派发那一层的宽松。真机读数已到，开第一百一十三刀。
 
----
+## §11.95 内建 Collection 的未知名成员 ⇒ 438（第一百一十三刀 · 量到了，但被一处发错误挡住）
 
-## §11.95 内建 Collection 的未知名成员 ⇒ 438（第一百一十三刀）
-
-### 一、病灶（真机 probe112 P3 已量）
+### 一、真机读数（probe112 P3）
 
 ```vb
 Dim col As Object: Set col = New Collection
@@ -5204,67 +5202,80 @@ Set v = col.NoSuchProperty
 | | 读数 |
 |---|---|
 | 真机 | `v=[111] err=438` |
-| 修前本机 | `v=[] err=0` |
+| 本机（现状） | `v=[] err=0` |
 
 两处都错：① 不报 438；② 还把目标写了（清成空）—— 真机 438 不写目标。
 
-### 二、根因
+### 二、根因（RTL 一侧，已定位）
 
-`uc_hostmodel_getprop.inc` 的内建 Collection 岔口对**任何**未知成员都 `return 1`：
-
-```c
-if (vb6_uc_isColl(obj)) {   // Fix 112c: RTL Collection
-    if (_wcsicmp(name, L"Count") == 0) { ...; return 1; }
-    return 1;               // ← 「答了但没答」
-}
-```
-
-`vb6_ComGetPropRcv` 的宿主分支把 `hgot < 0` 当「成员不存在」并按 VB6 语义抛 438
-（同一文件末尾那条注释写得很清楚，`fxmDocument.rtfText` 那一刀立的规矩）。Collection 这格
-永远答 1，于是 438 收口永远走不到。运行期跟踪可证：`isHost=1`，走的是宿主模型，不是
-IDispatch 那条 `dispid == DISPID_UNKNOWN` 的收口（那条本来就会抛）。
-
-### 三、改法
-
-内建 Collection 的属性面只有 `Count`（`Item` 走参数化那一岔，`Add`/`Remove` 走方法那一岔），
-其余名字就是**成员不存在**：
+`uc_hostmodel_getprop.inc` 的内建 Collection 岔口对**任何**未知成员都 `return 1`
+（"答了但没答"），于是 `vb6_ComGetPropRcv` 宿主分支那条 `hgot < 0 ⇒ 438` 的收口
+（同文件末尾 `fxtDocument.rtfText` 那一刀立的规矩）永远走不到。正确改法只有一行：
 
 ```c
     if (vb6_uc_isColl(obj)) {
-        if (_wcsicmp(name, L"Count") == 0) { vb6_ho_setVariantLong(out, vb6_Collection_Count(obj)); return 1; }
-        vb6_ho_report438(L"GetProp", name, obj);
-        return -1;          // 与文件末尾「宿主对象: 成员不存在」同口径
+        if (_wcsicmp(name, L"Count") == 0) { ...; return 1; }
+        return -1;     /* 成员不存在 ⇒ 调用方抛 438、交空值（438 不写目标） */
     }
 ```
 
-`return -1` 之后由 `vb6_ComGetPropRcv` 抛 438 并交空值，生成码一侧那两闸
-（`_eN == vb6_ErrSerial()`）自然不写目标 —— 与 §11.93 的槽守卫是同一条链，不需要动 cgen。
+### 三、为什么这一刀没落（实测：改成 `-1` 当场红两格）
 
-### 四、量（本机，新夹具 `tests/test_collmiss.bas`）
+改完本机自测是对的（`P3 v=[111] err=438`，与真机逐字一致），但 CI 两格红：
 
+1. `[STATIC] com_latebind_guard`：`R5 calls of vb6_ho_report438 in uc_hostmodel_getprop.inc = 2 (want 1)`
+   —— 那枚门把报数站点钉成恰好 1 处（文件末尾那位主人）；这一格不再重报即可（已按此改）。
+2. `[GUI] Charts2020 ... exit=438`：**真正的拦路虎**。
+
+Charts2020 的 438 与 Collection 本身无关，是生成码里一处**既有的**发错误：
+
+```vb
+Type RectF
+    Prop As Collection
+End Type
+With Rects(i)
+    .Prop.Add value, name          ' 应发成 vb6_ComCall(_vb6_with_N->Prop, L"Add", …)
+End With
 ```
-CM-1 count=1
-CM-2 item=5
-CM-3 v=[111] err=438      ← 与真机 probe112 P3 逐字一致
-CM-4 count=1 err=0        报过错以后已知成员照常
-CM-5 v=[222] err=438      换一个名字照样报，目标仍不动
+
+实际发出（复现器 `.temp/k113/wuc2.bas`，五行）：
+
+```c
+vb6_ComCall(vb6_ComGetObjectProp(_vb6_with_5->Prop, L"Prop"), L"Add", …)
 ```
 
-### 五、针与门
+多出来的一层 `ComGetObjectProp(……, L"Prop")` —— 拿 **Collection** 去问它自己叫不叫 `Prop`。
+这一层以前被第二节那格宽容吞掉：接收者变 NULL，`vb6_ComCall(NULL, L"Add", …)` 落成
+晚绑定 miss（本案 stderr 里那一串 `site=ComCall name="Add" disp=00000000`，60+ 条），
+也就是说**那些 `Add` 本来一次都没进过集合**；§11.95 让它报 438 之后，这一层就从空转变成了
+进程级错误。旧读数也印证：Charts2020 的 GUI 用例此前通过，靠的是"错得不出声"。
 
-- `Add-BasTest "test_collmiss"`：6 条读数
-- manifest：761 → 762 行
+出处是 `cgen_expr_with.cpp` 的 Fix 110t 分支（With 块里 UDT 的**对象字段**当 callee）：
+它把 `comObjExpr_` 设成**已经解好的字段取值** `_vb6_with_N->Prop`、`comMemberName_` 又设成
+**同一个字段名** `Prop`，于是外层再解一层就成了上面的形状。同一分支的另一个消费者
+（`.ObjField(args)` 直接调用，要 `L"Item"`）不能一起动 —— 试过把名字清空：直接调用那形
+退化成 `vb6_ComCall(…, L"", …)`、`.Add` 那形退化成 C 结构体方法调用
+`_vb6_with_0->Prop.Add(1, …)`，两形都不对，已撤回（记录在 `cgen_util_com.cpp` 的 `resolveComValue`
+与 `cgen_expr_with.cpp` 两处都恢复原样）。
 
-### 六、顺带量到、另行登记的一处缺口（本刀不修）
+### 四、结论与下一刀
+
+- 这一格**先不改**：留着 `return 1`，并把上面那段证据写进代码注释（谁改谁先看 Charts2020）。
+- 第一百一十四刀的正题 = 修 Fix 110t 那个"字段已解好又当成员名"的接收者发法，
+  让 `With <UDT>: .ObjField.Method …` 发成 `vb6_ComCall(<字段>, L"<Method>", …)`、
+  `With <UDT>: .ObjField(args)` 仍发 `L"Item"`。修好后把本节第二节那一行改回 `-1`。
+- 复现器：`.temp/k113/wuc2.bas`（`Type Holder: Prop As Collection` + `With h(0): .Prop.Add 1, "k"`
+  + `.Prop(1)` + `.Prop.Count` 三形一起看）。
+- 撤下的东西：`tests/test_collmiss.bas` 及其运行核（**不**给错误行为立针）、manifest 762 → 761。
+
+### 五、顺带量到、另行登记的一处缺口
 
 普通赋值读已知成员到 Variant 槽，本机交空：
 
 ```vb
 Dim v As Variant
-v = col.Count        ' 本机: v 为空, err=0；VB6: 1
+v = col.Count        ' 本机: v 为空, err=0；VB6: 1（待 probe113 Q2 真机复核）
 ```
 
-`CStr(col.Count)`（直接取值）是对的（CM-1 / CM-4 = 1），漏的是「宿主回 VT_I4 → Variant 槽」
-这条搬运路，而且**只在宿主那条路上**：同一程序里 `v = dict.Count`（Dictionary 走 IDispatch）
-= `v=[1] VarType=3` 正常，`v = col.Count` = `v=[] VarType=0`。
-与本刀的 438 收口不在同一层，先登记；等真机读数（probe113 的 Q2 段）再切。
+`CStr(col.Count)`（直接取值）是对的；`v = dict.Count`（Dictionary 走 IDispatch）也正常
+（`v=[1] VarType=3`）。只有"宿主回 VT_I4 → Variant 槽"这条搬运路漏，且只在宿主那条路上。
