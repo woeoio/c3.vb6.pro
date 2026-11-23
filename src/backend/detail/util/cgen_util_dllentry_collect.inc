@@ -510,10 +510,33 @@
                         retClsInst = cIdent(rcInstSym2->name);
                     }
                 }
+                /* 账 #305 §11.129 (第一百四十八刀): **本类返回**那一档。
+                 * `Public Property Get Child() As B148Box`（返回类型 = 所在类自己）的 C 返回型
+                 * 是 `void*`，于是上面那条 (retType == "vb6_VARIANT") 不命中，落到本函数最后
+                 * 那个 else: `vt = VT_I4; lVal = (int32_t)(intptr_t)_r` —— 对象被当成整数交出去，
+                 * x64 上指针当场截断。实测 (.temp/k148/probe): 客户端读到 vt=3 (VT_I4)
+                 * val=150397680，而 `As B148Item`（别的类）那条走 vb6_VariantObjectTransfer
+                 * 是 vt=9，一切正常。
+                 * 口径: 只要声明的返回类型真是**本工程的类**（有 coclass 描述符），与异类返回
+                 * 同一律 —— 包一层 IDispatch，并把那一枚引用交给 VARIANT。
+                 * 注: `As Object` 的 retType 也是 "void*"（mapType(Object)），但它不走这一档；
+                 * 那一档在下面单独按 VT_DISPATCH 转交，见 §11.129 第二处。 */
+                if (retClsInst.empty() && retType == "void*" && !methodSym->variableTypeName.empty()) {
+                    auto* rcSelf2 = lookupModuleDotted(methodSym->variableTypeName);
+                    if (rcSelf2 && rcSelf2->kind == SymbolKind::Class && !rcSelf2->isInterface) {
+                        std::string nmSelf2 = cIdent(rcSelf2->name);
+                        for (auto& ccSelf2 : coClasses) {
+                            if (cIdent(ccSelf2.moduleName) == nmSelf2) { retClsInst = nmSelf2; break; }
+                        }
+                    }
+                }
+                // 实例指针的 C 声明型: Fix 184 那一档源码里已是 vb6_cls_X*; 本类那一档是 void*。
+                const std::string retInstDeclType =
+                    (retType == "vb6_VARIANT") ? ("vb6_cls_" + retClsInst + "*") : retType;
                 entry.emitLine("if (result) {");
                 entry.indent();
                 if (!retClsInst.empty()) {
-                    entry.emitLine("vb6_cls_" + retClsInst + "* _p = " + procName + "(" + callArgs + ");");
+                    entry.emitLine(retInstDeclType + " _p = " + procName + "(" + callArgs + ");");
                     /* 账 #305 §11.126 (第一百四十五刀): FromInstance 交出来的那一枚引用**转移**给
                      * VARIANT, 不能再叠一枚 AddRef。改前这一句是 vb6_VariantObject(...) —— 它按
                      * Fix 024 必 AddRef, 于是每一次类成员读数在服务端就多一枚 (实测 C3_COM_RC_TRACE:
@@ -539,6 +562,13 @@
                     // vb6_VARIANT 结构体不能 cast 为 intptr_t,
                     // 用 memcpy 复制到 Windows VARIANT (布局兼容: vt + padding + union).
                     entry.emitLine("memcpy(result, &_r, sizeof(vb6_VARIANT));");
+                } else if (retType == "void*") {
+                    /* 账 #305 §11.129 (第一百四十八刀) 第二处: `As Object` 的 getter。
+                     * 与上面同一个兜底 else 吃掉了它: `vt = VT_I4; lVal = (int32_t)(intptr_t)_r`。
+                     * 类模块里 getter 的返回槽**已经**为泛对象档 claim 了一枚（实测 B148Box.c:
+                     * `vb6_ret_Held = gHold; vb6_ComAddRefDispatch(...)`），所以这里只是把那一枚
+                     * **转移**进 VARIANT —— 既不再 AddRef，也不释放。客户端按 §11.127 收下即持。 */
+                    entry.emitLine("((VARIANT*)result)->vt = VT_DISPATCH; ((VARIANT*)result)->pdispVal = (IDispatch*)_r;");
                 } else {
                     entry.emitLine("((VARIANT*)result)->vt = VT_I4; ((VARIANT*)result)->lVal = (int32_t)(intptr_t)_r;");
                 }

@@ -12368,6 +12368,21 @@ $b147Needles = @(
 "B147-Z-made=3", "B147-DONE")
 Test-Vbp 'b147_setref_putref' "$Tests\b147_setref_putref\B147Res.vbp" $b147Needles
 Test-Vbp 'b147_setref_putref_x86' "$Tests\b147_setref_putref\B147Res.vbp" $b147Needles -Arch "x86"
+
+# 账 #305 §11.129（第一百四十八刀）：服务端 getter 适配器的**本类返回**那一档。
+# 改前 `Property Get Self As B148Box`（返回类型 = 所在类自己）被当整数交出去（VT_I4, 指针截断）。
+#   A2: 本类返回交回的就是那枚对象（改前 = Nothing）
+#   A3: 清 s 之后 o 仍可用（交回的那一枚归调用方, 见 §11.126）
+#   B2/B3: 异类返回是对照组, 收放照样对得上
+#   C2/C3: As Object 返回同样坏（改前也是 VT_I4）, 且交回的确实是写进去那一枚
+#   Z:  box 那一格停在 0 = 在册的那一枚残留（`Set Self = Me` 在返回槽上 claim 的, 另一把尺）
+$b148Needles = @(
+"B148-A2-self-tag=5", "B148-A3-tag=6",
+"B148-B2-fresh-tag=11", "B148-B3-item-terms=1",
+"B148-C2-held-tag=77", "B148-C3-item-terms=2",
+"B148-Z-box-terms=0", "B148-Z-item-made=2", "B148-Z-item-terms=2", "B148-DONE")
+Test-Vbp 'b148_selfcls_return' "$Tests\b148_selfcls_return\B148Res.vbp" $b148Needles
+Test-Vbp 'b148_selfcls_return_x86' "$Tests\b148_selfcls_return\B148Res.vbp" $b148Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
