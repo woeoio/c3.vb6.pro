@@ -1105,6 +1105,34 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
         withObjectInfoStack_.back().carrierClass = withClassCarrier135;
     }
 
+    // 第一百三十六刀 §11.118: `With <工程函数>()` —— 被调方的返回槽被腿④ 排除在出口
+    // 放手之外 (`currentReturnVar_`), 所以那一枚引用是**交回给调用方**的, With 临时量就是它的主人。
+    // 闸三问 (任何一问答否就不发, 退错一枚比漏更坏):
+    //  (1) tempType 是 void* (晚绑定那一档);
+    //  (2) 被调方是**工程内** Function 且 returnType == Object (Property Get 发的是 `(…)(gBox)`
+    //      那一形, 被第 (3) 问的 `()` 尾巴挡在外面 —— 本刀不碰);
+    //  (3) 发码就是 `(void*)vb6_<Mod>_<Name>()` 那一形 (没有经 Variant 解封 / COM 派发包装)。
+    bool withFnRetCarrier136 = false;
+    if (tempType == "void*" && node.object && node.object->kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& call136 = static_cast<IndexOrCallExpr&>(*node.object);
+        if (call136.callee && call136.callee->kind == ASTNodeKind::IdentifierExpr
+            && call136.positional.empty() && call136.named.empty()) {
+            const std::string& callee136 = static_cast<IdentifierExpr&>(*call136.callee).name;
+            auto* sym136 = lookupModuleDotted(callee136);
+            if (sym136 && sym136->kind == SymbolKind::Function
+                && sym136->type == Vb6Type::Object
+                && lastExpr_.rfind("vb6_", 0) == 0
+                && lastExpr_.size() > 5
+                && lastExpr_.compare(lastExpr_.size() - 2, 2, "()") == 0
+                && lastExpr_.find('(') == lastExpr_.size() - 2) {
+                withFnRetCarrier136 = true;
+            }
+        }
+    }
+    if (withFnRetCarrier136 && !withObjectInfoStack_.empty()) {
+        withObjectInfoStack_.back().ownsCarrier = true;
+    }
+
     c_.emitLine("{");
     c_.indent();
     emitStmtList(node.body);
@@ -1116,6 +1144,10 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
     if (withOwnedCarrier133) {
         c_.emitLine("vb6_ReleaseObject((void**)&" + tempVar +
                     ");  /* 账 #305 §11.115: With 自己造的那一枚载体, 块尾放手 */");
+    } else if (withFnRetCarrier136) {
+        // 两档的放手一句相同, 注释分开写 —— 已登记行的字节不为本刀多动一行 (§11.117 四 的口径)。
+        c_.emitLine("vb6_ReleaseObject((void**)&" + tempVar +
+                    ");  /* 账 #305 §11.118: 工程函数交回的那一枚载体, 块尾放手 */");
     } else if (!withClassCarrier135.empty()) {
         c_.emitLine("if (" + tempVar + ") vb6_cls_" + cIdent(withClassCarrier135) + "_Release(" +
                     tempVar +
