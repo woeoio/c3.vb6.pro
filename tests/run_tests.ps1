@@ -12298,6 +12298,17 @@ $b139Needles = @(
 "B139-Z-terms=3", "B139-Z-count=2", "B139-DONE")
 Test-Vbp 'b139_blocktail_resume' "$Tests\b139_blocktail_resume\B139Res.vbp" $b139Needles
 Test-Vbp 'b139_blocktail_resume_x86' "$Tests\b139_blocktail_resume\B139Res.vbp" $b139Needles -Arch "x86"
+
+# 账 #305 §11.116 五（第一百四十一刀）：`GoTo` 跳出 With 块时，本块自己造的载体要先退。
+# 跳出去之后块尾那句放手永远跑不到。C 路对照（标签就在本块体内）一枚都不退；
+# E 路反面证人：借来的那一枚不许动。
+$b140Needles = @(
+"B140-A2-terms=1", "B140-B2-terms=3",
+"B140-C1-terms=3", "B140-C2-terms=4",
+"B140-D2-terms=5", "B140-E2-count=2",
+"B140-Z-terms=5", "B140-Z-count=2", "B140-DONE")
+Test-Vbp 'b140_goto_out_with' "$Tests\b140_goto_out_with\B140Res.vbp" $b140Needles
+Test-Vbp 'b140_goto_out_with_x86' "$Tests\b140_goto_out_with\B140Res.vbp" $b140Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
