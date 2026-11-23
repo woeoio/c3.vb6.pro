@@ -286,6 +286,49 @@ bool CCodeGen::hasResumeInStmts(StmtList& stmts) const {
     return false;
 }
 
+// 账 #305 §11.119 (第一百三十九刀): 数过程体里 With 语句的条数 (递归) —— 活载体名册的槽数上界。
+// 为什么要上界而不是精确值: 名册的槽号是**发码顺序**分配的, 而「哪一帧是自有载体」要等发码
+// 才算得出来 (`vb6_NewObject` / `vb6_CreateObject` / 工程函数那一形)。多给的槽没登记就是 0,
+// 落点放手时空判据天然跳过 —— 少给的槽则会溢出。
+int CCodeGen::countWithStmts(StmtList& stmts) const {
+    int n = 0;
+    for (auto& stmt : stmts) {
+        if (!stmt) continue;
+        switch (stmt->kind) {
+            case ASTNodeKind::WithStmt:
+                n += 1 + countWithStmts(static_cast<WithStmt&>(*stmt).body);
+                break;
+            case ASTNodeKind::IfStmt: {
+                auto& ifStmt = static_cast<IfStmt&>(*stmt);
+                n += countWithStmts(ifStmt.thenBody);
+                n += countWithStmts(ifStmt.elseBody);
+                for (auto& elif : ifStmt.elseIfs) n += countWithStmts(elif->body);
+                break;
+            }
+            case ASTNodeKind::ForStmt:
+                n += countWithStmts(static_cast<ForStmt&>(*stmt).body);
+                break;
+            case ASTNodeKind::ForEachStmt:
+                n += countWithStmts(static_cast<ForEachStmt&>(*stmt).body);
+                break;
+            case ASTNodeKind::DoLoopStmt:
+                n += countWithStmts(static_cast<DoLoopStmt&>(*stmt).body);
+                break;
+            case ASTNodeKind::WhileWendStmt:
+                n += countWithStmts(static_cast<WhileWendStmt&>(*stmt).body);
+                break;
+            case ASTNodeKind::SelectCaseStmt: {
+                auto& sel = static_cast<SelectCaseStmt&>(*stmt);
+                for (auto& c : sel.cases) n += countWithStmts(c->body);
+                n += countWithStmts(sel.elseCase);
+                break;
+            }
+            default: break;
+        }
+    }
+    return n;
+}
+
 
 // ============================================================
 // P12.3: 检测语句列表中是否包含OnErrorStmt

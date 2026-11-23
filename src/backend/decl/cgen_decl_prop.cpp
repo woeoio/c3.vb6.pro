@@ -392,6 +392,12 @@ void CCodeGen::visit(PropertyDecl& node) {
     }
     // 账 #179: 控件代码运行在自己的宿主上下文里 (与下面的 PopInstance 成对)。
     if (ucCtxScoped()) c_.emitLine("vb6_UC_PushInstance((void*)me);");
+    // 账 #305 §11.119 (第一百三十九刀): Property 不发名册 (它不走 decl_proc/decl_func 那套错误状态),
+    // 这里必须把旗清掉 —— 否则上一个过程的旗会漏到这个 Property, With 站点会发一句指向
+    // 不存在的 `_vb6_own` (C2065)。
+    hoistOwnActive_ = false;
+    hoistOwnN_ = 0;
+    hoistOwnNext_ = 0;
     emitStmtList(node.body);
 
     // Fix <vbeclipse>: Property 的统一出口 + **缺失的错误状态恢复**。

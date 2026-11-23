@@ -95,6 +95,11 @@
         // 块尾那一发由 cgen_with 自己发; 体内 `Exit Sub/Function/Property` 那几条
         // goto 口由 cgen_jumps 接着发 (载体是块内局部, 出了块就没人再问)。
         bool ownsCarrier = false;
+        // 账 #305 §11.119 (第一百三十九刀): 这一帧的载体在本过程那张活载体名册里的槽号
+        // (`void** _vb6_own[N]` 的下标)；-1 = 没登记 (借用型 / 工程类 / 本过程未启用名册)。
+        // 块尾与 Exit 两处放手之后要把槽位清 0 —— 否则栈槽被后续块复用时，落点会拿到
+        // 一个悬空地址去 Release。
+        int ownerSlot = -1;
         // 账 #305 §11.117 (第一百三十五刀): 「With New <工程类>」的载体归类自己的 _Release
         // (与腿④ 工程类那一档同一个出口); 空串 = 不是这一类。
         std::string carrierClass;
@@ -722,6 +727,13 @@
 
     // P14.1.2: Resume dispatch switch支持 (每个过程独立)
     bool hasResume_ = false;            // 当前过程使用了Resume/Resume Next
+    // 账 #305 §11.119 (第一百三十九刀): 活载体名册。
+    //   只有「本过程一句 `Resume` 都没有」时才启用 —— 那种 handler 无论如何回不到块内,
+    //   错误落点就可以把已登记的载体逐枚放掉 (`Resume` 可能回块内的那些一律不动,
+    //   宁少退不多退)。
+    bool hoistOwnActive_ = false;       // 本过程是否启用名册
+    int hoistOwnN_ = 0;                 // 名册槽数 = 过程体里 With 语句的条数 (上界)
+    int hoistOwnNext_ = 0;              // 已登记的槽数
     bool inProtectedBlock_ = false;     // 在On Error GoTo和错误处理器标签之间
     int resumePointCounter_ = 0;        // 当前resume点索引
     std::vector<int> dispatchPoints_;   // 已生成的resume点索引列表

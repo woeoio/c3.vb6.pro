@@ -426,6 +426,12 @@ void CCodeGen::visit(SubDecl& node) {
     dispatchPoints_.clear();
     currentErrorHandlerLabel_.clear();
     procExitLabelUsed_ = false;
+    // 账 #305 §11.119 (第一百三十九刀): 活载体名册的启用判据 —— 本过程**一句 `Resume` 都没有**。
+    // 那种 handler 无论如何回不到块内, 错误落点就可以把已登记的载体逐枚放掉 (有 `Resume` 的
+    // 一律不动: 宁少退不多退)。槽数取过程体里 With 条的条数 (上界, 见 countWithStmts)。
+    hoistOwnN_ = (!hasResume_ && hasOnError_) ? countWithStmts(node.body) : 0;
+    hoistOwnActive_ = (hoistOwnN_ > 0);
+    hoistOwnNext_ = 0;
     if (hasOnError_) {
         c_.emitLine("jmp_buf vb6_local_err_jmp;");
         if (hasResume_) {
@@ -433,6 +439,11 @@ void CCodeGen::visit(SubDecl& node) {
             c_.emitLine("int32_t vb6_err_resume_next_point = 0;");
         }
         c_.emitLine("vb6_SaveErrState();");
+        if (hoistOwnActive_) {
+            // 名册放在过程顶层 (setjmp 之前): 落点读到的每个槽都必须是确定的 —— 未登记的是 0。
+            c_.emitLine("void** _vb6_own[" + std::to_string(hoistOwnN_) +
+                        "] = {0};  /* 账 #305 §11.119: 活载体名册 */");
+        }
     }
 
     // 生成过程体 (P14.1.2: 传入hasResume_以启用resume点生成)

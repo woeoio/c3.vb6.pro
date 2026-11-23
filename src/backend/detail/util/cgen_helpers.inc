@@ -1196,6 +1196,8 @@
     bool hasOnErrorInStmts(StmtList& stmts) const;
     // P14.1.2: 检测语句列表中是否包含Resume/Resume Next
     bool hasResumeInStmts(StmtList& stmts) const;
+    // 账 #305 §11.119 (第一百三十九刀): 活载体名册的槽数上界 (= 过程体里 With 语句条数, 递归)。
+    int countWithStmts(StmtList& stmts) const;
     // Bug #1 fix (082h): 预扫描语句中的UBound/LBound(arr,N>1)收集ND数组名
     void scanNDArraysInStmts(StmtList& stmts);
     void scanNDArraysInExpr(Expr& expr);

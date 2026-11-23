@@ -532,6 +532,10 @@ void CCodeGen::visit(FunctionDecl& node) {
     dispatchPoints_.clear();
     currentErrorHandlerLabel_.clear();
     procExitLabelUsed_ = false;
+    // 账 #305 §11.119 (第一百三十九刀): 与 cgen_decl_proc 同款 —— 本过程一句 `Resume` 都没有才启用名册。
+    hoistOwnN_ = (!hasResume_ && hasOnError_) ? countWithStmts(node.body) : 0;
+    hoistOwnActive_ = (hoistOwnN_ > 0);
+    hoistOwnNext_ = 0;
     if (hasOnError_) {
         c_.emitLine("jmp_buf vb6_local_err_jmp;");
         if (hasResume_) {
@@ -539,6 +543,10 @@ void CCodeGen::visit(FunctionDecl& node) {
             c_.emitLine("int32_t vb6_err_resume_next_point = 0;");
         }
         c_.emitLine("vb6_SaveErrState();");
+        if (hoistOwnActive_) {
+            c_.emitLine("void** _vb6_own[" + std::to_string(hoistOwnN_) +
+                        "] = {0};  /* 账 #305 §11.119: 活载体名册 */");
+        }
     }
 
 

@@ -81,6 +81,17 @@ void CCodeGen::visit(OnErrorStmt& node) {
             if (hasResume_) {
                 c_.emitLine("vb6_err_in_handler = 0;");
             }
+            // 账 #305 §11.119 (第一百三十九刀): 错误落点按名册逐枚放手。
+            // 启用条件已经保了「本过程一句 `Resume` 都没有」—— 那种 handler 回不到块内,
+            // 所以此刻还登记着的每一枚载体都是真的死了。`vb6_ReleaseObject` 自己置空,
+            // 未登记 / 已出块注销 / 已退过的槽都是 0, 天然跳过。
+            if (hoistOwnActive_) {
+                for (int own139 = 0; own139 < hoistOwnN_; ++own139) {
+                    c_.emitLine("if (_vb6_own[" + std::to_string(own139) +
+                                "]) vb6_ReleaseObject(_vb6_own[" + std::to_string(own139) +
+                                "]);  /* 账 #305 §11.119: 落点放手 (handler 无 Resume) */");
+                }
+            }
             c_.emitLine("goto vb6_label_" + cIdent(node.labelName) + ";");
             c_.dedent();
             c_.emitLine("}");
@@ -166,6 +177,11 @@ void CCodeGen::visit(ExitStmt& node) {
             }
             c_.emitLine("vb6_ReleaseObject((void**)&" + tv134 +
                         ");  /* 账 #305 §11.116: Exit 出 With 块，本块自己造的那一枚 */");
+            // §11.119: 退完一枚就把名册槽位清 0 (见 cgen_with 块尾那一发)。
+            if (fr134.ownerSlot >= 0) {
+                c_.emitLine("_vb6_own[" + std::to_string(fr134.ownerSlot) +
+                            "] = 0;  /* §11.119: Exit 出块注销 */");
+            }
         }
     };
     switch (node.exitKind) {

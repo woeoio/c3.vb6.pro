@@ -1,0 +1,6 @@
+Type=Exe
+Name="B138App"
+Module=B138Main; B138Main.bas
+Class=B138Item; B138Item.cls
+Startup="Sub Main"
+ExeName32="B138.exe"
