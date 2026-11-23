@@ -6881,7 +6881,7 @@ With 临时量就是它的主人。与 §11.115 两座工厂同一个口径，�
 
 ### 八、边界（第一百三十九刀之后仍在册）
 
-- 工程类载体（§11.117）：名册槽只有 `void**`，落点分不出类名 —— 仍归块尾/Exit 两处；
+- 工程类载体（§11.117）：名册槽只有 `void**`，落点分不出类名 —— 仍归块尾/Exit 两处；第一百四十二刀已关（§11.123）。
 - 过程里**有** `Resume` 的（哪怕 handler 里那句 `Resume` 只落块外）：落点一律不动，仍漏；
 - 出错语句是块内最后一条且 handler `Resume Next`：落点落到块外、块尾那句被跨过 —— 仍漏；
   第一百四十刀已关（§11.121）。
@@ -6999,7 +6999,7 @@ vb6_resume_m:;
 
 ### 六、边界（仍在册）
 
-- 工程类载体进落点名册（§11.117 —— 名册槽只有 `void**`，落点分不出类名）；
+- 工程类载体进落点名册（§11.117 —— 名册槽只有 `void**`，落点分不出类名）—— 第一百四十二刀已关（§11.123）；
 - 过程里**没有**一句 `Resume` 的仍走 §11.119 的名册（两条路互补，不重叠）；
 - `GoTo` 跳出 With 块（§11.116 五）—— 第一百四十一刀已关（§11.122）。
 ## §11.122 `GoTo` 跳出 With 块：按层深逐层退（第一百四十一刀）
@@ -7053,5 +7053,66 @@ With 块，所以这一刀是纯补口子，不改任何人现有的字节。
 ### 六、边界（仍在册）
 
 - `GoTo` **跳进** With 块（VB6 本身不许，编译器也不接）：不进本表；
-- 工程类载体进错误落点名册（§11.117 + §11.119 的槽只有 `void**`，分不出类名）；
+- 工程类载体进错误落点名册（§11.117 + §11.119 的槽只有 `void**`，分不出类名）—— 第一百四十二刀已关（§11.123）；
 - 过程里**有** `Resume` 的错误落点仍按 §11.121 的块尾补点处理，与本刀不重叠。
+## §11.123 工程类载体进落点名册：每槽一列放手函数（第一百四十二刀）
+
+### 一、缺口
+
+§11.119 八 的最后一格：名册 `void** _vb6_own[N]` 里的槽只记录了"槽地址"，落点统一走
+`vb6_ReleaseObject` —— 那是 COM 槽的放法。工程类那一档（§11.117 的 `With New <工程类>`）
+槽里存的是编译期生成的 `vb6_cls_X` 实例，必须用类自己的 `vb6_cls_X_Release`，而落点
+分不出类名。夹具 `tests/b141_roster_class/` 修前：`A1-terms=0`、`D1-terms=1`
+（嵌套两枚只退了一枚，还是靠块尾那一发），`Z-terms=1`。
+
+### 二、改法（名册加一列，登记时写死放开函数）
+
+生成器里 `vb6_cls_X_Release` 的签名恰好是 `unsigned long (void* instance)` —— 不需要薄：
+
+- `cgen_decl_proc` / `cgen_decl_func`：名册声明多一列
+  `unsigned long (*_vb6_ownRel[N])(void*) = {0};`，紧挨 `_vb6_own` 发在过程顶层
+  （`setjmp` 之前，未登记的槽是 0）。
+- `cgen_with.cpp` 登记站：登记条件从"`void*` 两档"扩到三档（`anyOwn142`）；
+  工程类那档多发一句 `_vb6_ownRel[k] = vb6_cls_X_Release;`，`void*` 两档留 0。
+- `cgen_jumps.cpp` 落点：逐槽
+  `if (_vb6_own[k]) { if (_vb6_ownRel[k]) { _vb6_ownRel[k](*_vb6_own[k]); *_vb6_own[k] = 0; } else vb6_ReleaseObject(_vb6_own[k]); }`
+  —— 有放手函数就按它放（放完把手里的指针清 0），没有走原来的 `vb6_ReleaseObject`。
+
+槽号只增不复用（`hoistOwnNext_++`），所以 `_vb6_ownRel[k]` 不会串到后面登记成
+`void*` 的槽；块的注销站（块尾 / Exit / GoTo）只清 `_vb6_own[k]`，落点读到的就是 0。
+
+### 三、读数（夹具 `tests/b141_roster_class/`，x64 与 x86 逐字相同）
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B141-A1-terms` | 一枚工程类载体，handler 无 `Resume`，落点放手 | **0 → 1** |
+| `B141-B1-terms` | 混合：前一块晚绑定载体（块尾已退）+ 后一块工程类（落点退） | 1 → **3** |
+| `B141-C1-count` | 反面证人：`With gColl` 借来的那一帧不进名册，落点一枚不动 | 2 → 2 |
+| `B141-D1-terms` | 两枚工程类载体同时在册（嵌套），落点逐槽退 | 1 → **5** |
+| `B141-Z-terms` / `Z-count` | 累计 / gColl 完好 | 1 → **5** / 2 |
+
+修前那一列是拿本刀之前的 exe 实跑（stash 后重建，`.temp/k142/fx_pre`）。
+
+### 四、发码面
+
+语料 **796 → 798 行**（b141 夹具两行）。这一刀**确实动了既有行**：名册多一列声明、
+落点那几句换了形 —— 判据是"过程里有 `On Error` 且一句 `Resume` 都没有、过程体里有 `With`"
+（`hoistOwnN_ > 0`）。文本先筛出 24 个候选、再逐行实算，命中的 **9 个模块**
+（`b137_resume_in_block/B137Main.bas`、`b138_handler_landing/B138Main.bas`、
+`test_arr_empty.bas`、`test_collcall.bas`、`test_late_setslot2.bas`、
+`vb6probe/NullFamilyProbe.bas`、`VBFlexGridDemo/Builds/VTableHandle.bas`、
+`VBFlexGridDemo/Common/VisualStyles.bas`、`VbQRCodegen-master/src/mdQRCodegen.bas`）
+与它们所属的 **4 张聚合 `.vbp`**（`B137Res.vbp`、`B138Res.vbp`、`VBFlexGridDemo.vbp`、
+`VbQRCodegen/test/Project1.vbp`）随之改行，其余 782 行一字未动。
+
+### 五、回归
+
+- b137 / b138 / b139 / b140 夹具读数逐字不变（退的是同一批载体，只是工程类那一档
+  这次真退了）；
+- 九门 9/9（798 行、注册 798）。
+
+### 六、边界
+
+§11.119 八 的四条到这里全部关掉。剩下的是**别册**：`With <Property Get>()` 那一形
+（§11.118 明写排除）、以及名册只管"进程里一句 `Resume` 都没有"的那些过程 ——
+有 `Resume` 的过程走 §11.121 的块尾补点，两者互补，不重叠。
