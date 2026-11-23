@@ -432,6 +432,9 @@ void CCodeGen::visit(SubDecl& node) {
     hoistOwnN_ = (!hasResume_ && hasOnError_) ? countWithStmts(node.body) : 0;
     hoistOwnActive_ = (hoistOwnN_ > 0);
     hoistOwnNext_ = 0;
+    // §11.116 五 (第一百四十一刀): 先扫一遍过程体, 记下每个标签定义处的 With 层深。
+    labelWithDepth_.clear();
+    collectLabelWithDepth(node.body, 0, labelWithDepth_);
     if (hasOnError_) {
         c_.emitLine("jmp_buf vb6_local_err_jmp;");
         if (hasResume_) {

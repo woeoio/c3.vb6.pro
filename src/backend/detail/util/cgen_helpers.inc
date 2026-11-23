@@ -1198,6 +1198,9 @@
     bool hasResumeInStmts(StmtList& stmts) const;
     // 账 #305 §11.119 (第一百三十九刀): 活载体名册的槽数上界 (= 过程体里 With 语句条数, 递归)。
     int countWithStmts(StmtList& stmts) const;
+    // §11.116 五 (第一百四十一刀): 标签 → With 层深 (见 cgen_util_scan.cpp 里的实现)。
+    void collectLabelWithDepth(StmtList& stmts, int depth,
+                               std::unordered_map<std::string, int>& out);
     // Bug #1 fix (082h): 预扫描语句中的UBound/LBound(arr,N>1)收集ND数组名
     void scanNDArraysInStmts(StmtList& stmts);
     void scanNDArraysInExpr(Expr& expr);

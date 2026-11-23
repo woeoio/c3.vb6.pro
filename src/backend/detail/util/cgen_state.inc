@@ -734,6 +734,11 @@
     bool hoistOwnActive_ = false;       // 本过程是否启用名册
     int hoistOwnN_ = 0;                 // 名册槽数 = 过程体里 With 语句的条数 (上界)
     int hoistOwnNext_ = 0;              // 已登记的槽数
+    // 账 #305 §11.116 五 (第一百四十一刀): 本过程里每个标签定义处的 With 层深。
+    // `GoTo` 跳出 With 块时要按「跳出去几层」逐层退载体 —— 进入 `With` 之前先扫一遍过程体
+    // 填好这张表 (标签名小写), 发码到 `GoTo` 时直接查。查不到 (标签在别处/本表未填) 一律
+    // 不发 ── 宁可少退不多退。
+    std::unordered_map<std::string, int> labelWithDepth_;
     bool inProtectedBlock_ = false;     // 在On Error GoTo和错误处理器标签之间
     int resumePointCounter_ = 0;        // 当前resume点索引
     std::vector<int> dispatchPoints_;   // 已生成的resume点索引列表

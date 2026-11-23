@@ -329,6 +329,51 @@ int CCodeGen::countWithStmts(StmtList& stmts) const {
     return n;
 }
 
+// 账 #305 §11.116 五 (第一百四十一刀): 扫过程体, 记下每个 `LabelStmt` 定义处所在的 With 层深。
+// 为什么要预先扫: `GoTo` 发码时只知道「现在在第几层 With」, 要知道「目标标签在第几层」才能算出
+// 该退几层 —— 而标签可能定义在 `GoTo` 之后 (向下的跳转最常见), 发码是单趟的。
+// 同一标签在方向拆分的两份循环体里各定义一次, 两处层深相同 (同一段源码), 后写覆盖无妨。
+void CCodeGen::collectLabelWithDepth(StmtList& stmts, int depth,
+                                    std::unordered_map<std::string, int>& out) {
+    for (auto& stmt : stmts) {
+        if (!stmt) continue;
+        switch (stmt->kind) {
+            case ASTNodeKind::LabelStmt:
+                out[Symbol::toLower(static_cast<LabelStmt&>(*stmt).labelName)] = depth;
+                break;
+            case ASTNodeKind::WithStmt:
+                collectLabelWithDepth(static_cast<WithStmt&>(*stmt).body, depth + 1, out);
+                break;
+            case ASTNodeKind::IfStmt: {
+                auto& ifStmt = static_cast<IfStmt&>(*stmt);
+                collectLabelWithDepth(ifStmt.thenBody, depth, out);
+                collectLabelWithDepth(ifStmt.elseBody, depth, out);
+                for (auto& elif : ifStmt.elseIfs) collectLabelWithDepth(elif->body, depth, out);
+                break;
+            }
+            case ASTNodeKind::ForStmt:
+                collectLabelWithDepth(static_cast<ForStmt&>(*stmt).body, depth, out);
+                break;
+            case ASTNodeKind::ForEachStmt:
+                collectLabelWithDepth(static_cast<ForEachStmt&>(*stmt).body, depth, out);
+                break;
+            case ASTNodeKind::DoLoopStmt:
+                collectLabelWithDepth(static_cast<DoLoopStmt&>(*stmt).body, depth, out);
+                break;
+            case ASTNodeKind::WhileWendStmt:
+                collectLabelWithDepth(static_cast<WhileWendStmt&>(*stmt).body, depth, out);
+                break;
+            case ASTNodeKind::SelectCaseStmt: {
+                auto& sel = static_cast<SelectCaseStmt&>(*stmt);
+                for (auto& c : sel.cases) collectLabelWithDepth(c->body, depth, out);
+                collectLabelWithDepth(sel.elseCase, depth, out);
+                break;
+            }
+            default: break;
+        }
+    }
+}
+
 
 // ============================================================
 // P12.3: 检测语句列表中是否包含OnErrorStmt

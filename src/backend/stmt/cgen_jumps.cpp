@@ -48,6 +48,33 @@ void CCodeGen::visit(GoToStmt& node) {
     // 只定义一份, 加后缀会指向不存在的 vb6_label_X_dN → C2094 (cZipArchive 事件取消出口)。
     // Fix 092b: 后缀归一到 forSplitLabelSuffix (与 LabelStmt 同一出口, 支持嵌套拆分)。
     std::string lblSuffix = forSplitLabelSuffix(Symbol::toLower(node.labelName));
+    // 账 #305 §11.116 五 (第一百四十一刀): `GoTo` 跳出 With 块时, 本块自己造的载体要先退。
+    // 载体变量就声明在 With 体内 —— 走到这条 `GoTo` 时它仍在作用域里 (与 Exit 那几臂同理);
+    // 跳出去之后块尾那句放手永远跑不到, 不退就活到进程结束。
+    // 层深表是过程入口预先扫好的 (见 collectLabelWithDepth); 查不到就不发 —— 宁少退不多退。
+    auto itDepth141 = labelWithDepth_.find(Symbol::toLower(node.labelName));
+    if (itDepth141 != labelWithDepth_.end()) {
+        int targetDepth141 = itDepth141->second;
+        int curDepth141 = (int)withObjectInfoStack_.size();
+        for (int i = curDepth141 - 1; i >= targetDepth141 && i >= 0; --i) {
+            if (i >= (int)withObjectVars_.size()) continue;
+            const WithObjInfo& fr141 = withObjectInfoStack_[i];
+            if (!fr141.ownsCarrier && fr141.carrierClass.empty()) continue;
+            const std::string& tv141 = withObjectVars_[i];
+            if (!fr141.carrierClass.empty()) {
+                c_.emitLine("if (" + tv141 + ") vb6_cls_" + cIdent(fr141.carrierClass) + "_Release(" +
+                            tv141 +
+                            ");  /* 账 #305 §11.116 五: GoTo 出 With 块, 本块自己造的类实例 */");
+                continue;
+            }
+            c_.emitLine("vb6_ReleaseObject((void**)&" + tv141 +
+                        ");  /* 账 #305 §11.116 五: GoTo 出 With 块, 本块自己造的那一枚 */");
+            if (fr141.ownerSlot >= 0) {
+                c_.emitLine("_vb6_own[" + std::to_string(fr141.ownerSlot) +
+                            "] = 0;  /* §11.119: GoTo 出块注销 */");
+            }
+        }
+    }
     c_.emitLine("goto vb6_label_" + cIdent(node.labelName) + lblSuffix + ";");
 }
 

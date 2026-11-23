@@ -398,6 +398,9 @@ void CCodeGen::visit(PropertyDecl& node) {
     hoistOwnActive_ = false;
     hoistOwnN_ = 0;
     hoistOwnNext_ = 0;
+    // §11.116 五 (第一百四十一刀): Property 体里的 `GoTo` 跳出 With 同样要退 —— 层深表照填。
+    labelWithDepth_.clear();
+    collectLabelWithDepth(node.body, 0, labelWithDepth_);
     emitStmtList(node.body);
 
     // Fix <vbeclipse>: Property 的统一出口 + **缺失的错误状态恢复**。
