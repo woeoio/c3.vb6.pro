@@ -1,0 +1,7 @@
+Type=Exe
+Name="B135App"
+Module=B135Main; B135Main.bas
+Class=B135Item; B135Item.cls
+Class=B135Box; B135Box.cls
+Startup="Sub Main"
+ExeName32="B135.exe"

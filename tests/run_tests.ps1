@@ -12222,8 +12222,8 @@ $b133Needles = @(
 "B133-B1-count=1", "B133-B2-terms=2",
 "B133-C1-count=1", "B133-C2-terms=2",
 "B133-D1-count=2", "B133-D2-terms=2",
-"B133-E1-tag=11", "B133-E2-terms=2",
-"B133-Z-terms=2", "B133-DONE")
+"B133-E1-tag=11", "B133-E2-terms=3",
+"B133-Z-terms=3", "B133-DONE")
 Test-Vbp 'b133_with_carrier_scope' "$Tests\b133_with_carrier_scope\B133Carr.vbp" $b133Needles
 Test-Vbp 'b133_with_carrier_scope_x86' "$Tests\b133_with_carrier_scope\B133Carr.vbp" $b133Needles -Arch "x86"
 
@@ -12237,6 +12237,17 @@ $b134Needles = @(
 "B134-I2-terms=5", "B134-Z-terms=5", "B134-DONE")
 Test-Vbp 'b134_with_exit_scope' "$Tests\b134_with_exit_scope\B134Carr.vbp" $b134Needles
 Test-Vbp 'b134_with_exit_scope_x86' "$Tests\b134_with_exit_scope\B134Carr.vbp" $b134Needles -Arch "x86"
+
+# 账 #305 §11.117（第一百三十五刀）：`With New <工程类>` 的载体在块尾 / Exit 出块时放手
+# （类自己的 vb6_cls_X_Release 那一档）。反面证人：字段借来的实例、局部借来的实例 + Exit。
+$b135Needles = @(
+"B135-A1-tag=11", "B135-A2-terms=1",
+"B135-B1-tag=22", "B135-B2-terms=2",
+"B135-C1-tag=33", "B135-C2-terms=2",
+"B135-E1-tag=44", "B135-E2-terms=2",
+"B135-Z-terms=2", "B135-D1-field=44", "B135-DONE")
+Test-Vbp 'b135_with_class_carrier' "$Tests\b135_with_class_carrier\B135Carr.vbp" $b135Needles
+Test-Vbp 'b135_with_class_carrier_x86' "$Tests\b135_with_class_carrier\B135Carr.vbp" $b135Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
