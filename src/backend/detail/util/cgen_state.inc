@@ -90,6 +90,11 @@
         // 记下控件名 —— 类实例档解析不到的成员 (Width/Height/Top/Left/Visible …) 是 VB6 的
         // **Extender(控件)属性**, 必须改走 form_pseudo 读表并取 vb6_hwnd_<控件名> 宿主槽.
         std::string designerCtrlName;
+        // 账 #305 §11.115/§11.116 (第一百三十三/三十四刀): 这一帧的 With 临时量是不是
+        // 「自己造的那一份」(发码里那句初始化器就是 vb6_NewObject / vb6_CreateObject)。
+        // 块尾那一发由 cgen_with 自己发; 体内 `Exit Sub/Function/Property` 那几条
+        // goto 口由 cgen_jumps 接着发 (载体是块内局部, 出了块就没人再问)。
+        bool ownsCarrier = false;
     };
     std::vector<WithObjInfo> withObjectInfoStack_;
     bool suppressDefaultProp_ = false;  // P17.1: With对象表达式时抑制默认属性读取

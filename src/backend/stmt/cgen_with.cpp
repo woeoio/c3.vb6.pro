@@ -1083,6 +1083,11 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
             if (lastExpr_.rfind(p133, 0) == 0) { withOwnedCarrier133 = true; break; }
         }
     }
+    // 第一百三十四刀 §11.116: 这一帧往信息栈上也盖一枚印 —— 体内 `Exit Sub/Function/Property`
+    // 那几条 goto 口要照着它先放手 (载体是块内局部, goto 一出块就没人再问)。
+    if (withOwnedCarrier133 && !withObjectInfoStack_.empty()) {
+        withObjectInfoStack_.back().ownsCarrier = true;
+    }
 
     c_.emitLine("{");
     c_.indent();

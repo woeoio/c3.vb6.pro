@@ -145,6 +145,20 @@ void CCodeGen::visit(ErrorStmt& node) {
     c_.emitLine("vb6_RaiseError(" + errNum + ", NULL);");
 }
 void CCodeGen::visit(ExitStmt& node) {
+    // 账 #305 §11.116 (第一百三十四刀): 从 `With New …` 体内 `Exit` 出去时，先把这块自己造的
+    // 那枚载体放手（§11.115 留在册的那一格）。
+    // 载体声明就在 With 体内那一层 ⇒ 走到这条 Exit 时它仍然在作用域里；而且`goto`
+    // 一出块就没人再问它 —— 不在这里退，它就活到进程结束。
+    // 只认信息栈上盖过印的那几帧（借用型 / 窗体默认实例 / 工程类 New 一概不发）；
+    // 内层先退（栈顶往下）。`vb6_ReleaseObject` 自己置空 ⇒ 与块尾那一发不会二次退。
+    auto emitWithCarrierReleaseOnExit134 = [&]() {
+        for (int i = (int)withObjectInfoStack_.size() - 1; i >= 0; --i) {
+            if (!withObjectInfoStack_[i].ownsCarrier) continue;
+            if (i >= (int)withObjectVars_.size()) continue;
+            c_.emitLine("vb6_ReleaseObject((void**)&" + withObjectVars_[i] +
+                        ");  /* 账 #305 §11.116: Exit 出 With 块，本块自己造的那一枚 */");
+        }
+    };
     switch (node.exitKind) {
         case ExitKind::Do:
         case ExitKind::For: {
@@ -167,16 +181,19 @@ void CCodeGen::visit(ExitStmt& node) {
             // Fix <vbeclipse>: 不能发裸 `return;` —— 那会越过过程尾部的
             // vb6_RestoreErrState()/ivref Release (错误处理状态泄漏 → 之后
             // vb6_ErrRaise 的 longjmp 打进已失效栈帧 → 野读崩)。统一走过程出口标签。
+            emitWithCarrierReleaseOnExit134();
             c_.emitLine("goto vb6_proc_exit;");
             procExitLabelUsed_ = true;
             break;
         case ExitKind::Function:
+            emitWithCarrierReleaseOnExit134();
             c_.emitLine("goto vb6_proc_exit;");
             procExitLabelUsed_ = true;
             break;
         case ExitKind::Property:
             // Fix 181: Property Get 有返回值, 出口处装回 vb6_ret_<name>;
             // Property Let/Set 无返回值。两者都在统一出口发 return (见 decl_proc/func/prop 尾部)。
+            emitWithCarrierReleaseOnExit134();
             c_.emitLine("goto vb6_proc_exit;");
             procExitLabelUsed_ = true;
             break;
