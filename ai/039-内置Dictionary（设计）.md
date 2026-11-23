@@ -6303,3 +6303,73 @@ x64 / x86 双架构同针（x86 实测逐字相同）。
   寿命有关的那一档不在这里。
 - 模块级 / 类字段那一档仍不放手（`KHaz` F3 = 0），与 §11.109 同一条边界。
 - `Scripting.Dictionary` 是真 IDispatch 载体（`vb6com_dict.c`），不走这一格 —— 在册。
+
+## §11.112 腿④ 宿主类局部档（第一百三十刀）
+
+### 一、缺口
+
+第一百二十九刀把 Collection 载体的计数交回载体自己（`refs`，`New` 时 1），但**出口那一句**
+`vb6_ReleaseObject` 只发给声明名就是 `Object` 的槽（§11.109 第四档）。于是：
+
+```vb
+Private Sub NewLocal()
+    Dim c As New Collection
+    c.Add New B130Item
+End Sub          ' 载体没人放手 ⇒ 元素一枚 Terminate 都不打
+```
+
+实测（`.temp/k129` 的 A2 格）：修前 `A2 terms=0`，修后 `2`；b130 夹具 `E2-terms=0 → 1`。
+
+### 二、改法
+
+挂点在 `cgen_localdecl.cpp` 那条 `cType == "void*"` 的臂里 —— 与 `Object` 共用同一张表
+（`slotsToRelease_`，出口由 `emitIvrefScopeRelease` 发）：
+
+- `isPlainObject`（声明名 `object`）之外补一个 `isHostClassLocal`（声明名 `collection`）；
+- 三道已有闸门原样生效：`!var.isStatic`（Static 槽跨调用活着）、`!inStaticProc_`、`!var.isWithEvents`；
+- For Each 循环变量那一条撤登记（`dropLateObjSlotRelease`）按 `isLateObj` 认人，照旧管用。
+
+**只收 `Collection` 一个名字**：`Dictionary` 的 C 侧槽是类型化接口
+`vb6_ComIface_IDictionary*`，不走这条臂（实测 `DictLocal` 里没有那一句，`D1` 增量 0）—— 在册。
+
+### 三、反面证人（同一夹具，出口放手不许伤到别人）
+
+| 针 | 含义 | 读数 |
+|---|---|---|
+| `B130-E1-count` / `B130-E2-terms` | `Dim c As New Collection` 出作用域 | 1 / **1**（修前 0） |
+| `B130-A1-count` / `B130-A2-field` | 局部是从**字段**借的（`Set c = gBox.Col` 那一发 AddRef） | 1 / 1 |
+| `B130-S1-count`（两次）/ `B130-S2-terms` | `Static s As Collection` 跨调用活着 | 1,1 / 1 |
+
+「字段那一枚跟着走」的形态不会出现：`Set` 取引用的发码本来是
+`vb6_ComAddRefDispatch(vref); vb6_ReleaseObject(&dst);`，第一百二十九刀让 `ComAddRefDispatch`
+对 Collection 计数，出口放手只退自己那一份。x64 / x86 逐字相同。
+
+### 四、发码面（本刀唯一动发码的刀）
+
+全量重算 774 行：**19 行变**，逐行 A/B（旧二进制 vs 新二进制各出一份 `--emit-c`）：
+
+```
+add=1..11  del=0   （19/19 行都只有新增行，没有一行被改写或删除）
+```
+
+新增行全是同一句 `vb6_ReleaseObject((void**)&X);`，X 逐个对上源码里的 `As Collection` 局部：
+`c`、`a`、`Value`、`TempCol`、`Lables`、`Icons`、`collC`、`col`、`thunkCol`、`tmpFrames`
+（Charts 2020 三张图 + `Form1/Form2`、`geomcache`、`k174`、`k294`、`ucSlider_2022`、
+`GifcontrolSource`、`vb6probe`、`b127/b128/b129` 夹具）。
+
+### 五、读数与回归
+
+- `b445` W1–W39 + DONE 逐字相同；`B412`、`B126`、`K124`、`KOwn` G0–G4、`KHaz` F1–F3、
+  `b128` A1/A2、`b129` 七针（2/2/4/1/5/1）逐字相同；
+- `K128` 的 `C1 terms=0 → 1`（同一份源，`Dim c As Collection` 那一格现在是**应当**有的读数）；
+- `geomcache` x64 + x86：`latebind-miss` 0 条，GC17/18/19 全 True
+  （`GC18=1234,1234,1234,1234`、`GC19=82,82,82`）；
+- 九门 9/9；语料 774 → **776** 行（夹具两行）。
+
+### 六、边界（在册）
+
+- **`Dim dc As Dictionary` 出作用域仍不退**（`vb6_ComIface_IDictionary*`，接口臂没有出口登记）。
+- 模块级 / 类字段那一档仍不放手；集合元素里的宿主包装器仍是借的；集合套集合的内层载体仍由
+  借出的包装器护着（与 §11.111 五同）。
+- 泛对象档与宿主类档共用一个 `isLateObj` 标记 ⇒ `dropLateObjSlotRelease` 的「无对价撤登记」
+  对两者同时生效（For Each 循环变量 / 交地址给 Declare 那两处）。
