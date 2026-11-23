@@ -12248,6 +12248,18 @@ $b135Needles = @(
 "B135-Z-terms=2", "B135-D1-field=44", "B135-DONE")
 Test-Vbp 'b135_with_class_carrier' "$Tests\b135_with_class_carrier\B135Carr.vbp" $b135Needles
 Test-Vbp 'b135_with_class_carrier_x86' "$Tests\b135_with_class_carrier\B135Carr.vbp" $b135Needles -Arch "x86"
+
+# 账 #305 §11.118（第一百三十六刀）：`With <工程函数>()` 的载体在块尾 / Exit 出块时放手。
+# 被调方的返回槽被腿④ 排除在出口放手之外 ⇒ 那一枚引用是交回给调用方的，With 临时量是它的主人。
+# 反面证人：字段借来的集合、局部借来的集合（借来的一枚一枚都不能退）。
+$b136Needles = @(
+"B136-A1-count=1", "B136-A2-terms=1",
+"B136-B1-count=1", "B136-B2-terms=2",
+"B136-C1-count=2", "B136-C2-terms=2",
+"B136-D1-count=3", "B136-D2-terms=2",
+"B136-Z-terms=2", "B136-DONE")
+Test-Vbp 'b136_fnret_carrier' "$Tests\b136_fnret_carrier\B136Fn.vbp" $b136Needles
+Test-Vbp 'b136_fnret_carrier_x86' "$Tests\b136_fnret_carrier\B136Fn.vbp" $b136Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
