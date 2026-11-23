@@ -1134,15 +1134,24 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
     }
 
     // 账 #305 §11.119 (第一百三十九刀): 把这一帧的载体登进本过程的活载体名册。
-    // 只登记 `void*` 两档 (133 的两座工厂 / 136 的工程函数) —— 工程类那一档 (135) 要用类自己的
-    // `vb6_cls_X_Release`, 而名册里只有 `void**`, 落点分不出类名 (见 §11.119 四.4 的在册边界)。
+    // 三档都登 (133 的两座工厂 / 136 的工程函数 / 135 的工程类):
+    //   * `void*` 两档 —— 落点用 `vb6_ReleaseObject`, `_vb6_ownRel[k]` 留 0;
+    //   * 工程类那档 (第一百四十二刀) —— 落点分不出类名, 所以登记时把类自己的
+    //     `vb6_cls_X_Release` 地址一并存进 `_vb6_ownRel[k]` (签名恰好是
+    //     `unsigned long (void*)`, 不需要薄）。槽号只增不复用, 所以不会串到别的档。
     // 借用型不登记: 槽里留 0, 落点放手时天然跳过。
     int ownerSlot136 = -1;
-    if ((withOwnedCarrier133 || withFnRetCarrier136) && hoistOwnActive_ &&
-        hoistOwnNext_ < hoistOwnN_) {
+    const bool anyOwn142 =
+        withOwnedCarrier133 || withFnRetCarrier136 || !withClassCarrier135.empty();
+    if (anyOwn142 && hoistOwnActive_ && hoistOwnNext_ < hoistOwnN_) {
         ownerSlot136 = hoistOwnNext_++;
         c_.emitLine("_vb6_own[" + std::to_string(ownerSlot136) + "] = (void**)&" + tempVar +
                     ";  /* 账 #305 §11.119: 登进活载体名册 */");
+        if (!withClassCarrier135.empty()) {
+            c_.emitLine("_vb6_ownRel[" + std::to_string(ownerSlot136) + "] = vb6_cls_" +
+                        cIdent(withClassCarrier135) +
+                        "_Release;  /* §11.119 四.4: 落点按类自己的 Release 放手 */");
+        }
         if (!withObjectInfoStack_.empty()) {
             withObjectInfoStack_.back().ownerSlot = ownerSlot136;
         }

@@ -549,6 +549,9 @@ void CCodeGen::visit(FunctionDecl& node) {
         if (hoistOwnActive_) {
             c_.emitLine("void** _vb6_own[" + std::to_string(hoistOwnN_) +
                         "] = {0};  /* 账 #305 §11.119: 活载体名册 */");
+            // 第一百四十二刀: 每槽的放手函数 (工程类那一档用, 见 cgen_with 登记站)。
+            c_.emitLine("unsigned long (*_vb6_ownRel[" + std::to_string(hoistOwnN_) +
+                        "])(void*) = {0};  /* 账 #305 §11.119 四.4: 每槽的放手函数 */");
         }
     }
 

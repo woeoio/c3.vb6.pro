@@ -114,9 +114,15 @@ void CCodeGen::visit(OnErrorStmt& node) {
             // 未登记 / 已出块注销 / 已退过的槽都是 0, 天然跳过。
             if (hoistOwnActive_) {
                 for (int own139 = 0; own139 < hoistOwnN_; ++own139) {
-                    c_.emitLine("if (_vb6_own[" + std::to_string(own139) +
-                                "]) vb6_ReleaseObject(_vb6_own[" + std::to_string(own139) +
-                                "]);  /* 账 #305 §11.119: 落点放手 (handler 无 Resume) */");
+                    // 账 #305 §11.119 四.4 (第一百四十二刀): 工程类那一档的槽里存的是
+                    // `vb6_cls_X` 实例, 不能用 `vb6_ReleaseObject` (那是 COM 槽的放法) ——
+                    // 登记时把类自己的 `vb6_cls_X_Release` 地址也存进 `_vb6_ownRel[k]`,
+                    // 落点按它放手。别的一档该槽是 0, 照旧走 `vb6_ReleaseObject`。
+                    const std::string k = std::to_string(own139);
+                    c_.emitLine("if (_vb6_own[" + k + "]) { if (_vb6_ownRel[" + k +
+                                "]) { _vb6_ownRel[" + k + "](*_vb6_own[" + k +
+                                "]); *_vb6_own[" + k + "] = 0; } else vb6_ReleaseObject(_vb6_own[" + k +
+                                "]); }  /* 账 #305 §11.119: 落点放手 (handler 无 Resume) */");
                 }
             }
             c_.emitLine("goto vb6_label_" + cIdent(node.labelName) + ";");

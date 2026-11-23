@@ -446,6 +446,10 @@ void CCodeGen::visit(SubDecl& node) {
             // 名册放在过程顶层 (setjmp 之前): 落点读到的每个槽都必须是确定的 —— 未登记的是 0。
             c_.emitLine("void** _vb6_own[" + std::to_string(hoistOwnN_) +
                         "] = {0};  /* 账 #305 §11.119: 活载体名册 */");
+            // 第一百四十二刀: 工程类那一档的槽存的是 `vb6_cls_X` 实例, 落点分不出类名 ——
+            // 登记时把类自己的 Release 地址也存进来, 这个数组就是那一列。
+            c_.emitLine("unsigned long (*_vb6_ownRel[" + std::to_string(hoistOwnN_) +
+                        "])(void*) = {0};  /* 账 #305 §11.119 四.4: 每槽的放手函数 */");
         }
     }
 
