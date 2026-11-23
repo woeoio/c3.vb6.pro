@@ -6226,3 +6226,80 @@ B412（P1–P6 / TERM=23）、B126（A1–A2）、KOwn（G0–G4）、KHaz（F1�
 
 在册：宿主包装器进集合仍是「一枚只加不退的引用」—— 那是 `uc_collection` 元素自己不 Release 那一格
 （§11.110 边界同源），修前就是这样，不是本刀引入的。
+
+## §11.111 内建 Collection 的载体寿命：计数、元素出厂、包装器手里那一份（第一百二十九刀）
+
+### 一、缺口
+
+内建 `Collection` 的载体是 `calloc` 的一枚 `vb6_CollRec`，各槽里存的**直接就是它**（不是 `vb6_ComObject`
+包装器）。而 Set 那对出口都先问同一句判据：
+
+```c
+if (vb6_ComIsDispatchable(pUnk)) pUnk->lpVtbl->Release(pUnk);   /* vb6_ReleaseObject */
+if (!vb6_ComIsDispatchable(p)) return;                          /* vb6_ComAddRefDispatch */
+```
+
+宿主对象一律不可分派（首字段是 `tag`/句柄，不是 vtable），于是这一对**双双空跑**：
+`Set c = New Collection` 之后再怎么 `Set c = Nothing`、再怎么重新赋值，载体既不拆、
+里面的元素也一枚都不出厂。实测（`.temp/k129`，只换二进制）：
+
+```
+' 修前
+A1 terms=0        ' Set c = Nothing 之后 (集合里两枚元素, 应 2)
+A2 terms=0        ' 重新赋值丢掉旧载体 + 末了 Nothing (应 2)
+B  terms=0        ' 两枚槽指同一枚载体, 最后一枚退掉 (应 1)
+' 修后
+A1 terms=2 / A2 terms=2 / B terms=1
+```
+
+这一格就是第一百二十八刀量到的 `c.Add New X` 恒 `terms=0` 的根：那一刀把**实参**那一枚引用的
+放手补齐了（元素于是活在集合自己那一份引用上，与 VB6 一致），可集合自己**永远不死**，元素当然也
+永远不出厂。
+
+### 二、机制
+
+- `vb6_CollRec` 加 `int32_t refs`；`vb6_Collection_New` 出生即 `refs=1`；
+- `vb6_Collection_AddRef` / `vb6_Collection_Release` 是载体的唯一一对出口。Release 在 `refs`
+  退到 0 时：逐枚按 `vb6_Collection_Remove` **一字不差**的口径放手（`vb6_VariantValueFree` + 只对
+  `vb6_ComObject_IsVb6Wrapper` 那一档 `vb6_ReleaseObject`，键另放），再 free 三项、先撕 `tag`
+  再 free 载体（第二发 Release 不再认它）；
+- `vb6_ComAddRefDispatch` / `vb6_ReleaseObject` 各加一条 Collection 分支放在 `ComIsDispatchable`
+  **之前**——判据只有一句（`vb6_uc_isColl`），两处成对；
+- 集合套集合：`vb6_ComPackObject` 把宿主对象包成 `Vb6HostWrap` 时，若目标是内建 Collection，
+  替它**收一份载体引用**并给包装器打 `ownsTarget`；`HW_Release` 在包装器真死时把那份放回。
+  没有这一份，`Set inner = Nothing` 会在宿主那边还拿着包装器时就把载体拆了。
+
+### 三、夹具与读数
+
+`tests/b129_coll_lifetime/`（`B129Item.cls` + `B129Main.bas` + `B129Coll.vbp`）：
+
+| 针 | 修前 | 修后 |
+|---|---|---|
+| `B129-A-count`（`Set Nothing` 前 Count） | 2 | 2 |
+| `B129-A1-terms`（`Set Nothing` 拆掉两枚元素） | 0 | **2** |
+| `B129-A2-terms`（重新赋值丢旧载体 1 + 末了 Nothing 1） | 0 | **4** |
+| `B129-B-alive` / `B129-B-terms`（两枚槽同一载体：退一枚槽不许拆） | 1 / 0 | 1 / **5** |
+| `B129-C-inner`（集合套集合：inner 置 Nothing 后仍可用） | 1 | 1 |
+
+x64 / x86 双架构同针（x86 实测逐字相同）。
+
+### 四、回归面
+
+- `tests/b445_refcount`：W1–W39 + DONE 逐字相同；
+- `b412_objslot`（P1–P6 / TERM=23）、`b126_crossmod_objglobal`（A1–A2）、`K124`（T1–T6）、
+  `FProbe7`（E1–E3）、`FProbe6`（D1–D2）、`KOwn`（G0–G4）、`KHaz`（F1–F3）、`K128`（C1/D1=0）、
+  `b128`（A1=1 / A2=2）逐字相同；
+- `tests/geomcache` x64 + x86：`C3_LATEBIND_MISS` 0 条，GC17/GC18/GC19 全 True；
+- 九门 9/9；语料 772 → 774 行（只多夹具自己两行；本刀只动 RTL，发码一字未变）。
+
+### 五、边界（在册）
+
+- **局部 `As New Collection` / `Dim c As Collection` 出作用域仍不退**：腿④ 只认声明名就是 `Object`
+  的那一档，宿主类局部还没有那一句 `vb6_ReleaseObject`（实测 `.temp/k129` A2 = 0）。载体计数已经
+  就位，缺的只是发码那一句 —— 下一刀。
+- **集合套集合**：内层载体由包装器护着，而宿主侧存的是**借来的**包装器指针（§11.110 那条边界），
+  包装器自己不释放 ⇒ 内层载体仍不拆（C 那格两版都 alive）。
+- 集合元素里的**宿主包装器**仍是借的：Release 只对 `vb6_ComObject_IsVb6Wrapper` 放手，与控制/窗体
+  寿命有关的那一档不在这里。
+- 模块级 / 类字段那一档仍不放手（`KHaz` F3 = 0），与 §11.109 同一条边界。
+- `Scripting.Dictionary` 是真 IDispatch 载体（`vb6com_dict.c`），不走这一格 —— 在册。
