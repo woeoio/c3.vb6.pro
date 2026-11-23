@@ -95,6 +95,9 @@
         // 块尾那一发由 cgen_with 自己发; 体内 `Exit Sub/Function/Property` 那几条
         // goto 口由 cgen_jumps 接着发 (载体是块内局部, 出了块就没人再问)。
         bool ownsCarrier = false;
+        // 账 #305 §11.117 (第一百三十五刀): 「With New <工程类>」的载体归类自己的 _Release
+        // (与腿④ 工程类那一档同一个出口); 空串 = 不是这一类。
+        std::string carrierClass;
     };
     std::vector<WithObjInfo> withObjectInfoStack_;
     bool suppressDefaultProp_ = false;  // P17.1: With对象表达式时抑制默认属性读取

@@ -153,9 +153,18 @@ void CCodeGen::visit(ExitStmt& node) {
     // 内层先退（栈顶往下）。`vb6_ReleaseObject` 自己置空 ⇒ 与块尾那一发不会二次退。
     auto emitWithCarrierReleaseOnExit134 = [&]() {
         for (int i = (int)withObjectInfoStack_.size() - 1; i >= 0; --i) {
-            if (!withObjectInfoStack_[i].ownsCarrier) continue;
+            const WithObjInfo& fr134 = withObjectInfoStack_[i];
+            if (!fr134.ownsCarrier && fr134.carrierClass.empty()) continue;
             if (i >= (int)withObjectVars_.size()) continue;
-            c_.emitLine("vb6_ReleaseObject((void**)&" + withObjectVars_[i] +
+            const std::string& tv134 = withObjectVars_[i];
+            if (!fr134.carrierClass.empty()) {
+                // §11.117 (第一百三十五刀): `With New <工程类>` 的载体归类自己的 _Release。
+                c_.emitLine("if (" + tv134 + ") vb6_cls_" + cIdent(fr134.carrierClass) + "_Release(" +
+                            tv134 +
+                            ");  /* 账 #305 §11.117: Exit 出 With 块，本块自己造的类实例 */");
+                continue;
+            }
+            c_.emitLine("vb6_ReleaseObject((void**)&" + tv134 +
                         ");  /* 账 #305 §11.116: Exit 出 With 块，本块自己造的那一枚 */");
         }
     };

@@ -1089,6 +1089,22 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
         withObjectInfoStack_.back().ownsCarrier = true;
     }
 
+    // 第一百三十五刀 §11.117: `With New <工程类>` —— 初始化器发的是 `vb6_cls_X_New()`,
+    // 所有权同样交到 With 临时量手上; 它用的是类自己的 `vb6_cls_X_Release` 那一档 (不是
+    // vb6_ReleaseObject: 裸工程实例在 Fix 191 那道判据里只清槽)。
+    // 认法: tempType 是 `vb6_cls_X*` 且初始化器里含 `vb6_cls_X_New()` —— 同一类名两头对上。
+    std::string withClassCarrier135;
+    if (tempType.rfind("vb6_cls_", 0) == 0 && tempType.size() > 9 && tempType.back() == '*') {
+        const std::string clsBody135 = tempType.substr(8, tempType.size() - 9);
+        if (!clsBody135.empty() &&
+            lastExpr_.find("vb6_cls_" + clsBody135 + "_New()") != std::string::npos) {
+            withClassCarrier135 = clsBody135;
+        }
+    }
+    if (!withClassCarrier135.empty() && !withObjectInfoStack_.empty()) {
+        withObjectInfoStack_.back().carrierClass = withClassCarrier135;
+    }
+
     c_.emitLine("{");
     c_.indent();
     emitStmtList(node.body);
@@ -1100,6 +1116,10 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
     if (withOwnedCarrier133) {
         c_.emitLine("vb6_ReleaseObject((void**)&" + tempVar +
                     ");  /* 账 #305 §11.115: With 自己造的那一枚载体, 块尾放手 */");
+    } else if (!withClassCarrier135.empty()) {
+        c_.emitLine("if (" + tempVar + ") vb6_cls_" + cIdent(withClassCarrier135) + "_Release(" +
+                    tempVar +
+                    ");  /* 账 #305 §11.117: With New <工程类> 的载体, 块尾放手 */");
     }
 
     withObjectVars_.pop_back();
