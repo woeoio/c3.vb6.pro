@@ -6777,7 +6777,7 @@ With 临时量就是它的主人。与 §11.115 两座工厂同一个口径，�
   声明在落点之后（嵌套块里更不在作用域）。要做就得是"活载体名册 + 帧标号 + Resume 判据"，
   单独立设计档，不硬补 —— 设计已落 §11.119（前置：先修 `Resume Next` 落点的 §11.120）。
 - `GoTo` 跳出 With 块仍在册（§11.116 五）。
-## §11.119 错误处理器落点的"活载体名册"（第一百三十七刀，设计档）
+## §11.119 错误处理器落点的活载体名册（第一百三十九刀落码；设计于第一百三十七刀）
 
 ### 一、缺口
 
@@ -6789,6 +6789,7 @@ With 临时量就是它的主人。与 §11.115 两座工厂同一个口径，�
 |---|---|---|---|
 | A | 只 `H:` 里打印，**没有 Resume** | `A2-terms=0` | 载体漏，元素不终止 —— 本档要关的那一格 |
 | B | `H:` 里 `Resume Next` | `B2-terms=0`，且 `B1b` **一句没打** | 见 §11.120：`Resume Next` 落到了 `End With` 之后 |
+| | 备注 | §11.119 落码后这三路读数上移一格：`A2` 0→1、`B2` 1→2、`C2` 2→3、`Z` 2→3 | |
 
 ### 二、为什么不能在落点直接补一句
 
@@ -6838,6 +6839,52 @@ With 临时量就是它的主人。与 §11.115 两座工厂同一个口径，�
 - 工程类载体（§11.117）在落点仍漏（名册要带类名，见四.4）；
 - `Resume <label>` 指向块内深处（跳过一部分语句）时，块尾仍会在真正离块时放手 —— 本档不改这条；
 - `GoTo` 跳出 With 块仍在册（§11.116 五）。
+
+### 七、落码与读数（第一百三十九刀）
+
+机制按四发落地（与三 判据表一致）：
+
+- `cgen_decl_proc` / `cgen_decl_func`：`hoistOwnN_ = (!hasResume_ && hasOnError_) ? countWithStmts(body) : 0`
+  —— **一句 `Resume` 都没有**才启用；名册 `void** _vb6_own[N] = {0};` 就发在过程顶层
+  （`jmp_buf` 之后、`setjmp` 之前），未登记的槽必为 0。`cgen_decl_prop` 把旗清掉（Property 不发名册）。
+- `cgen_with.cpp`：133/136 两档自有载体在声明之后发 `_vb6_own[k] = (void**)&_vb6_with_N;`；块尾放手
+  之后发 `_vb6_own[k] = 0;`（**注销**——不注销的话这个栈槽被后续块复用时，落点会拿悬空地址去退）。
+- `cgen_jumps.cpp` 的 Exit 三条臂：退完一枚接着注销同号槽。
+- `cgen_jumps.cpp` 的 On Error 落点：`if (setjmp(...) != 0) { <逐槽> if (_vb6_own[k]) vb6_ReleaseObject(_vb6_own[k]); goto H; }`。
+
+`countWithStmts` 给的是**上界**（过程体里 With 语句条数，递归）：槽号按发码顺序分配，而"哪一帧是
+自有载体"要等发码才算得出来，多给的槽没登记就是 0、落点天然跳过；少给才会溢出。
+
+夹具 `tests/b138_handler_landing/`（x64 与 x86 逐字相同）：
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B138-A1-count` / `A2-terms` | handler 落到 `End Sub`（无 Resume），块尾那句被跨过 | 1 / **0 → 1** |
+| `B138-B1-count` / `B2-terms` | 同上但 handler 里 `Exit Sub` | 1 / **0 → 2** |
+| `B138-C1-count` / `C2-count` / `C3-terms` | 反面证人：`With gColl`（借来） | 2 / 2 / 0 → **2 / 2 / 2**（gColl 仍在、Count 仍读得出） |
+| `B138-D2-terms` | 两个 With 先后：前一个块尾退、后一个落点退 | 1 → **4** |
+| `B138-E1-count` / `E2-terms` | §11.118 的工程函数那一枚同样在名册里 | 1 / 1 → **1 / 5** |
+| `B138-Z-terms` / `Z-count` | 累计 / gColl 完好 | 1 / 2 → **5 / 2** |
+
+修前那一列是拿本刀之前的 exe 实跑（stash 后重建，`.temp/k139/fx_pre`）。
+
+**随刀改注的旧读数**：§11.120 夹具的三路（`B137-A2` 0 → **1**、`B137-B2` 1 → **2**、`B137-C2` 2 → **3**、
+`B137-Z` 2 → **3**）—— b137 的 A 路本来就是这一格的边界，本刀把它关掉；该夹具的 needles 同步改。
+
+**发码面**：语料 **792 行**（780 + b130…b138 夹具）。既有行有 **7 条**随刀变（都是"过程里有
+`On Error GoTo` + `With`、且一句 `Resume` 都没有"的文件）：`b137_resume_in_block/B137Main.bas`、
+`test_arr_empty.bas`、`test_collcall.bas`、`vb6probe/NullFamilyProbe.bas`、
+`VBFlexGridDemo/Builds/VTableHandle.bas`、`VBFlexGridDemo/Common/VisualStyles.bas`、
+`VbQRCodegen-master/src/mdQRCodegen.bas`；其余一字未动。
+
+**九门 9/9（exe sha `19252414e3e0`）**。
+
+### 八、边界（第一百三十九刀之后仍在册）
+
+- 工程类载体（§11.117）：名册槽只有 `void**`，落点分不出类名 —— 仍归块尾/Exit 两处；
+- 过程里**有** `Resume` 的（哪怕 handler 里那句 `Resume` 只落块外）：落点一律不动，仍漏；
+- 出错语句是块内最后一条且 handler `Resume Next`：落点落到块外、块尾那句被跨过 —— 仍漏；
+- `GoTo` 跳出 With 块（§11.116 五）。
 
 ## §11.120 `Resume Next` 在块内的落点位置（第一百三十八刀）
 
