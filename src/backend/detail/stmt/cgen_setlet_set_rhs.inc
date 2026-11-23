@@ -707,6 +707,13 @@
                     rhsTransferred
                     || (node.value && node.value->kind == ASTNodeKind::IndexOrCallExpr)
                     || value.find("vb6_ComObject_From") != std::string::npos
+                    /* 账 #305 §11.127 (第一百四十六刀): `Set x = <晚绑定对象>.<属性>` —— 初始化器
+                     * 发 `vb6_ComGetObjectProp(o, L"Prop")`。RTL 契约写死「取走 pv->pdispVal 之后
+                     * 只 vb6_ComVarFree(pv), 对象引用已转移给调用方」⇒ 槽拿走的就是交回的那一枚,
+                     * 再 AddRef = 每发净 +1 (实测 .temp/k146/probe: `Set c = o.Fresh : Set c = Nothing`
+                     * 之后 terms 仍 0 —— 新造的实例永不销毁)。与 §11.126 的 With 四口同一口径、
+                     * 同一座桥, 只是主人从 With 临时量换成槽自己。 */
+                    || value.rfind("vb6_ComGetObjectProp(", 0) == 0
                     || value == "NULL";
                 c_.emitLine("{ void* " + refTmp + " = (void*)(" + value + "); "
                             + (rhsOwned ? std::string() : ("vb6_ComAddRefDispatch(" + refTmp + "); "))
