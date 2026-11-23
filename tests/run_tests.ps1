@@ -12169,6 +12169,19 @@ if ($Category -in @("all", "run", "vbp")) {
     $b128Needles = @("C3ProbeB128-A1-terms=1", "C3ProbeB128-A2-terms=2", "C3ProbeB128-DONE")
     Test-Vbp 'b128_argpack_release' "$Tests\b128_argpack_release\B128ArgPack.vbp" $b128Needles
     Test-Vbp 'b128_argpack_release_x86' "$Tests\b128_argpack_release\B128ArgPack.vbp" $b128Needles -Arch "x86"
+    # 账 #305 §11.111 (第一百二十九刀): 内建 Collection 的**载体寿命**。
+    # 载体是 calloc 的一枚指针, 而 Set 那对出口 (vb6_ComAddRefDispatch / vb6_ReleaseObject)
+    # 都先问 vb6_ComIsDispatchable —— 宿主对象一律不可分派 ⇒ 两个出口双双空跑。
+    # 修前三条岔的 terms 全 0 (载体既不拆、元素也不出厂)。
+    #   A1 = Set Nothing 两枚元素一起出厂; A2 = 重新赋值丢掉旧载体 (1) + 末了 Nothing (1);
+    #   B  = 两枚槽指同一枚载体 —— 反面证人: 退掉一枚槽不许拆, 最后一枚槽才拆。
+    #   C  = 集合套集合: 包进包装器的那一份引用护着载体, inner 置 Nothing 后仍可用。
+    $b129Needles = @(
+        "B129-A-count=2", "B129-A1-terms=2", "B129-A2-terms=4",
+        "B129-B-alive=1", "B129-B-terms=5",
+        "B129-C-inner=1", "B129-DONE")
+    Test-Vbp 'b129_coll_carrier_lifetime' "$Tests\b129_coll_lifetime\B129Coll.vbp" $b129Needles
+    Test-Vbp 'b129_coll_carrier_lifetime_x86' "$Tests\b129_coll_lifetime\B129Coll.vbp" $b129Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
