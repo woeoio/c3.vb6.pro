@@ -7462,3 +7462,93 @@ C1 同一类错：**量具的错不是发码的错**。反过来说，“把 VT_
 在册的那一句）：`vb6_ComPackObject` 给对象 AddRef 一枚，`DISPATCH_PROPERTYPUT` 之后没人
 放它。这一刀没动它，是因为量产路径上的 `Set <对象>.<属性>` 走的是 `vb6_ComSetRef`（不打包）；
 要动它，得先有一枚**真走到 Pattern F**（`vb6_ComGetXxxProp(...) = value` 那个改写）的靶。
+
+## §11.129（第一百四十八刀）服务端 getter 适配器：对象返回被当成整数交出去
+
+### 一、怎么撞上的
+
+第一百四十七刀之后接着量链式写 `Set <晚绑定 o>.<Child>.<Prop> = it`（`Child` 的返回类型
+就是所在类自己）。那一发的读数不对，但顺着摸下去先撞到另一件事：**`o.Child` 这一枚单独的
+读也坏**。`C3_COM` trace 里两条挨着：
+
+```
+[C3_COM] GetProp 'Child'  hr=0x0  vt=3  val=150397680     ' As B148Box（本类）
+[C3_COM] GetProp 'Child2' hr=0x0  vt=9  val=-1            ' As B148Item（异类）
+```
+
+同一张描述符表、同一个 `me`，一个 `vt=3` 一个 `vt=9`。`vt=9` 是 VT_DISPATCH，`vt=3` 是
+VT_I4 —— 对象被当成整数交出去了，`150397680` 就是被 `(int32_t)(intptr_t)` 截断后的指针。
+
+### 二、病在哪儿
+
+`src/backend/detail/util/cgen_util_dllentry_collect.inc` 里 getter 的适配器只认一档：
+
+```cpp
+if (retType == "vb6_VARIANT" && !methodSym->variableTypeName.empty()) { ... }   // Fix 184: 异类
+```
+
+而 `mapType` 给 `As Object` 与本类返回的 C 型**都是 `void*`**（`Object` 一栏写死 `void*`，
+本类返回因为自引用走 `void*`），两条都不进这一档，于是落到本函数最后一个兜底：
+
+```cpp
+((VARIANT*)result)->vt = VT_I4; ((VARIANT*)result)->lVal = (int32_t)(intptr_t)_r;
+```
+
+这是**同一个 else** 吃掉两档，所以两档一起坏：`o.Child`（本类）与 `o.Held`（`As Object`）
+改前都读到 VT_I4。
+
+### 三、改法（两处）
+
+- **本类返回**：判据放宽到「`retType == "void*"` 且声明的类型名解析到本工程一个**有 coclass
+  描述符**的引擎类」⇒ 与异类返回同一律：`vb6_ComObject_FromInstance(...)` 包一层，再用
+  `vb6_VariantObjectTransfer` 把那一枚引用交给 VARIANT。临时量的 C 声明型跟着改（本类那档
+  是 `void*`，异类那档是 `vb6_cls_X*`）。
+- **`As Object`**：类模块里 getter 的返回槽**已经**为泛对象档 claim 了一枚（`B148Box.c` 实测
+  `vb6_ret_Held = gHold; vb6_ComAddRefDispatch(...)`），所以适配器只做**转交**：
+  `vt = VT_DISPATCH; pdispVal = (IDispatch*)_r` —— 不再 AddRef，也不释放。
+
+### 四、读数（x64 与 x86 十枚逐条相同）
+
+| 行 | A2-self-tag | A3-tag | B2-fresh-tag | B3-item-terms | C2-held-tag | C3-item-terms | Z-box-terms | Z-item-made/terms |
+|---|---|---|---|---|---|---|---|---|
+| 改前 | **= Nothing** | 6 | 11 | 1 | **= Nothing** | 2 | 0 | 2 / 2 |
+| 改后 | **5** | 6 | 11 | 1 | **77** | 2 | 0 | 2 / 2 |
+
+- A2/C2 是判据：本类返回与 `As Object` 返回都得交回**那枚对象**，且交回的确实是写进去那一枚
+  （`h.Tag = 77` 之后 `it.Tag` 读到 77 ⇒ 同一枚，不是拷贝）。
+- A3：`Set s = Nothing` 之后 `o` 仍可写可读 —— 交回的那一枚归调用方（§11.126），不多取。
+- B 路是**对照组**：异类返回改前改后都是对象，说明本刀没有把好的一档改坏。
+- Z-item：`Set o.Held = it` → `Set o.Held = Nothing` → `Set it = Nothing`，恰好 2 枚
+  Terminate —— 写口（§11.128）与本刀读口在同一枚对象上收放对得上。
+- **Z-box-terms 停在 0 是在册的**：`Set Self = Me` 在返回槽上 claim 的那一枚（服务端 getter
+  的泛对象返回槽，§11.125 步骤 4 同族）在客户端放手之后仍留在实例自己的 `__refcount` 上，
+  于是 `Class_Terminate` 不触发。它与本刀不同尺：本刀管的是「交出去的**型**对不对」，
+  那一枚管的「**笔数**对不对」。夹具把 0 如实钉住，将来接了就翻成 1。
+
+### 五、发码面
+
+- 全清单 **808 行**：机器可复现的 800 行一行未变，另 6 行是 vendor typelib 那一路的既有
+  本机≠CI 差（不是本刀引入）；新夹具两行 ⇒ 806 → **808**；
+- **这一刀的发码变化不在清单覆盖面**：适配器在 `com_entry.c`（工程级中间文件），`--emit-c` /
+  `emit-manifest` 只覆盖各模块的 C ⇒ 清单这一刀零行位移（与 §11.128 同一处覆盖缺口）。
+  行为由 b148 的十枚读数钉死。
+
+### 六、闸与连带
+
+- 九门 **9/9 rc=0**（`inputs=808 [.vbp=302 .bas=506]`，emitted=1574，exe sha=`0f4e9555c59c`）；
+- 既有桥夹具零回归：b144 九枚、b146 八枚、b147 十二枚读数逐条不变（x64 与 x86 都过）；
+- CI（github `dev`）run `45269265593` = **22/22 success**。
+
+### 七、下一刀（已经量好的）
+
+**链式写 `Set <晚绑定 o>.<Child>.<Prop> = it`**：发码是
+
+```c
+vb6_B148Box_prop_set_Held(o, vb6_ComGetObjectProp(o, L"Child"));  /* Set Property */
+```
+
+两处都不对：接收者写成 `o`（该是 `o.Child` 交回的那一枚），值是 `o.Child` 交回的（该是 `it`）。
+读数 `.temp/k148/probe`（`Chain.vbp`）：`CH-hold=B148Box` —— `gHold` 里落的是 `o`（本该是 item）。
+这一发还顺带绕过了 COM 打包（早绑定直呼 `vb6_B148Box_prop_set_Held`）。本刀没接，是因为
+它的根在 `cgen_setlet_set_prop.inc` 那条链式改写里（接收者/值两个槽的绑定分开算），与本刀
+的适配器不是同一处。
