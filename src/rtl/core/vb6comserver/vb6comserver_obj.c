@@ -185,8 +185,8 @@ static ULONG STDMETHODCALLTYPE ComObj_Release(vb6_ComObject* self) {
                         /* 账 #305 §11.126 (第一百四十五刀): 拥有型包装器拆解也要问**实例自己的**引用计数。
                          * 改前这一档直接 `destroyFunc(instance)` —— 对 `New` 出来的那一枚没错, 但
                          * Property Get 交回**共用实例**时 (实测 `Property Get SameObj() As B144Item:
-                         * Set SameObj = gKeep`) 也照拆: gKeep 那一枚引用还在 (`__refcount=2`), 包装器
-                         * 这一枚走完就 Class_Terminate ⇒ 调用方手里留一根悬空指针。
+                         * Set SameObj = gKeep`) 也照拆: gKeep 那一枚引用还在 (实例的引用计数是 2),
+                         * 包装器这一枚走完就 Class_Terminate ⇒ 调用方手里留一根悬空指针。
                          * 口径与下面借用型那一档一字相同 (先摘 `__comObj` 回填再退), 差别只在于
                          * 拥有型带走的是 New/FromInstance 移交的那枚“底座引用”。 */
                         void* inst145 = self->vb6Instance;
