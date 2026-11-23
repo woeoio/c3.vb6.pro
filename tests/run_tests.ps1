@@ -12309,6 +12309,16 @@ $b140Needles = @(
 "B140-Z-terms=5", "B140-Z-count=2", "B140-DONE")
 Test-Vbp 'b140_goto_out_with' "$Tests\b140_goto_out_with\B140Res.vbp" $b140Needles
 Test-Vbp 'b140_goto_out_with_x86' "$Tests\b140_goto_out_with\B140Res.vbp" $b140Needles -Arch "x86"
+
+# 账 #305 §11.119 四.4（第一百四十二刀）：工程类载体进错误落点名册 ——
+# 名册槽里只有 `void**`，落点分不出类名，所以登记时把类自己的 `vb6_cls_X_Release`
+# 地址一并存进 `_vb6_ownRel[k]`。C 路反面证人：借来的那一帧不进名册。
+$b141Needles = @(
+"B141-A1-terms=1", "B141-B1-terms=3",
+"B141-C1-count=2", "B141-D1-terms=5",
+"B141-Z-terms=5", "B141-Z-count=2", "B141-DONE")
+Test-Vbp 'b141_roster_class' "$Tests\b141_roster_class\B141Res.vbp" $b141Needles
+Test-Vbp 'b141_roster_class_x86' "$Tests\b141_roster_class\B141Res.vbp" $b141Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
