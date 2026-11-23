@@ -6516,3 +6516,86 @@ dict_native NewBind 1 (d)
   差 19 字节；同一台机器内部可复现、跨机器不可复现，而单模块 `B132Main.bas` 那行两边逐字一致）。
   按既有口径取 `ci/emit-manifest` 那台二进制交回来的数登记，本机复跑会一直报这一行。
 - `FileSystemObject.FileExists` 一类的**谓词返回**口径不在本刀（两版同形，另册）。
+## §11.115 `With` 自己造的那一枚载体在 `End With` 放手（第一百三十三刀）
+
+### 一、缺口与读数
+
+`With New Collection` / `With CreateObject("…")` 这两形的目标表达式是**自己造一份对象**，
+所有权交到 With 临时量手上；`End With` 一句不发 —— 载体连同体内的元素一起活到进程结束：
+
+```vb
+Private Sub WithNew()
+    With New Collection
+        .Add New B133Item
+        Debug.Print "B133-A1-count=" & .Count
+    End With          ' 修前: 块尾不放手 ⇒ 载体与元素都还在
+    Debug.Print "B133-A2-terms=" & gTerms
+End Sub
+```
+
+夹具 `tests/b133_with_carrier_scope/`（x64 与 x86 逐字相同）：
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B133-A1-count` / `A2-terms` | `With New Collection` + `.Add New B133Item` | 1 / **0 → 1** |
+| `B133-B1-count` / `B2-terms` | `With CreateObject("Scripting.Dictionary")` | 1 / **0 → 2**（累计） |
+| `B133-C1-count` / `C2-terms` | 反面证人一：`With gBox.C`（**字段**借来的那一份） | 1 / 0 → **0**（不动） |
+| `B133-D1-count` / `D2-terms` | 反面证人二：`With c`（**局部** `Set` 取的引用） | 2 / 0 → **0**（不动） |
+| `B133-E1-tag` / `E2-terms` | 在册边界：`With New <工程类>` | 11 / 0 → **0**（本刀刻意不发） |
+| `B133-Z-terms` | 累计 | **0 → 2** |
+
+修前那四个 `0` 是本机实跑：把源码 stash 回本刀之前、重编一份 exe 跑同一个夹具
+（产物在 `.temp/k133/b133pre`），不是按形状推的。
+
+### 二、机制（发码一处；闸只认两座工厂）
+
+`src/backend/stmt/cgen_with.cpp`：With 体那块 `{ … }` 收口之后，若**初始化器本身**就是
+`(void*)vb6_NewObject(` / `(void*)vb6_CreateObject(`（两座工厂交过来的一份所有权，
+与 §11.114 那三条赋值路同一个口径），补一句：
+
+```c
+vb6_ReleaseObject((void**)&_vb6_with_N);  /* 账 #305 §11.115: With 自己造的那一枚载体, 块尾放手 */
+```
+
+闸按**发码形状**认，不按 AST 猜 —— 四条不匹配：
+
+- 借用型（字段 / 局部 / 形参 / `me.X`）发的是裸取值；
+- `With New <窗体>` 已被上一站改写成 `vb6_form_hwnd_X()`（全局默认实例，不归 With）；
+- UDT / 宿主伪结构体 / VARIANT 那几档 `tempType` 本身不是 `void*`；
+- `With New <工程类>` 发的是 `vb6_cls_X_New()`（类自己那一档）。
+
+`vb6_ReleaseObject` 自己把槽置空（两条分支都 `*objPtr = NULL`），所以体内即使又把它交给了别人，
+块尾这一发也只退一次。
+
+### 三、发码面
+
+全量重算 **782 行**（语料 780 + 夹具两行）。与本刀之前那份 CI 清单逐行比：
+
+```
+changed=6   added=2   missing=0
+  changed 六行全是旧账（5 行 machineDiff + b132 那个聚合行，机器侧）
+  added   夹具两行（B133Carr.vbp / B133Main.bas）
+```
+
+⇒ 语料 780 行**零行变**。承面在语料里是 **0 处**：全仓 `With New` 只有
+`VBFlexGridDemo/MainForm.frm` 那三处 `With New InputForm`（工程窗体 ⇒ 窗体默认实例那一站，
+不是晚绑定工厂）。本刀是"补一条语义"，不是"修一片存量"。
+
+### 四、回归
+
+- `b445` W1–W39（含 `W8-terms=200` / `W36-terms=12` / `W39-terms=0 null=False`）、
+  `b412` `TERM=23`、`b132` 十二针、`b131` 九针、`b130` 七针、`b129` 七针、
+  `b128` `A1=1 / A2=2` 逐字相同；
+- `geomcache` x64 + x86：`GC17/GC18/GC19` 全 True（`GC18=1234,1234,1234,1234`、
+  `GC19=82,82,82`），latebind-miss 0；
+- 九门 9/9（exe sha `2b1db40ed67e`）；`vbp_fixture_census` / `static_sentinel_registration` 都过。
+
+### 五、边界（在册）
+
+- **`With New <工程类>`**：`tempType` 是 `vb6_cls_*`，走类自己的 `_New`/`_Release` 那一档，
+  本刀闸刻意挡在外面（夹具 E 路 `E2-terms=0` 是**预期**读数，不是漏）。
+- **`Exit <proc>` 从 With 体内直接跳出**：With 临时量是块内局部，登记进 `slotsToRelease_`
+  会在嵌套位置发成越界引用（C2065），所以本刀不登记 —— 早退那一格仍漏一枚，与腿④ 的
+  过程出口机制不同源，另册。
+- **`With <函数返回>`**（`With f()`）不在本刀：那一格是 Variant / 解封后的借用值，
+  所有权归调用那一站，要单独量。
