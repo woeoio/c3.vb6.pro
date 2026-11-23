@@ -7385,3 +7385,80 @@ S3-terms=0 made=4      ' 连读两枚, 一枚都没退
 
 同一条桥的**写口**：`Set <晚绑定对象>.<属性> = <对象>` —— 交出去的那一枚由谁持有、
 桥在 `IDispatch::Invoke` 的 `DISPATCH_PROPERTYPUT` 那一路是否已经取走，是这把尺还没量过的第三站。
+
+## §11.128（第一百四十七刀）`Set <晚绑定对象>.<属性> = <对象>`：写口两处病
+
+### 一、量具与改前读数
+
+`.temp/k147/probe`（不进语料）：`As Object` 接一个工程类实例，类里
+`Public Property Set Held(ByVal v As Object)` 存进模块级 `gHold`。改前：
+
+```
+W0-made=1        ' 造了一枚
+W1-terms=1       ' 写完 + Set it = Nothing 就 Terminate —— gHold 里什么都没有
+W2-terms=1       ' 清 gHold 也不动
+```
+
+即：**写静默无效**。C3_OCX_TRACE 里看得更直白：
+
+```
+[189] INVOKE W=... cls=B147Box mem=Held argc=1
+[C3_COM] SetRef 'Held' rcv=... -> COM dispid=1 hr=0x00000000
+```
+
+hr 是 S_OK，参数却整个丢了。两头各有一处病，合起来才是这个结果：
+
+1. **描述符里 Get/Set 各拿一枚 dispid**（实测表：`{L"Held",1,2,…_get}` / `{L"Held",2,8,…_set}`）。
+   COM 口径是同一个属性共用一枚 dispid，客户端按名查（`GetIDsOfNames`）只回**第一条**同名的
+   ⇒ 写永远打在 Get 那一格上。生成器里 `dispIdMap` 建了却从没被读过。
+2. **服务端认档**写成 `(ik == 4 || ik == 8) && (wFlags & DISPATCH_PROPERTYPUT)`。客户端递的是
+   `DISPATCH_PROPERTYPUTREF`(8)，而 `DISPATCH_PROPERTYPUT` 是 4 ⇒ `wFlags & 4` 为假 ⇒
+   按档一位都对不上 ⇒ 落进「同 dispid 第一条」的兜底，而那条正是读臂。
+
+### 二、改法（两处各一句）
+
+- `src/backend/detail/util/cgen_util_dllentry_tables.inc`：dispid 先查同名已分到的，再取
+  driver 回写的 `comDispid`，最后才新发一枚（`nextDispid` 同时抬到已用值之上）。
+- `src/rtl/core/vb6comserver/vb6comserver_obj.c` 的 `ComObj_Invoke`：put 方向先认**自己的**档
+  （PUTREF→invkind 8 / PUT→invkind 4），再退到另一档 put，最后才走兜底；
+  **兜底不再让 put 落到读臂**（找不到 put 档就答 `DISP_E_MEMBERNOTFOUND`，而不是 S_OK 空跑）。
+
+### 三、读数（x64 与 x86 逐条相同）
+
+| 行 | W0-made | W1-terms | W2-terms | W3-terms | W4-terms | R1-num | R2-num | R3-tag | R4/R5-terms | Z-made |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 改前 | 1 | 1 | 1 | 2 | 2 | 41 | 42 | 0 | 2 / 2 | 3 |
+| 改后 | 1 | **0** | **1** | 2 | 2 | 41 | 42 | 0 | 2 / 2 | 3 |
+
+- W1/W2 是判据：写进去之后 `gHold` 持有，`Set it = Nothing` 不动它；清 `gHold` 才 Terminate。
+- W3：同一槽连写两次、再清空，恰好 2 枚 —— 多写不多取引用。
+- R 路三条是反面证人：同名 `Property Let`/`Get`（`o.Num = 41` → 41，`Bump 1` → 42）、普通
+  带参 Function（`TagOf(Nothing)` → 0）在 dispid 共用之后一条不变。
+- R4/R5：写进去的再用 Get 读回（那一枚归调用方，见 §11.127），读数仍 2 —— 不多不少。
+
+（量具本身踩过一次坑：最早把 `"WR1-num=" & o.Num` 直接打，出来是垃圾。`&` 拼接把 Long 属性
+发成 `vb6_ComGetStringProp`，那条读臂取 `bstrVal`。改成先落 Long 再打 —— 与 §11.127 那个
+C1 同一类错：**量具的错不是发码的错**。反过来说，“把 VT_I4 读成 BSTR”这件事是不是也该管，
+是另一把尺上的账，本刀不动。）
+
+### 四、发码面
+
+- 全清单 **804 行**逐行复算：**机器可复现的那 798 行一行未变**，另 6 行是 vendor typelib
+  那一路的既有本机≠CI 差（不是本刀引入）；加新夹具两行 ⇒ **806 行**；
+- **这一刀的发码变化不在清单覆盖范围内**：dispid 表落在 `com_entry.c`（工程级中间文件），
+  而 `--emit-c` / `emit-manifest` 只覆盖各模块的 C ⇒ 清单这一刀**零行变化**。
+  行为由 b147 的 12 枚读数钉死；把 `com_entry.c` 纳入清单需要另一次裁决（全语料行都会动、
+  且带机器相关性），不在这一格做。
+
+### 五、闸与连带
+
+- 九门 **9/9 rc=0**（`inputs=806 [.vbp=301 .bas=505]`，emitted=1574，exe sha=`bb5f67dd8e99`）；
+- 既有桥夹具零回归：b144 九枚读数、b146 八枚读数逐条不变（dispid 共用不影响按名 **读**
+  与 `Set x = <读数>` 那两站）。
+
+### 六、下一刀
+
+`vb6_ComSetProp` / `vb6_ComSetPropArg` 那一族仍然只 `free` 结构体、不清内容（§11.110 里
+在册的那一句）：`vb6_ComPackObject` 给对象 AddRef 一枚，`DISPATCH_PROPERTYPUT` 之后没人
+放它。这一刀没动它，是因为量产路径上的 `Set <对象>.<属性>` 走的是 `vb6_ComSetRef`（不打包）；
+要动它，得先有一枚**真走到 Pattern F**（`vb6_ComGetXxxProp(...) = value` 那个改写）的靶。
