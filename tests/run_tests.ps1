@@ -12339,6 +12339,19 @@ $b144Needles = @(
 "B144-Z-terms=4", "B144-Z-tag=8", "B144-DONE")
 Test-Vbp 'b144_late_with_prop' "$Tests\b144_late_with_prop\B144Res.vbp" $b144Needles
 Test-Vbp 'b144_late_with_prop_x86' "$Tests\b144_late_with_prop\B144Res.vbp" $b144Needles -Arch "x86"
+
+# 账 #305 §11.127（第一百四十六刀）：`Set x = <晚绑定对象>.<属性>` 交回的引用归槽。
+# 桥在 §11.126 已对平 ⇒ 一次读数恰好交出 1 枚；setlet 站那一步多余的 claim 撤掉之后:
+#   A 新造实例: Set Nothing 后恰好 Terminate 一次
+#   B 反面证人: 交回模块级共用实例, 退读数那一枚之后它仍活 (tag=7, terms 不增)
+#   C 反方向的证人: `Set d = c` 是裸槽拷贝 (那一枚 claim 必须留着) ⇒ Set c = Nothing 之后
+#     实例仍活 (C1-alive=0), 直到 Set d = Nothing 才 Terminate (C2-terms=1)
+$b146Needles = @(
+"B146-A1-terms=1", "B146-B1-tag=7", "B146-B2-terms=0",
+"B146-C1-alive=0", "B146-C2-terms=1",
+"B146-Z-terms=2", "B146-Z-made=3", "B146-DONE")
+Test-Vbp 'b146_set_late_prop' "$Tests\b146_set_late_prop\B146Res.vbp" $b146Needles
+Test-Vbp 'b146_set_late_prop_x86' "$Tests\b146_set_late_prop\B146Res.vbp" $b146Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
