@@ -6373,3 +6373,58 @@ add=1..11  del=0   （19/19 行都只有新增行，没有一行被改写或删�
   借出的包装器护着（与 §11.111 五同）。
 - 泛对象档与宿主类档共用一个 `isLateObj` 标记 ⇒ `dropLateObjSlotRelease` 的「无对价撤登记」
   对两者同时生效（For Each 循环变量 / 交地址给 Declare 那两处）。
+
+## §11.113 腿④ 宿主类局部档第二格（第一百三十一刀）
+
+### 一、缺口
+
+`Dim dc As Dictionary` 的 C 侧槽是**类型化接口** `vb6_ComIface_IDictionary*`，不经过
+`cType == "void*"` 那条臂，所以第一百三十刀只收到 `Collection`。实测（`.temp/k130` 的
+`DictLocal`）：出口一句不发，`D1` 增量 0；b131 夹具修前 `E2-terms=0`、`Z-terms=0`。
+
+### 二、改法
+
+挂点在 `cgen_localdecl.cpp` 的 ComClass/ComInterface 臂里（`knownTypedComVars_` 那一站）：
+
+- 声明名是内建 `dictionary`，且过三道闸门（`!var.isStatic` / `!inStaticProc_` / `!var.isWithEvents`）
+  ⇒ 登记 `trackLateObjSlotForRelease`；
+- 出口那一发与泛对象档同一形状 `vb6_ReleaseObject((void**)&x)` —— 与 `Set` 那一站退旧值
+  用的是同一句（实参类型对得上，`vb6_ComIsDispatchable` 把关，真 IDispatch 才 Release）。
+
+**只收内建 `Dictionary` 一个名字**：外部 ComClass / ComInterface 一大片，每一格的引用归属
+各有各的主人（`GetObject` / 属性取 / 参参借），在册另刀。
+
+### 三、反面证人（同一夹具，出口放手不许伤到别人）
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B131-E1-count` / `E2-terms` | `Dim dc As Dictionary` 出作用域 | 1 / **0 → 1** |
+| `B131-A1-count` / `A2-field` | 局部从**字段**借（`Set dc = gBox.Dict` AddRef） | 1 / 1 |
+| `B131-S1-count`（两次） | `Static d As Dictionary` 跨调用活着 | 1,1 |
+| `B131-O1-alive` | 局部**交给字段**之后字段仍可用 | 1 |
+| `B131-Z-terms` | 累计（E 那枚 + 换人时旧载体 + 末了 Nothing） | **0 → 3** |
+
+「交给字段」那一站的发码是 `vb6_ComAddRefDispatch(vref); vb6_ReleaseObject(&字段); 字段 = vref;`
+——本地那一枚退掉后字段手里还有一份，所以 `O1-alive=1`（不是悬空）。x64 / x86 逐字相同。
+
+### 四、发码面
+
+全量重算 776 行：**3 行变**（`tests/b128_argpack_release/B128ArgPack.vbp`、`B128Main.bas`、
+`tests/test_com_default_prop.bas`），逐行 A/B（旧二进制 vs 新二进制）全部 `add=1`、`del=0`，
+新增行只有 `vb6_ReleaseObject((void**)&d);` 那一句（对源码里的 `Dim d As Dictionary`）。
+语料 776 → **778** 行（夹具两行）。
+
+### 五、读数与回归
+
+- `K128` 的 `D1 terms=1 → 2`（同一份源，`DictCase` 那一格现在应当有 Terminate）；
+- `b445` W1–W39 + DONE、`B412`、`B126`、`K124`、`KOwn` G0–G4、`KHaz` F1–F3、`b128` A1/A2、
+  `b129` 七针、`b130` 七针逐字相同；
+- `geomcache` x64 + x86：`latebind-miss` 0 条，GC17/18/19 全 True；
+- 九门 9/9。
+
+### 六、边界（在册）
+
+- **外部类型库接口 / ComClass 局部**（`Dim x As FileSystemObject` / `As XMLHTTP` …）仍不登记：
+  它们的引用可能来自 `GetObject`、属性取或参数传递，归属各不相同，需逐档量过再收。
+- 模块级 / 类字段那一档仍不放手（b131 的 `Z` 那两枚是全靠**显式赋值/置空**才拆的）；
+  集合里借出的宿主包装器、集合套集合的内层载体仍与 §11.111 五、§11.112 六同一条边界。
