@@ -12214,6 +12214,18 @@ $b132Needles = @(
 "B132-X1-name=win.ini", "B132-DONE")
 Test-Vbp 'b132_typedcom_local_scope' "$Tests\b132_typedcom_local_scope\B132Typed.vbp" $b132Needles
 Test-Vbp 'b132_typedcom_local_scope_x86' "$Tests\b132_typedcom_local_scope\B132Typed.vbp" $b132Needles -Arch "x86"
+
+# 账 #305 §11.115（第一百三十三刀）：`With` 自己造的那一枚载体（`With New Collection` /
+# `With CreateObject(...)`）在 `End With` 放手。三条反面证人：字段借的、局部借的、工程类 `New`（在册）。
+$b133Needles = @(
+"B133-A1-count=1", "B133-A2-terms=1",
+"B133-B1-count=1", "B133-B2-terms=2",
+"B133-C1-count=1", "B133-C2-terms=2",
+"B133-D1-count=2", "B133-D2-terms=2",
+"B133-E1-tag=11", "B133-E2-terms=2",
+"B133-Z-terms=2", "B133-DONE")
+Test-Vbp 'b133_with_carrier_scope' "$Tests\b133_with_carrier_scope\B133Carr.vbp" $b133Needles
+Test-Vbp 'b133_with_carrier_scope_x86' "$Tests\b133_with_carrier_scope\B133Carr.vbp" $b133Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
