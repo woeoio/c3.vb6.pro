@@ -12352,6 +12352,22 @@ $b146Needles = @(
 "B146-Z-terms=2", "B146-Z-made=3", "B146-DONE")
 Test-Vbp 'b146_set_late_prop' "$Tests\b146_set_late_prop\B146Res.vbp" $b146Needles
 Test-Vbp 'b146_set_late_prop_x86' "$Tests\b146_set_late_prop\B146Res.vbp" $b146Needles -Arch "x86"
+
+# 账 #305 §11.128（第一百四十七刀）：`Set <晚绑定对象>.<属性> = <对象>` 的写口。
+# 改前 Get/Set 各拿一枚 dispid + 服务端 PUTREF 撞不上 `wFlags & PUT` ⇒ 写静默无效。
+#   W1/W2: 写进去之后 gHold 持有, 清 gHold 才 Terminate
+#   W3: 同一槽覆写两次, 清空之后恰好 2
+#   W4: 写 Nothing 不取引用
+#   R1..R3: 同名 Let/Get、普通 Sub、带参 Function 三条反而证人
+#   R4/R5: 写进去的再用 Get 读回 (那一枚归调用方, 见 §11.127)
+$b147Needles = @(
+"B147-W0-made=1", "B147-W1-terms=0", "B147-W2-terms=1",
+"B147-W3-terms=2", "B147-W4-terms=2",
+"B147-R1-num=41", "B147-R2-num=42", "B147-R3-tag=0",
+"B147-R4-terms=2", "B147-R5-terms=2",
+"B147-Z-made=3", "B147-DONE")
+Test-Vbp 'b147_setref_putref' "$Tests\b147_setref_putref\B147Res.vbp" $b147Needles
+Test-Vbp 'b147_setref_putref_x86' "$Tests\b147_setref_putref\B147Res.vbp" $b147Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

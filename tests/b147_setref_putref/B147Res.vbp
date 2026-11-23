@@ -1,0 +1,7 @@
+Type=Exe
+Name="B147App"
+Module=B147Main; B147Main.bas
+Class=B147Box; B147Box.cls
+Class=B147Item; B147Item.cls
+Startup="Sub Main"
+ExeName32="B147.exe"
