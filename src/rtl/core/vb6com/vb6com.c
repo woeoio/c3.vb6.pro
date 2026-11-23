@@ -1469,6 +1469,20 @@ int32_t vb6_IsNothing(void* obj) {
 void vb6_ReleaseObject(void** objPtr) {
     if (!objPtr || !*objPtr) return;
 
+    /* 账 #305 §11.111 (第一百二十九刀): 内建 Collection 的载体先问一句。
+     * 它不是可分派对象 (首字段是 tag), 下面那条 IsDispatchable 一概空跑 ——
+     * 于是 Set Nothing / 重新赋值从来没拆过载体。载体自己的计数由
+     * vb6_Collection_AddRef/Release 一对维护, 到 0 时元素逐枚出厂。 */
+    {
+        extern int32_t vb6_uc_isColl(const void* p);
+        extern int32_t vb6_Collection_Release(void* p);
+        if (vb6_uc_isColl(*objPtr)) {
+            vb6_Collection_Release(*objPtr);
+            *objPtr = NULL;
+            return;
+        }
+    }
+
     /* Fix 191: 只有真是 COM 对象才谈得上 Release。VB6 里 `Set .OriginalIOleIPAO = Me`
      * 存的是接口的 COM 身份, 而生成码把类实例 `me` 直接塞进了接口字段, 于是
      * `Set ... = Nothing` 走到这里就是对 `me` 解引用 lpVtbl (VBFlexGridDemo 左键
@@ -1501,6 +1515,12 @@ void vb6_ReleaseObject(void** objPtr) {
  * 前向声明在 vb6rtl_variant.h (避免头文件反向依赖 vb6com.h)。 */
 void vb6_ComAddRefDispatch(void* p) {
     if (!p) return;
+    /* 与 vb6_ReleaseObject 那条 Collection 分支成对 (同一个判据, 同一枚出口)。 */
+    {
+        extern int32_t vb6_uc_isColl(const void* p2);
+        extern void vb6_Collection_AddRef(void* p2);
+        if (vb6_uc_isColl(p)) { vb6_Collection_AddRef(p); return; }
+    }
     if (!vb6_ComIsDispatchable(p)) return;
     IUnknown* pUnk = (IUnknown*)p;
     pUnk->lpVtbl->AddRef(pUnk);

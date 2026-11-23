@@ -102,6 +102,19 @@ void* vb6_ComPackObject(void* obj) {
         if (vb6_Host_IsHostObject(obj)) {
             pv->pdispVal = (IDispatch*)vb6_UC_WrapHostObject(obj);
             pv->vt = VT_DISPATCH;
+            /* 第一百二十九刀: 包进来若是一枚内建 Collection, 包装器替它持一份载体引用
+               —— 否则 `Set inner = Nothing` 会在宿主那边还拿着包装器时就把载体拆了
+               (集合套集合 = Charts 的 ClsResizer 那条路)。只在包装器 free 时放回,
+               与 vb6_ComDropPackedOne 的时点无关。 */
+            {
+                extern int32_t vb6_uc_isColl(const void* p);
+                extern void vb6_Collection_AddRef(void* p);
+                extern void vb6_UC_WrapHostObjectOwns(void* wrap);
+                if (vb6_uc_isColl(obj)) {
+                    vb6_Collection_AddRef(obj);
+                    vb6_UC_WrapHostObjectOwns((void*)pv->pdispVal);
+                }
+            }
         } else if (vb6_ComIsDispatchable(obj)) {
             ((IDispatch*)obj)->lpVtbl->AddRef((IDispatch*)obj);
         } else {

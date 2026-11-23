@@ -533,9 +533,18 @@ typedef struct Vb6HostWrap {
     IDispatch disp;
     ULONG refs;
     void* target;
+    int ownsTarget;   /* 第一百二十九刀: 包装器替 target (内建 Collection) 持一份载体引用 */
     wchar_t names[24][64];
     int nameCount;
 } Vb6HostWrap;
+
+/* 账 #305 §11.111 (第一百二十九刀): 只给「包的过程中收了一份引用」的那一枚打标。
+   宿主对象一般照旧借用不计数 (czUI 实测: 给宿主包装器算引用会 0xC000041D),
+   所以标记只由 vb6_ComPackObject 的 Collection 那一档打上。 */
+void vb6_UC_WrapHostObjectOwns(void* wrap) {
+    Vb6HostWrap* w = (Vb6HostWrap*)wrap;
+    if (w) w->ownsTarget = 1;
+}
 
 static HRESULT STDMETHODCALLTYPE HW_QI(IDispatch* self, REFIID riid, void** out) {
     if (!out) return E_POINTER;
@@ -566,7 +575,13 @@ static void vb6_UC_DropWrapPair(void* wrap) {
 static ULONG STDMETHODCALLTYPE HW_Release(IDispatch* self) {
     Vb6HostWrap* w = (Vb6HostWrap*)self;
     ULONG r = --w->refs;
-    if (r == 0) { vb6_UC_DropWrapPair(w); free(w); }
+    if (r == 0) {
+        if (w->ownsTarget && w->target) {
+            extern int32_t vb6_Collection_Release(void* p);
+            vb6_Collection_Release(w->target);   /* 与 vb6_ComPackObject 那一份 AddRef 配对 */
+        }
+        vb6_UC_DropWrapPair(w); free(w);
+    }
     return r;
 }
 static HRESULT STDMETHODCALLTYPE HW_GetTypeInfoCount(IDispatch* self, UINT* n) {
