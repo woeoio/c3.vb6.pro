@@ -373,6 +373,20 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                     knownTypedComVars_[lower] = comSym;
                     // 从后期绑定集合中移除 (优先前期绑定)
                     knownObjectVars_.erase(lower);
+                    // 账 #305 §11.113 (第一百三十一刀): 腿④ 宿主类局部档第二格 ——
+                    // `Dim dc As Dictionary`。它的 C 侧槽是**类型化接口**
+                    // (vb6_ComIface_IDictionary*), 不经过上面 void* 那条臂, 所以第一百三十刀
+                    // 只收到 Collection (实测 .temp/k130 DictLocal 出口一句不发, D1 增量 0)。
+                    // 出口那一发与泛对象档同一形状 (vb6_ReleaseObject((void**)&x)):
+                    // Set 那一站退旧值用的就是它, 实参类型对得上; 真是 IDispatch 才 Release
+                    // (vb6_ComIsDispatchable 那一问把关)。
+                    // 只收内建 Dictionary 一个名字: 外部 ComClass / ComInterface 一大片,
+                    // 每一格的引用归属各有各的主人 (GetObject / 属性取 / 参数借), 在册另刀。
+                    if (var.asType && var.asType->kind == ASTNodeKind::SimpleTypeRef
+                        && Symbol::toLower(static_cast<SimpleTypeRef&>(*var.asType).name) == "dictionary"
+                        && !var.isStatic && !inStaticProc_ && !var.isWithEvents) {
+                        trackLateObjSlotForRelease(cIdent(var.name));
+                    }
                     }
                 }
             }
