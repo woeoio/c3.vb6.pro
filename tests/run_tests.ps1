@@ -12286,6 +12286,18 @@ $b138Needles = @(
 "B138-Z-terms=5", "B138-Z-count=2", "B138-DONE")
 Test-Vbp 'b138_handler_landing' "$Tests\b138_handler_landing\B138Res.vbp" $b138Needles
 Test-Vbp 'b138_handler_landing_x86' "$Tests\b138_handler_landing\B138Res.vbp" $b138Needles -Arch "x86"
+
+# 账 #305 §11.119 八.3（第一百四十刀）：出错语句是块内**最后一条** + handler Resume Next。
+# 修前落点落到块外，块尾那句放手被跨过（A2/B2 = 0）；补点必须落在放手**之前**，
+# 否则 Resume Next 跳过去时把清理一起跳过。C 路对照（末句之后还有一句）不动；
+# D 路反面证人：借来的那一枚块尾没有清理可跳，handler 里仍能读 gColl.Count。
+$b139Needles = @(
+"B139-A2-terms=1", "B139-B2-terms=2",
+"B139-C1-after-error", "B139-C2-terms=3",
+"B139-D2-count=2",
+"B139-Z-terms=3", "B139-Z-count=2", "B139-DONE")
+Test-Vbp 'b139_blocktail_resume' "$Tests\b139_blocktail_resume\B139Res.vbp" $b139Needles
+Test-Vbp 'b139_blocktail_resume_x86' "$Tests\b139_blocktail_resume\B139Res.vbp" $b139Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
