@@ -1094,11 +1094,26 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
     // vb6_ReleaseObject: 裸工程实例在 Fix 191 那道判据里只清槽)。
     // 认法: tempType 是 `vb6_cls_X*` 且初始化器里含 `vb6_cls_X_New()` —— 同一类名两头对上。
     std::string withClassCarrier135;
+    bool withPropGet143 = false;  // 第一百四十三刀 §11.124: 载体来自 `With <对象>.<Property Get>`
     if (tempType.rfind("vb6_cls_", 0) == 0 && tempType.size() > 9 && tempType.back() == '*') {
         const std::string clsBody135 = tempType.substr(8, tempType.size() - 9);
-        if (!clsBody135.empty() &&
-            lastExpr_.find("vb6_cls_" + clsBody135 + "_New()") != std::string::npos) {
-            withClassCarrier135 = clsBody135;
+        if (!clsBody135.empty()) {
+            // 第一百四十三刀 §11.124: `With <对象>.<Property Get>` —— 属性取回来的是一枚
+            // **加了引用**的实例 (VB6 里 `Set x = obj.Prop` 也是这个口径), With 临时量就是
+            // 它的主人。认法还是看发码: `(vb6_cls_X*)vb6_<...>_prop_get_<...>(...)`。
+            // 对象**字段**那一形发的是裸取值 (`gBox->Bare`), 不带 cast 也没有 `_prop_get_`,
+            // 天然落在门外 —— 拿别人的字段去退就是错退 (夹具 B 路是反面证人)。
+            const bool isNew135 =
+                lastExpr_.find("vb6_cls_" + clsBody135 + "_New()") != std::string::npos;
+            const bool isPropGet143 =
+                lastExpr_.find("_prop_get_") != std::string::npos &&
+                lastExpr_.find('(') != std::string::npos &&
+                (lastExpr_.rfind("(vb6_cls_" + clsBody135 + "*)", 0) == 0 ||
+                 lastExpr_.rfind("vb6_", 0) == 0);
+            if (isNew135 || isPropGet143) {
+                withClassCarrier135 = clsBody135;
+                withPropGet143 = isPropGet143;
+            }
         }
     }
     if (!withClassCarrier135.empty() && !withObjectInfoStack_.empty()) {
@@ -1189,9 +1204,16 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
         c_.emitLine("vb6_ReleaseObject((void**)&" + tempVar +
                     ");  /* 账 #305 §11.118: 工程函数交回的那一枚载体, 块尾放手 */");
     } else if (!withClassCarrier135.empty()) {
-        c_.emitLine("if (" + tempVar + ") vb6_cls_" + cIdent(withClassCarrier135) + "_Release(" +
-                    tempVar +
-                    ");  /* 账 #305 §11.117: With New <工程类> 的载体, 块尾放手 */");
+        if (withPropGet143) {
+            // 第一百四十三刀 §11.124: 属性取回来那枚 —— 注释另起一档, 已登记行的字节不动。
+            c_.emitLine("if (" + tempVar + ") vb6_cls_" + cIdent(withClassCarrier135) + "_Release(" +
+                        tempVar +
+                        ");  /* 账 #305 §11.124: With <对象>.<Property Get> 交回的载体, 块尾放手 */");
+        } else {
+            c_.emitLine("if (" + tempVar + ") vb6_cls_" + cIdent(withClassCarrier135) + "_Release(" +
+                        tempVar +
+                        ");  /* 账 #305 §11.117: With New <工程类> 的载体, 块尾放手 */");
+        }
     }
     // §11.119: 块尾这一发之后把名册槽位清 0 —— 否则这个栈槽被后续块复用时, 落点会拿一个
     // 悬空地址去 Release (双向都没了)。
