@@ -7634,3 +7634,77 @@ vb6_ComSetRef(vb6_ComGetObjectProp(o, L"Child"), L"Held", it);  /* COM SetRef */
 Terminate。同族还有嵌套**读**链（`Set h = o.Child.Held` 里中间那一枚）。要么在发码侧把
 接收者落成临时量、派发后 `Release`，要么在 RTL 侧给一个「交回即持、用完即放」的入口。
 探针 `p1`（2 vs 3）就是这一刀的判据。
+
+
+## §11.131（第一百五十刀）链写接收者那一枚临时引用
+
+### 一、读数
+
+尺子是 Terminate 计数（探针 `.temp/k150/p2`，不进语料）：只取一枚子对象又放回 → **2**（干净）；
+同一形状再走一发链写 → **3**；嵌套**读**链（`v = q.Child.Tag`）→ **4**；两样都有 → **5**。
+每多一层「取回来的对象式中间量」，就多留一枚。
+
+改前发码（`Set p.Child.Held = it`，一条语句、无临时量）：
+
+```c
+vb6_ComSetRef(vb6_ComGetObjectProp(p, L"Child"), L"Held", it);
+```
+
+`vb6_ComGetObjectProp` 交回的那一枚按 §11.126 归**调用方**（`vb6_ComVarFree` 只 free 结构体、
+不碰内容），而这一站只拿它递一次 `IDispatch::Invoke`，谁也不放 ⇒ 每发链写漏一枚，
+中间那枚对象永不 `Class_Terminate`。
+
+### 二、改法
+
+`cgen_setlet_set_prop.inc` 的 COM `SetRef` 支路：接收者表达式若以 `vb6_ComGetObjectProp(` 或
+`vb6_ComCallObject(` 开头（即自有链读/晚绑定调用交回的一枚），先落成临时量，派发完即放：
+
+```c
+void* _rcv0 = vb6_ComGetObjectProp(p, L"Child");
+vb6_ComSetRef(_rcv0, L"Held", it);
+vb6_ReleaseObject((void**)&_rcv0);
+```
+
+三个出口（视图直槽、视图直槽 R4、通用 `ComSetRef`）都覆盖。临时量用**独立序号**
+`setRefRecvSeq_`（`cgen_state.inc`，`cgen_base_generate_prologue.inc` 里归零），不占
+`tempCounter_` —— 否则存量 `_vs`/`_e`/`_ag` 全会重新编号、形状钉全红（§11.103 同一条理由）。
+放引用走 `vb6_ReleaseObject(void**)`：它认 Collection 与 dispatchable 两支，对这两类中间量都安全。
+
+### 三、读数（夹具 `tests/b150_chain_recv_ref`，x64 与 x86 六枚逐条相同）
+
+| 行 | A2 held-tag | C1 item-terms | Z box-terms | Z item-made | Z item-terms |
+|---|---|---|---|---|---|
+| 改前 | 9 | 0 | **1** | 1 | 0 |
+| 改后 | 9 | 0 | **2** | 1 | 0 |
+
+- **Z box-terms 1 → 2 是这一刀的判据**：根与子对象都 `Class_Terminate`（改前子对象被那一枚夹住）。
+- A2：写进去的确实是 `it` 那一枚（改 `h.Tag` 后 `it.Tag` 跟着变）。
+- Z item-terms 停在 0：这是**写口打包**那一枚（`§11.110` 在册的「`Set` 值侧只 free 结构体不清
+  内容」），与接收者临时量不是同一枚，本刀不动它。
+- 夹具刻意**写完之后**才取子对象来验收（单层读），避开读链那一格 —— 见下「在册」。
+
+### 四、发码面
+
+- 全清单 **812 行**：机器可复现的 806 行一行未变，另 6 行是 vendor typelib 那一路的既有
+  本机≠CI 差；新夹具两行 + b149 两行随本刀改码更新 ⇒ 810 → **812**；
+- **全语料复算**：除上述 6 行与 b149 那两行外零位移（本刀改的是语句发码，在 `--emit-c`
+  覆盖面内，所以这里是「量出来的零」，不是「覆盖不到」）。
+
+### 五、闸与连带
+
+- 九门 **9/9 rc=0**（`inputs=812 [.vbp=304 .bas=508]`，emitted=1574，exe sha=`118d259052e5`）；
+- 既有桥夹具零回归：b144 九枚、b146 八枚、b147 十二枚、b148 十枚、b149 八枚读数逐条不变
+  （x64 与 x86）；b149 的 `Z-box-terms=1` 现由**读链**那一格解释（改码后它仍走嵌套读），
+  注释已就地改口径；
+- CI（github `dev`）run `45285250271` = **22/22 success**。
+
+### 六、在册（本刀只对平「只发链写」这一形状）
+
+分账探针 `.temp/k150/p2` / `p4` 把剩下的两条量出来，都留给 §11.132：
+
+1. **嵌套读链**（`Set h = o.Child.Held`、`v = q.Child.Tag`）：中间那一枚同样是「交回即持」，
+   读侧没有对应的临时量，每多一层漏一枚（p2：`C=4`、`D=5`）。
+2. **链写时同一枚子对象另握在别的变量里**（`Set c = q.Child` … `Set q.Child.Held = it`）：
+   这一形状仍多留一枚（p4：`V2-box` 比 `V1-box` 多 1）。把释放顺序对调（先放 `c` 再链写）
+   或写完之后才取子对象，都干净 —— 说明多出来的那一枚是「两处各持一次」的记账，不是悬垂
+   （`Set h = c.Held` 在链写之后照旧读得到，`tag=9`）。
