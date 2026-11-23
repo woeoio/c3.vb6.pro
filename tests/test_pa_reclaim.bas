@@ -79,6 +79,8 @@ Sub Main()
     Dim o0 As Long, o1 As Long
     Dim q0 As Long, q1 As Long
     Dim l0 As Long, l1 As Long
+    Dim lM As Long
+    Dim dummyPA As Long
     Dim i As Long
     Dim acc As Long
     Dim loopBytes As Long
@@ -121,6 +123,15 @@ Sub Main()
     For i = 1 To 10000
         acc = acc + CountPA(1, 2, 3)
     Next i
+    lM = ReadPF(pmc)
+    ' 稳态窗口: 第一窗里会带一次性的惰性提交 (代码布局变了就多几页 —— 实测同一份源,
+    ' 第一百二十九刀那一版 x86 CI 读 77824 = 19 页整, 而本机 9 次、并发 6 路全是 0;
+    ' 闸作用域内我们的 RTL 一行都没执行, 也没有对象路径)。所以「一枚不漏」问**第二窗**:
+    ' 若数组真没人收, 每一窗都会带上 10000 × 数组长度 (第五十六刀修前实测 158 B/次
+    ' ⇒ 1.58 MB), 两窗一样非 0 —— 判据反而更强。
+    For i = 1 To 10000
+        dummyPA = CountPA(1, 2, 3)
+    Next i
     l1 = ReadPF(pmc)
 
     If s0 < 0 Or p0 < 0 Or o0 < 0 Or q0 < 0 Or l0 < 0 Then apiBad = 1
@@ -138,7 +149,8 @@ Sub Main()
     Debug.Print "B166-wP8=" & (p1 - p0)
     Debug.Print "B166-wA1=" & (o1 - o0)
     Debug.Print "B166-wP1=" & (q1 - q0)
-    Debug.Print "B166-long-window=" & (l1 - l0)
+    Debug.Print "B166-long-window1=" & (lM - l0)
+    Debug.Print "B166-long-window=" & (l1 - lM)
     Debug.Print "B166-loop-bytes=" & loopBytes
     Debug.Print "B166-loop-ok=" & okLoop
     Debug.Print "B166-acc=" & acc
