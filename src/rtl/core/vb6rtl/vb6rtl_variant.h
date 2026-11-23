@@ -304,6 +304,20 @@ static inline vb6_VARIANT vb6_VariantObjectBorrowed(void* val) {
     return v;
 }
 
+/* 账 #305 §11.126 (第一百四十五刀): **所有权转移**的对象档装箱 —— 指针里那一枚引用归
+ * 收到这一枚 VARIANT 的那一头，构造侧不再 AddRef。三兄弟只差内核:
+ *   vb6_VariantObject          取一枚 (槽自己持有一份, 清槽时退)
+ *   vb6_VariantObjectBorrowed  不取 (只读谓词实参, 谁也不必退)
+ *   vb6_VariantObjectTransfer  接管 (调用方已把一枚交出来: FromInstance / 函数返回槽)
+ * 为什么单开一枚而不复用 Borrowed: 那两个是**两件不同的事**。借来的一枚随时可能被原主
+ * 退掉, 转移来的一枚只有收到它的人退 —— 共用一枚出口, 下一次有人给 Borrowed 加口径
+ * (比如改成"仅在…")就必然连带改坏转移的语义。 */
+static inline vb6_VARIANT vb6_VariantObjectTransfer(void* val) {
+    vb6_VARIANT v; memset(&v, 0, sizeof(v));
+    v.vt = vb6_vtDispatch; v.pdispVal = val;
+    return v;
+}
+
 // Fix 024: Polymorphic Variant constructor via C11 _Generic.
 //   用法: vb6_VARIANT v = vb6_VariantFromValue(any_C_expr);
 //   按实参表达式的C类型(编译期推断)选择合适的Variant构造函数:

@@ -181,6 +181,17 @@ static ULONG STDMETHODCALLTYPE ComObj_Release(vb6_ComObject* self) {
                     vb6_err_resume_next = 0;
                     if (self->desc && self->desc->instanceClaimRelease && self->vb6Instance) {
                         self->desc->instanceClaimRelease(self->vb6Instance);
+                    } else if (self->desc && self->desc->classRelease && self->vb6Instance) {
+                        /* 账 #305 §11.126 (第一百四十五刀): 拥有型包装器拆解也要问**实例自己的**引用计数。
+                         * 改前这一档直接 `destroyFunc(instance)` —— 对 `New` 出来的那一枚没错, 但
+                         * Property Get 交回**共用实例**时 (实测 `Property Get SameObj() As B144Item:
+                         * Set SameObj = gKeep`) 也照拆: gKeep 那一枚引用还在 (`__refcount=2`), 包装器
+                         * 这一枚走完就 Class_Terminate ⇒ 调用方手里留一根悬空指针。
+                         * 口径与下面借用型那一档一字相同 (先摘 `__comObj` 回填再退), 差别只在于
+                         * 拥有型带走的是 New/FromInstance 移交的那枚“底座引用”。 */
+                        void* inst145 = self->vb6Instance;
+                        *(void**)inst145 = NULL;
+                        self->desc->classRelease(inst145);
                     } else if (self->desc && self->desc->destroyFunc && self->vb6Instance) {
                         self->desc->destroyFunc(self->vb6Instance);
                     }
@@ -401,6 +412,12 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
             /* 账 #305 §B144: 同上 —— 出站也改问唯一出口(Decimal 那一档不再错位的
              * 同时，返回的串/对象现在带权交出去，对端 VariantClear 不会释放我们的引用)。 */
             vb6_VariantPackCopyInto(&tmpRet, pVarResult);
+        /* 账 #305 §11.126 (第一百四十五刀): 上面那一句是**带权副本** (串深拷贝、对象 AddRef),
+         * 副本归对端了，tmpRet 自己那一枚必须在本趟收尾时退掉 —— 否则每一发类成员读数都在
+         * 服务端漏一枚 (实测 C3_COM_RC_TRACE: 一次 `o.Fresh` 读数交出 cnt=3, 调用方只该拿 1)。
+         * 放在这里而不放到函数尾: tmpRet 只活在上面那个 `if` 的作用域里；错误那一支
+         * (longjmp 回来) tmpRet 保持 memset 后的空值, 清它是空跑。 */
+        vb6_VariantClear((vb6_VARIANT*)&tmpRet);
     }
 
     /* 账 #305 §B162 (第五十刀): 数组那一臂是个例外 —— 递进来的真 SAFEARRAY 被换成了**我们自己**

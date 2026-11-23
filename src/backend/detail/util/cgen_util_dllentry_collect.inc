@@ -514,7 +514,11 @@
                 entry.indent();
                 if (!retClsInst.empty()) {
                     entry.emitLine("vb6_cls_" + retClsInst + "* _p = " + procName + "(" + callArgs + ");");
-                    entry.emitLine("vb6_VARIANT _r = vb6_VariantObject(vb6_ComObject_FromInstance("
+                    /* 账 #305 §11.126 (第一百四十五刀): FromInstance 交出来的那一枚引用**转移**给
+                     * VARIANT, 不能再叠一枚 AddRef。改前这一句是 vb6_VariantObject(...) —— 它按
+                     * Fix 024 必 AddRef, 于是每一次类成员读数在服务端就多一枚 (实测 C3_COM_RC_TRACE:
+                     * FROM-INST cnt=1 → ADDREF cnt=2 → 客户端那一枚 PackCopyInto 再 cnt=3)。 */
+                    entry.emitLine("vb6_VARIANT _r = vb6_VariantObjectTransfer(vb6_ComObject_FromInstance("
                                    "vb6_FindCoClassDesc(\"" + retClsInst + "\"), (void*)_p));");
                 } else {
                     entry.emitLine(retType + " _r = " + procName + "(" + callArgs + ");");

@@ -1089,6 +1089,26 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
         withObjectInfoStack_.back().ownsCarrier = true;
     }
 
+    // 第一百四十五刀 §11.126: `With <晚绑定对象>.<属性>` —— 初始化器发的是
+    //   void* _vb6_with_N = (void*)vb6_ComGetObjectProp(o, L"Prop")
+    // 所有权口径由 RTL 钉住: `vb6_ComGetObjectProp` 取走 `pv->pdispVal` 之后只
+    // `vb6_ComVarFree(pv)` —— 那个函数明写「仅释放结构体, 对象引用已转移给调用方」。
+    // 也就是说 Invoke 给属性返回值加的那一枚引用**归调用方**, With 临时量就是它的主人;
+    // 修前块尾 / Exit / GoTo / 落点四口一句都不发 (引用活到进程结束)。
+    //
+    // 第一百四十四刀先把账量清楚了 (`tests/b144_late_with_prop`, 探针 `.temp/k144`):
+    // 那条读数在 COM 桥里多交两枚 (适配器 `vb6_VariantObject` 叠一层 + 服务端 `tmpRet`
+    // 打包后不清), 所以单接这一口读数不变。本刀把桥对平 (§11.126 一/二), 一次读数
+    // 恰好交出 1 枚 —— 这一口才有可判红的读数 (夹具 A2/C1/D1/E1 = 1/2/3/4)。
+    // 借用型 (`With gColl` / 字段 / 裸变量) 的初始化器不是这个前缀, 天然落在门外。
+    bool withComProp145 = false;
+    if (tempType == "void*" && lastExpr_.rfind("vb6_ComGetObjectProp(", 0) == 0) {
+        withComProp145 = true;
+    }
+    if (withComProp145 && !withObjectInfoStack_.empty()) {
+        withObjectInfoStack_.back().ownsCarrier = true;
+    }
+
     // 第一百三十五刀 §11.117: `With New <工程类>` —— 初始化器发的是 `vb6_cls_X_New()`,
     // 所有权同样交到 With 临时量手上; 它用的是类自己的 `vb6_cls_X_Release` 那一档 (不是
     // vb6_ReleaseObject: 裸工程实例在 Fix 191 那道判据里只清槽)。
@@ -1157,7 +1177,8 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
     // 借用型不登记: 槽里留 0, 落点放手时天然跳过。
     int ownerSlot136 = -1;
     const bool anyOwn142 =
-        withOwnedCarrier133 || withFnRetCarrier136 || !withClassCarrier135.empty();
+        withOwnedCarrier133 || withFnRetCarrier136 || withComProp145
+        || !withClassCarrier135.empty();
     if (anyOwn142 && hoistOwnActive_ && hoistOwnNext_ < hoistOwnN_) {
         ownerSlot136 = hoistOwnNext_++;
         c_.emitLine("_vb6_own[" + std::to_string(ownerSlot136) + "] = (void**)&" + tempVar +
@@ -1186,7 +1207,8 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
     // 于是 `Resume Next` 落到这一号 —— 先跑完放手再落到块外那一句。
     // 只有真的发过放手的那几档才需要补 (借用型无清理可跳)。
     if (inProtectedBlock_ &&
-        (withOwnedCarrier133 || withFnRetCarrier136 || !withClassCarrier135.empty())) {
+        (withOwnedCarrier133 || withFnRetCarrier136 || withComProp145
+         || !withClassCarrier135.empty())) {
         int ptTail140 = resumePointCounter_++;
         c_.emitLine("vb6_err_resume_point = " + std::to_string(ptTail140) + ";");
         c_.emitLine("vb6_err_resume_next_point = " + std::to_string(ptTail140 + 1) + ";");
@@ -1196,7 +1218,11 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
     }
     // 块尾放手 (VB6 的 With 临时量活到 End With)。`vb6_ReleaseObject` 自己把槽置空,
     // 所以体内若又把它交给了别人 (Set x = <外层同名槽>) 也不会二次退。
-    if (withOwnedCarrier133) {
+    if (withComProp145) {
+        // 第一百四十五刀 §11.126: 与 §11.115 / §11.118 同一句放手, 注释另起一档。
+        c_.emitLine("vb6_ReleaseObject((void**)&" + tempVar +
+                    ");  /* 账 #305 §11.126: With <晚绑定对象>.<属性> 交回的载体, 块尾放手 */");
+    } else if (withOwnedCarrier133) {
         c_.emitLine("vb6_ReleaseObject((void**)&" + tempVar +
                     ");  /* 账 #305 §11.115: With 自己造的那一枚载体, 块尾放手 */");
     } else if (withFnRetCarrier136) {
