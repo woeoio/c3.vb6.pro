@@ -12182,6 +12182,16 @@ if ($Category -in @("all", "run", "vbp")) {
         "B129-C-inner=1", "B129-DONE")
     Test-Vbp 'b129_coll_carrier_lifetime' "$Tests\b129_coll_lifetime\B129Coll.vbp" $b129Needles
     Test-Vbp 'b129_coll_carrier_lifetime_x86' "$Tests\b129_coll_lifetime\B129Coll.vbp" $b129Needles -Arch "x86"
+
+# 账 #305 §11.112（第一百三十刀）：腿④ 宿主类局部档 —— `Dim c As New Collection` 出作用域那一句。
+# 反面证人两条：从字段借来的局部（出口只退自己那一份）、Static 槽（跨调用活着，不许放手）。
+$b130Needles = @(
+"B130-E1-count=1", "B130-E2-terms=1",
+"B130-A1-count=1", "B130-A2-field=1",
+"B130-S1-count=1", "B130-S2-terms=1",
+"B130-DONE")
+Test-Vbp 'b130_hostlocal_scope' "$Tests\b130_hostlocal_scope\B130Scope.vbp" $b130Needles
+Test-Vbp 'b130_hostlocal_scope_x86' "$Tests\b130_hostlocal_scope\B130Scope.vbp" $b130Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
