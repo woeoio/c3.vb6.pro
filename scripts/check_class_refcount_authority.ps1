@@ -232,12 +232,14 @@ if ($xferIvref -ne 1) {
     $fail += ("interface-view exclusion sites = " + $xferIvref + " (want exactly 1)")
 }
 
-# ⑮ 第一百三十三刀 (第一百五十二刀加两条载体臂, 第一百二十七刀加泛对象臂): Static 那一档
-#    「出口不许放手」这条闸, 六条腿都得有 (两条工程类腿 + 视图那条腿 + 载体档两条臂 + 泛对象档)。
+# ⑮ 第一百三十三刀 (第一百五十二刀加两条载体臂, 第一百二十七刀加泛对象臂, 第一百三十一刀加
+#    宿主类局部第二条腿 = 类型化接口槽 Dictionary): Static 那一档
+#    「出口不许放手」这条闸, 七条腿都得有 (两条工程类腿 + 视图那条腿 + 载体档两条臂 + 泛对象档
+#    + 宿主类局部档两条: Collection 与泛对象档共用一句, Dictionary 自己一句)。
 #    登记站点与闸成对: 少一半就是这道闸被拆了。
 $gateN = CountOf '!var.isStatic && !inStaticProc_'
-if ($gateN -ne 6) {
-    $fail += ("static-gate sites = " + $gateN + " (want exactly 6: two project-class legs + the interface-view leg + 载体档两条臂 + 泛对象档 = 第一百二十七刀)")
+if ($gateN -ne 7) {
+    $fail += ("static-gate sites = " + $gateN + " (want exactly 7: two project-class legs + the interface-view leg + 载体档两条臂 + 泛对象档 + 第一百三十一刀 Dictionary 那条腿)")
 }
 $gateFiles = @(FilesOf '!var.isStatic && !inStaticProc_')
 if ($gateFiles.Count -ne 1 -or $gateFiles[0] -ne 'cgen_localdecl.cpp') {
