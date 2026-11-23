@@ -12383,6 +12383,19 @@ $b148Needles = @(
 "B148-Z-box-terms=0", "B148-Z-item-made=2", "B148-Z-item-terms=2", "B148-DONE")
 Test-Vbp 'b148_selfcls_return' "$Tests\b148_selfcls_return\B148Res.vbp" $b148Needles
 Test-Vbp 'b148_selfcls_return_x86' "$Tests\b148_selfcls_return\B148Res.vbp" $b148Needles -Arch "x86"
+
+# 账 #305 §11.130（第一百四十九刀）：`Set <晚绑定 o>.<Child>.<Prop> = <对象>` 的两槽串位。
+# 改前发码 `prop_set_<P>(o, vb6_ComGetObjectProp(o, L"Child"))` —— 接收者写成裸 o、值写成 o.Child；
+# 首读就 438（量具实测）。改后 `vb6_ComSetRef(vb6_ComGetObjectProp(o, L"Child"), L"Held", it)`。
+#   A1: 根对象自己的 Held 仍是空（没写到根上）
+#   A2/A3: 子对象上写的确实是 it 那一枚（改 h.Tag 后 it.Tag 跟着变）
+#   Z:  box 停在 1 = 在册的接收者临时引用（§11.131, 另一把尺）；item 跟着被它夹住
+$b149Needles = @(
+"B149-A1-root-held=empty", "B149-A2-child-held=B149Item", "B149-A3-tag=9",
+"B149-C1-item-terms=0", "B149-Z-box-terms=1", "B149-Z-item-made=1",
+"B149-Z-item-terms=0", "B149-DONE")
+Test-Vbp 'b149_chain_write' "$Tests\b149_chain_write\B149Res.vbp" $b149Needles
+Test-Vbp 'b149_chain_write_x86' "$Tests\b149_chain_write\B149Res.vbp" $b149Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

@@ -426,15 +426,25 @@
             // 后两者在 knownObjectVars_ 里也有登记, 但它们有静态类面 (Fix 160-E 那条
             // `vb6_UC_InstanceOf` 直发) 必须保留。
             bool _lateBoundRecv = false;
-            if (_objClass.empty() && _ma.object
-                && _ma.object->kind == ASTNodeKind::IdentifierExpr) {
-                const std::string _oidLB = Symbol::toLower(
-                    static_cast<IdentifierExpr&>(*_ma.object).name);
-                const bool _isCtrlLB = knownFormControls_.count(_oidLB) > 0
-                    || knownUserControlCtrlVars_.count(_oidLB) > 0;
-                _lateBoundRecv = !_isCtrlLB
-                    && (procObjectFormals_.count(_oidLB) || knownVariantVars_.count(_oidLB)
-                        || knownObjectVars_.count(_oidLB));
+            if (_objClass.empty() && _ma.object) {
+                /* 账 #305 §11.130 (第一百四十九刀): 接收者不限于**裸标识符** ——
+                 * `Set <晚绑定 o>.<Child>.<Prop> = it` 的接收者是一条成员链，根才是晚绑定的
+                 * 那枚 `o`。原先只认 IdentifierExpr ⇒ 链式接收者漏网 ⇒ 走下面早绑定直呼，
+                 * 把运行期从 `o.Child` 取回的 IDispatch* 当 `vb6_cls_<Cls>*` 递进去。
+                 * 判据改成：沿 MemberAccess 一路走到根，问同一张晚绑定表。 */
+                const ASTNode* _recvRoot = _ma.object.get();
+                while (_recvRoot && _recvRoot->kind == ASTNodeKind::MemberAccessExpr) {
+                    _recvRoot = static_cast<const MemberAccessExpr&>(*_recvRoot).object.get();
+                }
+                if (_recvRoot && _recvRoot->kind == ASTNodeKind::IdentifierExpr) {
+                    const std::string _oidLB = Symbol::toLower(
+                        static_cast<const IdentifierExpr&>(*_recvRoot).name);
+                    const bool _isCtrlLB = knownFormControls_.count(_oidLB) > 0
+                        || knownUserControlCtrlVars_.count(_oidLB) > 0;
+                    _lateBoundRecv = !_isCtrlLB
+                        && (procObjectFormals_.count(_oidLB) || knownVariantVars_.count(_oidLB)
+                            || knownObjectVars_.count(_oidLB));
+                }
             }
             // Fix 084g-2: 外部注入的跨类属性符号 — 对象类型无法从符号表推断
             // (cgen阶段访问不到过程作用域局部变量) 时, 由外部符号提供 sourceModule.
@@ -455,6 +465,14 @@
                 std::string _fn = cProcName(_verb + _ma.memberName, _psSym->access, _src);
                 emitExpr(*_ma.object);
                 std::string _objE = std::move(lastExpr_);
+                /* 账 #305 §11.130 (第一百四十九刀): 接收者自身是**晚绑定成员读** (`o.Child`) 时,
+                 * emitExpr 只交出基础对象并把成员名挂在 comMemberName_ 上，不消费就漏进下一次
+                 * 求值 —— 实测值槽因此拿到 `vb6_ComGetObjectProp(o, L"Child")`，而接收者只剩裸
+                 * `o`：两槽双双串位（`Set o.Child.Held = it` → `prop_set_Held(o, GetObjectProp(o,
+                 * "Child"))`）。这里就地把它交成完整的对象表达式。 */
+                if (isComMarker_) {
+                    _objE = resolveComValue("Object");
+                }
                 // Fix 160-E: 与 cgen_assign_com_prop.inc:249-266 (Fix 152c) 同一条规则,
                 // 但 Set/Let 属性写分支此前**没有**套用。放在窗体上的 UserControl 实例
                 // (VBFlexGrid1) 裸 emitExpr 只发出控件名, C 里无此声明 → C2065:

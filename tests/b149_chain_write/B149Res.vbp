@@ -1,0 +1,7 @@
+Type=Exe
+Name="B149App"
+Module=B149Main; B149Main.bas
+Class=B149Box; B149Box.cls
+Class=B149Item; B149Item.cls
+Startup="Sub Main"
+ExeName32="B149.exe"
