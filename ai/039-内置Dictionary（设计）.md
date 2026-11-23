@@ -7167,3 +7167,77 @@ With 块，所以这一刀是纯补口子，不改任何人现有的字节。
 - `With <晚绑定对象>.<属性>`（`void*` 那一档，COM 派发取回）：走的是 `vb6_ComGet` 一类，
   所有权口径要另量，本刀不碰；
 - 属性返回**工程函数那一形**已经在 §11.118 里（`vb6_<Mod>_<Name>()`）。
+## §11.125 `With <晚绑定对象>.<属性>`：先把引用账量出来（第一百四十四刀 · 设计刀）
+
+### 一、形状与契约
+
+```c
+void* _vb6_with_N = (void*)vb6_ComGetObjectProp(<接收者>, L"<属性>")  /* With object ref */;
+```
+
+接收者两档都量过：`Dim o As Object`（裸 `o`）与 `Dim v As Variant`（`vb6_VariantToObject(&v)`）；
+属性声明 `As <工程类>` 与 `As Object` 同形（`tests/b144_late_with_prop`，探针 `.temp/k144/p`）。
+
+RTL 那头的契约是写死的：`vb6_ComGetObjectProp` 取走 `pv->pdispVal` 之后只调
+`vb6_ComVarFree(pv)`，而那个函数明写「仅释放结构体，对象引用已转移给调用方」
+（`src/rtl/core/vb6com/vb6com_wrap.c:145`、`vb6com_pack.c` 的 `vb6_ComVarFree`）。
+VB6 语义一侧，With 临时量活到 `End With` ⇒ 这一枚引用该由块尾（及 Exit / 落点 / `GoTo` 四口）退。
+
+### 二、读数（夹具 `tests/b144_late_with_prop/`，x64 与 x86 逐字相同）
+
+| 针 | 含义 | 今天 |
+|---|---|---|
+| `B144-A2-terms` | 单发，块尾那一口 | 0 |
+| `B144-B2-tag` / `B144-B2-terms` | 反面证人：交回的是模块级**共用**实例，退自己那一枚之后值仍读得出 | 8 / 0 |
+| `B144-C1-terms` | 体内 `Exit Sub`（§11.116 那一口） | 0 |
+| `B144-D1-terms` | handler 无 `Resume`，落点（§11.119 四.4） | 0 |
+| `B144-E1-terms` | `GoTo` 跳出（§11.122 那一口） | 0 |
+| `B144-Z-terms` / `B144-Z-tag` | 累计 / 共用实例完好 | 0 / 8 |
+
+同一份夹具换成**早期绑定**（`Dim b As B144Box`）5 轮：terms=5 —— 证明 Terminate 计数这把尺子本身是准的
+（`.temp/k144` 的 M1/M2），晚绑定两条路（`With o.Fresh` 与 `Set x = o.Fresh : Set x = Nothing`）
+5 轮都还是 0。差的不是 With 这一站。
+
+### 三、引用账：一次读数交出三枚（`C3_COM_RC_TRACE=1` 探针，`.temp/k144/rc4.txt`）
+
+一枚 `With o.Fresh` 的完整轨迹：
+
+| 轨迹行 | 累计 | 出处 |
+|---|---|---|
+| `FROM-INST W=… cnt=1` | 1 | 适配器把属性返回的实例包成包装器（`vb6_ComObject_FromInstance`，实例那一枚引用交给包装器） |
+| `ADDREF … cnt=2` | 2 | 适配器那一形 `vb6_VariantObject(vb6_ComObject_FromInstance(…))` 又 AddRef 一次（`cgen_util_dllentry_collect.inc` 的返回值装箱） |
+| `ADDREF … cnt=3` | 3 | 服务端 `vb6_VariantPackCopyInto(&tmpRet, pVarResult)` 为「带权副本」再 AddRef 一次（`vb6rtl_com.c`） |
+| `RELEASE … cnt=2` | 2 | 本刀临时接上的块尾放手（见四） |
+
+也就是说：**调用方该拿的只有 1 枚，另外 2 枚是桥的两站各自多 AddRef 一次** ——
+`tmpRet` 打包之后没有清（它那一枚被复制出去了），适配器又把 `FromInstance` 交出来的所有权
+用 `VariantObject` 叠了一层。`Set x = <晚绑定读数>` 走的是同一条桥，所以它 5 轮也全 0：
+这两枚不是 With 独有的账。
+
+### 四、为什么本刀不改发码
+
+认形是一行的事（`tempType == "void*"` 且 `lastExpr_` 前缀是 `vb6_ComGetObjectProp(`），
+四口也早已接好（§11.115 / §11.116 / §11.119 / §11.122）。本机试过：块尾那一发确实发出来了，
+轨迹从「三枚不退」变成「退一枚」，**但夹具读数一个都没变**（仍 0）—— 桥多交的两枚垫在下面。
+
+按本系列的纪律（没有读数变化的刀不落；退错一枚比漏更坏），这一刀只落夹具与这页账，
+不落发码。另外还有一层：今天退一枚必然安全（有两枚垫底），桥修好之后这一枚就必须**精确**，
+两件事得同一刀对账，否则谁先谁后都会静默错。
+
+### 五、下一刀的靶（顺序不可换）
+
+1. 适配器那一枚改为**转移**：`vb6_VariantObject(vb6_ComObject_FromInstance(…))` 叠出来的
+   第二枚引用要收掉（对齐 `New` 实参那条 `vb6_ComPack_<类>` 的「FromInstance 的 1 枚直接
+   转移给 VARIANT」口径）。
+2. 服务端 `ComObj_Invoke`：`vb6_VariantPackCopyInto(&tmpRet, pVarResult)` 之后把 `tmpRet`
+   那一枚退掉（副本已带权）。
+3. 前两条落地后，一次读数应恰好交出 **1** 枚；此时把本夹具的 needle 由
+   `A2=0 / C1=0 / D1=0 / E1=0 / Z=0` 改成 `1 / 2 / 3 / 4 / 4`，With 四口才有可判红的读数
+   （`tests/run_tests.ps1` 里 `$b144Needles` 的注释已经写明这件事）。
+4. `Set x = <晚绑定读数>` 那条 AddRef（setlet 站）同轮对账 —— 桥修好之后它是第二枚多交的。
+
+### 六、发码面与回归
+
+- 语料 **800 → 802 行**（b144 夹具两行：`B144Main.bas` / `B144Res.vbp`），既有行零变化
+  （b141 / b142 逐行实算 `SAME`，`.temp/k144/rows144.ps1`）；
+- 九门 9/9（802 行、注册 802，`.vbp=299 / .bas=503`）。
