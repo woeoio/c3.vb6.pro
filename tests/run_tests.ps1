@@ -12192,6 +12192,16 @@ $b130Needles = @(
 "B130-DONE")
 Test-Vbp 'b130_hostlocal_scope' "$Tests\b130_hostlocal_scope\B130Scope.vbp" $b130Needles
 Test-Vbp 'b130_hostlocal_scope_x86' "$Tests\b130_hostlocal_scope\B130Scope.vbp" $b130Needles -Arch "x86"
+
+# 账 #305 §11.113（第一百三十一刀）：腿④ 宿主类局部档第二格 —— `Dim dc As Dictionary` 出作用域那一句。
+# 三条反面证人：从字段借的局部、Static 槽、局部交给字段之后不许把字段手里的东西带走。
+$b131Needles = @(
+"B131-E1-count=1", "B131-E2-terms=1",
+"B131-A1-count=1", "B131-A2-field=1",
+"B131-S1-count=1", "B131-O1-alive=1", "B131-Z-terms=3",
+"B131-DONE")
+Test-Vbp 'b131_dict_local_scope' "$Tests\b131_dict_local_scope\B131Dict.vbp" $b131Needles
+Test-Vbp 'b131_dict_local_scope_x86' "$Tests\b131_dict_local_scope\B131Dict.vbp" $b131Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
