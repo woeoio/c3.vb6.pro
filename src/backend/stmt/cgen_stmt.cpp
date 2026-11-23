@@ -9,12 +9,23 @@ namespace vb6c3 {
 // --- cgen_stmt.cpp: 语句生成 ---
 
 void CCodeGen::emitStmtList(StmtList& stmts, bool emitResumePoints) {
+    // 第一百三十八刀 §11.120: 这个形参只为兼容旧调用点保留 —— 判据已经只看 `inProtectedBlock_`
+    // (理由见下面那一处注释)。
+    (void)emitResumePoints;
     for (auto& stmt : stmts) {
         if (!stmt) continue;
         bumpInferEpoch();   // ai/030 续: 语句边界推推断缓存 epoch (体内中途注册全落在语句边界)
 
         // P14.1.2: 在受保护区块中为每条语句生成resume点
-        if (emitResumePoints && inProtectedBlock_ &&
+        //
+        // 第一百三十八刀 §11.120: 判据只留 `inProtectedBlock_` —— 以前还要叠一个
+        // `emitResumePoints`（只有过程顶层那次 `emitStmtList(body, hasResume_)` 传 true），
+        // 于是 `With` / `If` / `For` / `Select` 的**体**里一条 resume 点都不发：块内报错时
+        // `vb6_err_resume_next_point` 还是「进入这一整条块语句之前」设的那一号，`Resume Next`
+        // 就落到块尾**之后**（`tests/b137_resume_in_block` 的 B 路：块内剩下的语句被跳过、
+        // 块尾那句放手也被跳过）。`Resume` 的语义是「回到出错语句的下一条」，与嵌套深浅无关，
+        // 所以这里按保护区走、不按层走；处理器的体不在保护区内（cgen_jumps.cpp 标签处清旗）。
+        if (inProtectedBlock_ &&
             stmt->kind != ASTNodeKind::OnErrorStmt &&
             stmt->kind != ASTNodeKind::LabelStmt) {
             int pt = resumePointCounter_++;
