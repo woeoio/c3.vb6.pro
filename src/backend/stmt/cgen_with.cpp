@@ -1154,6 +1154,22 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
     c_.dedent();
     c_.emitLine("}");
 
+    // 账 #305 §11.119 八.3 (第一百四十刀): 块尾补一个 resume 点 —— 但它必须落在**放手之前**。
+    //
+    // 体内**最后一条**语句报错、handler `Resume Next` 时, "下一条语句"就是块外那一句;
+    // 若把补点放在放手之后, 落点会**跳过**块尾这几句 (夹具 b140 修前 `L2-terms=0`)。
+    // 补在放手之前、编号接后即天然对上: 体内语句的 `resume_next_point` 正好是下一号,
+    // 于是 `Resume Next` 落到这一号 —— 先跑完放手再落到块外那一句。
+    // 只有真的发过放手的那几档才需要补 (借用型无清理可跳)。
+    if (inProtectedBlock_ &&
+        (withOwnedCarrier133 || withFnRetCarrier136 || !withClassCarrier135.empty())) {
+        int ptTail140 = resumePointCounter_++;
+        c_.emitLine("vb6_err_resume_point = " + std::to_string(ptTail140) + ";");
+        c_.emitLine("vb6_err_resume_next_point = " + std::to_string(ptTail140 + 1) + ";");
+        c_.emitLine("vb6_resume_" + std::to_string(ptTail140) +
+                    ":;  /* §11.119 八.3: 块尾补点 (Resume Next 从体内末句回来时先跑完放手) */");
+        dispatchPoints_.push_back(ptTail140);
+    }
     // 块尾放手 (VB6 的 With 临时量活到 End With)。`vb6_ReleaseObject` 自己把槽置空,
     // 所以体内若又把它交给了别人 (Set x = <外层同名槽>) 也不会二次退。
     if (withOwnedCarrier133) {
