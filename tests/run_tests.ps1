@@ -12329,14 +12329,14 @@ $b142Needles = @(
 Test-Vbp 'b142_propget_with' "$Tests\b142_propget_with\B142Res.vbp" $b142Needles
 Test-Vbp 'b142_propget_with_x86' "$Tests\b142_propget_with\B142Res.vbp" $b142Needles -Arch "x86"
 
-# 账 #305 §11.125（第一百四十四刀 · 设计刀）：`With <晚绑定对象>.<属性>` 交回的引用。
-# **本刀只量不改** —— 读数 0 是今天的事实（桥里多交了两枚引用，见 ai/039 §11.125）。
-# 这一组 needle 是下一刀（修桥 + With 归位）的 oracle：修好后 A2/C1/D1/E1 应变成 1/2/3/4。
-# B 路反面证人：交回的是模块级共用实例，退自己那一枚之后值仍读得出（tag=8）。
+# 账 #305 §11.126（第一百四十五刀）：`With <晚绑定对象>.<属性>` 交回的引用归 With。
+# 前置：第一百四十四刀先把桥的账量清楚（一次读数多交两枚），本刀把桥对平（适配器转移 +
+# 服务端清 tmpRet），一次读数恰好交出 1 枚 —— 四口这才有可判红的读数。
+# B 路反面证人：交回的是模块级共用实例，退自己那一枚之后它必须还活着（B2-terms 不前移）。
 $b144Needles = @(
-"B144-A2-terms=0", "B144-B2-tag=8", "B144-B2-terms=0",
-"B144-C1-terms=0", "B144-D1-terms=0", "B144-E1-terms=0",
-"B144-Z-terms=0", "B144-Z-tag=8", "B144-DONE")
+"B144-A2-terms=1", "B144-B2-tag=8", "B144-B2-terms=1",
+"B144-C1-terms=2", "B144-D1-terms=3", "B144-E1-terms=4",
+"B144-Z-terms=4", "B144-Z-tag=8", "B144-DONE")
 Test-Vbp 'b144_late_with_prop' "$Tests\b144_late_with_prop\B144Res.vbp" $b144Needles
 Test-Vbp 'b144_late_with_prop_x86' "$Tests\b144_late_with_prop\B144Res.vbp" $b144Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
