@@ -326,11 +326,22 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                     // 只认声明名就是 `Object` 的那一档 (窗体/控件/类实例另有主人); Static
                     // 那一格跨调用活着 (C 侧 static 存储), 出口放手 = 下次进来读已释放块。
                     bool isPlainObject = false;
+                    bool isHostClassLocal = false;
                     if (var.asType && var.asType->kind == ASTNodeKind::SimpleTypeRef) {
-                        isPlainObject = Symbol::toLower(
-                            static_cast<SimpleTypeRef&>(*var.asType).name) == "object";
+                        const std::string declName = Symbol::toLower(
+                            static_cast<SimpleTypeRef&>(*var.asType).name);
+                        isPlainObject = (declName == "object");
+                        /* 账 #305 §11.112 (第一百三十刀): 腿④ 扩到**宿主类局部** ——
+                           内建 Collection 的载体从第一百二十九刀起自己计数 (New 时 1,
+                           Set 那对出口一问), 但出口那一句 `vb6_ReleaseObject` 只发给
+                           `As Object` ⇒ `Dim c As New Collection` 出作用域仍不退,
+                           载体与元素一起漏 (实测 .temp/k129 A2 = 0)。
+                           只收这两个名字: 它们的 C 侧槽是 void*、且是我们自己实现的宿主类
+                           (Dictionary 是**类型化接口** vb6_ComIface_IDictionary*, 不走这一
+                           臂, 在册下一刀)。 */
+                        isHostClassLocal = (declName == "collection");
                     }
-                    if (isPlainObject && !var.isStatic && !inStaticProc_ && !var.isWithEvents) {
+                    if ((isPlainObject || isHostClassLocal) && !var.isStatic && !inStaticProc_ && !var.isWithEvents) {
                         trackLateObjSlotForRelease(cIdent(var.name));
                     }
                 }
