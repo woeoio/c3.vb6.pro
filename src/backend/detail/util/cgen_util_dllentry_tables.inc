@@ -48,12 +48,23 @@
             std::string lowerBareName = Symbol::toLower(bareName);
             // M29: dispid优先取自methodSym->comDispid (driver TypeLib阶段回写), 保证dll_entry.c与TypeLib dispid一致
             //      COM convention: Property Get/Let/Set共享同一dispid (driver已确保同名Property变体共享同一comDispid)
-            int dispid = methodSym->comDispid;
-            if (dispid == 0) {
-                // 安全fallback: 理论上不应发生 (driver TypeLib阶段已经回写comDispid) 仅防意外崩溃
-                dispid = nextDispid++;
+            int dispid = 0;
+            /* 账 #305 §11.128 (第一百四十七刀): 同名访问器**共用一枚 dispid**。
+             * 这里原来只把 dispid 记进 dispIdMap 却从不读它 ⇒ Get 拿了 1、Set 拿了 2;
+             * 而客户端按名查 (GetIDsOfNames) 只会拿到**第一条**同名的, 于是
+             * `Set o.Held = it` 永远打在 Get 那一格上, 写静默无效。
+             * 实测 (.temp/k147/probe 的 dll_entry 表):
+             *   { L"Held", 1, 2, ..._get_invoke } / { L"Held", 2, 8, ..._set_invoke }。
+             * 口径: 先查同名已分到的, 再取 driver 回写的, 最后才新发一枚。 */
+            auto itShare = dispIdMap.find(lowerBareName);
+            if (itShare != dispIdMap.end()) {
+                dispid = itShare->second;
+            } else if (methodSym->comDispid != 0) {
+                dispid = methodSym->comDispid;
                 dispIdMap[lowerBareName] = dispid;
-            } else if (dispIdMap.find(lowerBareName) == dispIdMap.end()) {
+                if (dispid >= nextDispid) nextDispid = dispid + 1;
+            } else {
+                dispid = nextDispid++;
                 dispIdMap[lowerBareName] = dispid;
             }
 std::string wideName = "L\"" + bareName + "\"";

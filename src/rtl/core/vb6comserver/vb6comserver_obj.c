@@ -292,18 +292,33 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
     
     // Find method matching dispid AND invkind (same dispid may have Get/Let variants)
     const vb6_DispMethodDesc* method = NULL;
+    const vb6_DispMethodDesc* putFallback = NULL;
+    /* 账 #305 §11.128 (第一百四十七刀): put 两个方向各认自己的档。
+     * 改前这里只有一条 `(ik == 4 || ik == 8) && (wFlags & DISPATCH_PROPERTYPUT)`:
+     * 客户端递 DISPATCH_PROPERTYPUTREF(8) 时 `wFlags & 4` 为假 ⇒ 按档一位都对不上 ⇒ 落到
+     * 下面那个「同 dispid 第一条」的兜底, 而那一条是同名 Property Get (Get/Let/Set 共 dispid,
+     * 且描述符按声明序把 Get 排在前面) ⇒ 服务端拿一个读臂吃掉这发写, 返回 S_OK、参数整个丢掉。
+     * 实测 (.temp/k147/probe, C3_OCX_TRACE): `Set o.Held = it` 打出
+     *   `INVOKE mem=Held argc=1` + `SetRef 'Held' hr=0x00000000` ⇒ 什么都没存, 对象当场收回 0。
+     * 口径: put 方向先按**自己的**档认 (PUTREF→ik8 / PUT→ik4), 再退到另一档 put (VB6 的
+     * `Set x.Prop = o` 遇到只有 Property Let 的类时是运行期错误, 但真 OCX 有把两档混发的),
+     * 最后才走下面那条兜底; 兜底不再让 put 落到读臂。 */
     for (int i = 0; i < self->desc->methodCount; i++) {
-        if (self->desc->methods[i].dispid == dispIdMember) {
-            int ik = self->desc->methods[i].invkind;
-            int ok = 0;
-            if (ik == 1 && (wFlags & DISPATCH_METHOD)) ok = 1;
-            else if (ik == 2 && (wFlags & DISPATCH_PROPERTYGET)) ok = 1;
-            else if ((ik == 4 || ik == 8) && (wFlags & DISPATCH_PROPERTYPUT)) ok = 1;
-            if (ok) { method = &self->desc->methods[i]; break; }
+        if (self->desc->methods[i].dispid != dispIdMember) continue;
+        int ik = self->desc->methods[i].invkind;
+        if (ik == 1 && (wFlags & DISPATCH_METHOD)) { method = &self->desc->methods[i]; break; }
+        if (ik == 2 && (wFlags & DISPATCH_PROPERTYGET)) { method = &self->desc->methods[i]; break; }
+        if (wFlags & DISPATCH_PROPERTYPUTREF) {
+            if (ik == 8) { method = &self->desc->methods[i]; break; }
+            if (ik == 4 && !putFallback) putFallback = &self->desc->methods[i];
+        } else if (wFlags & DISPATCH_PROPERTYPUT) {
+            if (ik == 4) { method = &self->desc->methods[i]; break; }
+            if (ik == 8 && !putFallback) putFallback = &self->desc->methods[i];
         }
     }
-    // Fallback: if no invkind match, try first dispid match
-    if (!method) {
+    if (!method && putFallback) method = putFallback;
+    // Fallback: if no invkind match, try first dispid match (put 方向不再借用读臂)
+    if (!method && !(wFlags & (DISPATCH_PROPERTYPUT | DISPATCH_PROPERTYPUTREF))) {
         for (int i = 0; i < self->desc->methodCount; i++) {
             if (self->desc->methods[i].dispid == dispIdMember) {
                 method = &self->desc->methods[i];
