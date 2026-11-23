@@ -1,4 +1,4 @@
 Option Explicit
 
 Public D As Dictionary
-Public K As IDictionary
+Public K As Object
