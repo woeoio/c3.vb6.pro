@@ -6428,3 +6428,84 @@ add=1..11  del=0   （19/19 行都只有新增行，没有一行被改写或删�
   它们的引用可能来自 `GetObject`、属性取或参数传递，归属各不相同，需逐档量过再收。
 - 模块级 / 类字段那一档仍不放手（b131 的 `Z` 那两枚是全靠**显式赋值/置空**才拆的）；
   集合里借出的宿主包装器、集合套集合的内层载体仍与 §11.111 五、§11.112 六同一条边界。
+
+## §11.114 腿④ 第三档：类型化 COM 接口局部（第一百三十二刀）
+
+### 一、缺口
+
+第一百三十一刀只收了内建 `Dictionary` **一个名字**。同一条臂里的其余类型化 COM 接口槽
+（`vb6_ComIface_I<X>*`，既包括别名接口名 `As IDictionary`，也包括外部类型库的
+`As FileSystemObject` / `As IPictureDisp` / `As ADODB.Stream` …）出作用域仍一句不发：
+
+```vb
+Private Sub ViaAlias()
+    Dim d As IDictionary
+    Set d = New Dictionary
+    d.Add "k", New B132Item
+End Sub          ' 修前 terms=0（载体不拆，元素不终止）
+```
+
+### 二、改法与所有权口径
+
+`cgen_localdecl.cpp` 的 ComClass/ComInterface 臂（`knownTypedComVars_` 那一站）放开到**所有**
+类型化 COM 接口 / ComClass 局部，登记 `trackLateObjSlotForRelease`（出口发
+`vb6_ReleaseObject((void**)&x)`，与 `Set` 那一站退旧值同一句；`vb6_ComIsDispatchable` 把关）。
+
+三条赋值路在发码里都**取所有权或 AddRef**（逐条看过 `--emit-c`）：
+
+| 赋值形 | 发码 |
+|---|---|
+| `Set d = New Dictionary` | `vb6_NewObject(L"Scripting.Dictionary")`（所有权交过来） |
+| `Set d = CreateObject("…")` | `vb6_ComCreateTyped(progId, iid)`（同上） |
+| `Set d = gBox.D`（字段/属性取） | `vb6_ComAddRefDispatch(vref)` + 退旧值 |
+
+所以出口放手成对。同一条闸保留：`Static` / `Static Sub` 里那一格跨调用活着，不登记；
+For Each 循环变量由 `dropLateObjSlotRelease` 撤登（每一轮由循环自己写）。
+
+### 三、夹具与读数（`tests/b132_typedcom_local_scope/`）
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B132-A1-count` / `A2-terms` | `Dim d As IDictionary` + `New Dictionary` | 1 / **0 → 1** |
+| `B132-C1-count` / `C2-terms` | `CreateObject("Scripting.Dictionary")` 那条路 | 1 / **0 → 2**（累计） |
+| `B132-F1-count` / `F2-field` | 从**字段**借的局部退出 | 1 / 1（字段不动） |
+| `B132-S1-count`（两次）/ `S2-terms` | `Static d As IDictionary` 跨调用活着 | 1,1 / 2（累计不动） |
+| `B132-K1-alive` | 局部**交给字段**后字段仍可用 | 1 |
+| `B132-Z-terms` | 累计（A/C + 两次显式置空） | **0 → 4** |
+| `B132-X1-name` | 真外部类型库服务器 scrrun（`FileSystemObject.GetFileName`） | `win.ini`（不崩） |
+
+x64 与 x86 逐字相同。（`FileSystemObject.FileExists` 在本仓两版都是 `False`，late-bound 与typed
+同形 —— 那是另一格在册的**谓词返回**口径，与本刀无关，夹具改用 `GetFileName` 作观测点。）
+
+### 四、发码面
+
+全量重算 778 行：**15 行变**，逐行 A/B（旧/新二进制各一份 `--emit-c`）结果
+**全部 `del=0`**、共 76 行新增，每行都是 `vb6_ReleaseObject((void**)&X);`：
+
+```
+Charts 2020 Proyecto1 1 (IPic)      combyref271 K271 5 (f/g/h/…)
+test_com_optional 1 (fso)           test_com_variant_prop 2 (el/at)
+test_earlybound 1 (fso)             test_earlybound2 3 (fso/drv/ts)
+test_not_com 1 (fso)                VBFlexGridDemo 51 (IPicture / IPersistStream / IOleObject / IUnknown 那类槽)
+VbQRCodegen Project1 2 (pStream/pPersist)
+ucSegmentedControl 2 (IPic/oStream) ucTreeView 1 (IPic)   ucSlider_2022 2 (ipic)
+fgz_fix011 1 (b)                    GifcontrolSource 2 (lBMPsource/tPic)
+dict_native NewBind 1 (d)
+```
+
+语料 778 → **780** 行（夹具两行）。
+
+### 五、回归
+
+- `b445` W1–W39 + DONE、`B412`、`B126`、`K124`、`KOwn` G0–G4、`KHaz` F1–F3、`K128`（C1=1 / D1=2）、
+  `b128`、`b129` 七针、`b130` 七针、`b131` 九针逐字相同；
+- `geomcache` x64 + x86：`latebind-miss` 0 条，GC17/18/19 全 True；
+- 九门 9/9；`check_class_refcount_authority` OK（static-gate 仍是 7 条：本刀是**替换**
+  §11.113 那一站的窄条件，不是新增闸门）；语料 780 行。
+
+### 六、边界（在册）
+
+- **地址交给外部 Declare 那一格**仍是整条腿④ 的共同边界（写它的一站在计数系统外面；
+  泛对象档与类型化接口档共用同一条 `isLateObj` 登记与撤登面）。
+- 模块级 / 类字段仍不放手（`Public K As IDictionary` 那格在 b132 里是靠显式置空才拆的）。
+- `FileSystemObject.FileExists` 一类的**谓词返回**口径不在本刀（两版同形，另册）。
