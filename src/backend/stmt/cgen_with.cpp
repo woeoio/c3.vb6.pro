@@ -1060,11 +1060,42 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
         lvSlotRegistered161f = listViewSlotVars_.insert(tvLower161f).second;
     }
 
+    // 账 #305 §11.115 (第一百三十三刀): With 自己造的那一枚载体, `End With` 要放手。
+    //
+    // 修前实测 (`tests/b133_with_carrier_scope`, 探针 `.temp/k133/p`):
+    //   With New Collection            -> void* _vb6_with_0 = (void*)vb6_NewObject(L"Collection")
+    //   With CreateObject("…")       -> void* _vb6_with_1 = (void*)vb6_CreateObject(_own_1)
+    // 两句都是**所有权交过来**的形状 (与腿④ §11.114 那三条赋值路同一个口径), 而块尾一句不发:
+    // 载体连同体内的元素一起活到进程结束 (读数 A2/B2/C2/Z 全 0)。
+    //
+    // 闸只认「发码里那句初始化器就是两座工厂之一」—— 不是按 AST 猜:
+    //   · `With <借用>` (`gColl` / 字段 / 形参 / `me.X`) 发的是裸取值, 不匹配 ⇒ 不放手;
+    //   · `With New <窗体>` 已被上面那站改写成 `vb6_form_hwnd_X()` (全局默认实例), 不匹配;
+    //   · UDT / 宿主伪结构体 / VARIANT 那几档 tempType 不是 void*, 本身就被这里挡在外面。
+    // 借用型载体若也发这一句, 就是拿别人的引用去退一枚 —— 夹具 C 路就是这条反面证人。
+    bool withOwnedCarrier133 = false;
+    if (tempType == "void*" && !lastExpr_.empty()) {
+        static const char* kOwn133[] = {
+            "(void*)vb6_NewObject(", "(void*)vb6_CreateObject(",
+            "vb6_NewObject(",       "vb6_CreateObject("
+        };
+        for (const char* p133 : kOwn133) {
+            if (lastExpr_.rfind(p133, 0) == 0) { withOwnedCarrier133 = true; break; }
+        }
+    }
+
     c_.emitLine("{");
     c_.indent();
     emitStmtList(node.body);
     c_.dedent();
     c_.emitLine("}");
+
+    // 块尾放手 (VB6 的 With 临时量活到 End With)。`vb6_ReleaseObject` 自己把槽置空,
+    // 所以体内若又把它交给了别人 (Set x = <外层同名槽>) 也不会二次退。
+    if (withOwnedCarrier133) {
+        c_.emitLine("vb6_ReleaseObject((void**)&" + tempVar +
+                    ");  /* 账 #305 §11.115: With 自己造的那一枚载体, 块尾放手 */");
+    }
 
     withObjectVars_.pop_back();
     withObjectInfoStack_.pop_back();
