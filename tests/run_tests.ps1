@@ -12319,6 +12319,15 @@ $b141Needles = @(
 "B141-Z-terms=5", "B141-Z-count=2", "B141-DONE")
 Test-Vbp 'b141_roster_class' "$Tests\b141_roster_class\B141Res.vbp" $b141Needles
 Test-Vbp 'b141_roster_class_x86' "$Tests\b141_roster_class\B141Res.vbp" $b141Needles -Arch "x86"
+
+# 账 #305 §11.124（第一百四十三刀）：`With <对象>.<Property Get>` 交回的那一枚也归 With。
+# B 路反面证人：对象**字段**（`With gBox.Bare`）只是借，块尾一枚不许退，之后还要读得出来。
+$b142Needles = @(
+"B142-A2-terms=1", "B142-B2-tag=2",
+"B142-C1-terms=2", "B142-D1-terms=3",
+"B142-Z-terms=3", "B142-DONE")
+Test-Vbp 'b142_propget_with' "$Tests\b142_propget_with\B142Res.vbp" $b142Needles
+Test-Vbp 'b142_propget_with_x86' "$Tests\b142_propget_with\B142Res.vbp" $b142Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

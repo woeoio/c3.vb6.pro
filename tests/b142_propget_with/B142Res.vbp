@@ -1,0 +1,7 @@
+Type=Exe
+Name="B142App"
+Module=B142Main; B142Main.bas
+Class=B142Box; B142Box.cls
+Class=B142Item; B142Item.cls
+Startup="Sub Main"
+ExeName32="B142.exe"
