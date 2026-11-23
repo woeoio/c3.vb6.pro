@@ -12260,6 +12260,18 @@ $b136Needles = @(
 "B136-Z-terms=2", "B136-DONE")
 Test-Vbp 'b136_fnret_carrier' "$Tests\b136_fnret_carrier\B136Fn.vbp" $b136Needles
 Test-Vbp 'b136_fnret_carrier_x86' "$Tests\b136_fnret_carrier\B136Fn.vbp" $b136Needles -Arch "x86"
+
+# 账 #305 §11.120（第一百三十八刀）：`Resume Next` 在块内的落点位置——回到出错语句的下一条，
+# 与嵌套深浅无关（以前只有过程顶层发 resume 点，块内 `Resume Next` 落到块尾之后，
+# 块内剩下的语句与块尾那句放手一并被跳过）。
+# A 路是 §11.119 的在册边界（handler 里一句 Resume 都没有），本刀刻意不动。
+$b137Needles = @(
+"B137-A1-count=1", "B137-A2-terms=0",
+"B137-B1-count=1", "B137-B1b-after-error", "B137-B2-terms=1",
+"B137-C1-count=1", "B137-C1c-after-error", "B137-C2-terms=2",
+"B137-Z-terms=2", "B137-DONE")
+Test-Vbp 'b137_resume_in_block' "$Tests\b137_resume_in_block\B137Res.vbp" $b137Needles
+Test-Vbp 'b137_resume_in_block_x86' "$Tests\b137_resume_in_block\B137Res.vbp" $b137Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
