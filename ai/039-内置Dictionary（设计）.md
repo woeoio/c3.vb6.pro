@@ -7552,3 +7552,85 @@ vb6_B148Box_prop_set_Held(o, vb6_ComGetObjectProp(o, L"Child"));  /* Set Propert
 这一发还顺带绕过了 COM 打包（早绑定直呼 `vb6_B148Box_prop_set_Held`）。本刀没接，是因为
 它的根在 `cgen_setlet_set_prop.inc` 那条链式改写里（接收者/值两个槽的绑定分开算），与本刀
 的适配器不是同一处。
+
+## §11.130（第一百四十九刀）`Set <晚绑定 o>.<Child>.<Prop> = <对象>`：两槽双双串位
+
+### 一、读数与发码
+
+夹具 `tests/b149_chain_write`（`o` 是 `As Object`，子对象是**另一枚** box，值是一枚 item）。
+改前发码：
+
+```c
+vb6_B149Box_prop_set_Held(o, vb6_ComGetObjectProp(o, L"Child"));  /* Set Property */
+```
+
+两个槽都错了：接收者写成裸 `o`（该是 `o.Child` 交回的那一枚），值写成 `o.Child` 的交回
+（该是 `it`）。而 `o` 的 C 类型是 `void*`（IDispatch*），被当成 `vb6_cls_B149Box*` 递进早绑定
+直呼 —— 改前跑起来**首读即错**：
+
+```
+vb6_ComGetProp: property "Held" not found
+Unhandled VB6 Error #438: Object doesn't support this property or method
+```
+
+### 二、病根两处
+
+1. **晚绑定判据只认裸标识符**。`cgen_setlet_set_prop.inc` 里那条 `_lateBoundRecv` 问的是
+   `_ma.object->kind == IdentifierExpr`（为的是 `Sub P2(ByVal o As Object): Set o.X = v` 那一发），
+   成员链作接收者（`o.Child`）时 `_objClass` 推不出（根是 `As Object`）而 `_psSym->isExternal`
+   为真（属性在别的模块）⇒ 照样进早绑定直呼。
+2. **接收者的 COM marker 漏进值槽**。`emitExpr(o.Child)` 对晚绑定成员**只交出基础对象
+   `o`**，成员名挂在 `comMemberName_` 上（等下一站来消费）；这里没人消费，紧接着
+   `emitSetObjectRhs(node.value)` 就把这枚 marker 当成值消费掉了 —— 于是值槽拿到
+   `vb6_ComGetObjectProp(o, L"Child")`，接收者槽只剩裸 `o`。
+
+### 三、改法
+
+- 晚绑定判据沿 `MemberAccess` 链**走到根**再问同一张表（`procObjectFormals_` /
+  `knownVariantVars_` / `knownObjectVars_`，仍排除窗体控件与 UC 实例）；命中就整支跳过，
+  交回下方通用 COM 路径。
+- `emitExpr(*_ma.object)` 之后立即 `if (isComMarker_) _objE = resolveComValue("Object");` ——
+  把这枚 marker 就地交成完整对象表达式（与值侧 Fix 110i 同一口径）。
+
+改后发码：
+
+```c
+vb6_ComSetRef(vb6_ComGetObjectProp(o, L"Child"), L"Held", it);  /* COM SetRef */
+```
+
+### 四、读数（x64 与 x86 八枚逐条相同）
+
+| 行 | A1 根上 | A2 子对象 | A3 同一枚 | C1 item-terms | Z box-terms | Z item-made/terms |
+|---|---|---|---|---|---|---|
+| 改前 | （首读即 438，无读数） | | | | | |
+| 改后 | **empty** | **B149Item** | **9** | 0 | 1 | 1 / 0 |
+
+- A1：根对象 `o` 自己的 `Held` 仍是空 —— 证明写落在子对象上，不是接收者根上。
+- A2/A3：子对象上写的确实是 `it` 那一枚，改 `h1.Tag` 后 `it.Tag` 跟着变（同一枚，不是拷贝）。
+- **Z 那两行是在册的**：链写里接收者 `o.Child` 交回的那一枚**临时引用没人放**。分账探针
+  `.temp/k149/p1`（不进语料）：只取一次子对象又放回 = box-terms **2**（干净）；同一形状再
+  走一发链写 = **3**（多一枚）。子对象因此不 Terminate（停在 1），它手里的 item 也跟着留下。
+  这是「笔数」那把尺（`§11.131`），本刀只管「写到哪一枚、写的值对不对」。
+  注：改前那形状（值槽里挂 getter）也照样漏这一枚 —— 不是本刀引入的。
+
+### 五、发码面
+
+- 全清单 **810 行**：机器可复现的 804 行一行未变，另 6 行是 vendor typelib 那一路的既有
+  本机≠CI 差；新夹具两行 ⇒ 808 → **810**；
+- **全语料复算零位移**：本刀改的两处只在「晚绑定成员链作接收者」这一格 —— 语料里没有这一格，
+  所以 802 行逐行相同（`--emit-c` 覆盖到本刀，这也是它与 §11.129 不同之处：这次变化**在**
+  清单覆盖范围内，读数就是零）。
+
+### 六、闸与连带
+
+- 九门 **9/9 rc=0**（`inputs=810 [.vbp=303 .bas=507]`，emitted=1574，exe sha=`fbb9fcd05e64`）；
+- 既有桥夹具零回归：b144 九枚、b146 八枚、b147 十二枚、b148 十枚读数逐条不变（x64 与 x86）；
+- CI（github `dev`）run `45276625769` = **22/22 success**。
+
+### 七、下一刀（已经量好的）
+
+**链上中间那一枚临时引用**：`vb6_ComGetObjectProp(o, L"Child")` 交回的引用归调用方
+（§11.126），但链写的接收者槽只拿去派发一次，没人放 —— 每发链写漏一枚，子对象永不
+Terminate。同族还有嵌套**读**链（`Set h = o.Child.Held` 里中间那一枚）。要么在发码侧把
+接收者落成临时量、派发后 `Release`，要么在 RTL 侧给一个「交回即持、用完即放」的入口。
+探针 `p1`（2 vs 3）就是这一刀的判据。
