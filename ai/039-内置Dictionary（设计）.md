@@ -7317,3 +7317,71 @@ terms 仍是 1 —— 这一枚退的是「读数交出来的那一枚」，不�
 
 `Set x = <晚绑定读数>` 的 setlet 站（§11.125 步骤 4）：桥对平之后它是第二枚多交的 AddRef，
 与 With 这一刀同一条桥、不同的主人。
+
+## §11.127（第一百四十六刀）`Set x = <晚绑定对象>.<属性>`：交回的那一枚归槽
+
+### 一、量具与改前读数
+
+先用量具把账量清（`.temp/k146/probe`，不进语料）：`As Object` 接一个工程类实例，
+`Set c = o.Fresh : Set c = Nothing`，Fresh 每次新造一枚并计 Terminate 数。改前：
+
+```
+S1-terms=0 made=2      ' 新造的那一枚 Set Nothing 之后**不销毁**
+S2-terms=0 made=2 keep=7
+S3-terms=0 made=4      ' 连读两枚, 一枚都没退
+```
+
+发码里多出来的正是这一行（`--emit-c` 逐字）：
+
+```
+{ void* _vref1 = (void*)(vb6_ComGetObjectProp(o, L"Fresh"));
+  vb6_ComAddRefDispatch(_vref1); vb6_ReleaseObject((void**)&c); c = _vref1; }
+```
+
+### 二、改法
+
+`src/backend/detail/stmt/cgen_setlet_set_rhs.inc` 兜底那一支的 `rhsOwned` 增一条口径：
+右值文本以 `vb6_ComGetObjectProp(` 开头 ⇒ 自带一枚对价（§11.125/§11.126 已经钉住
+「对象引用已转移给调用方」），不再 claim。
+
+裸槽拷贝（`Set d = c`）不在这个前缀里，claim 原样保留 —— 这一条是本刀的**反方向证人**：
+少了它 `Set c = Nothing` 会把 d 手里那一枚一并带走。
+
+### 三、读数（x64 与 x86 逐条相同）
+
+| 行 | A1-terms | B1-tag | B2-terms | C1-alive | C2-terms | Z-terms | Z-made |
+|---|---|---|---|---|---|---|---|
+| 改前（量具） | 0 | 7 | 0 | — | — | 0 | 3 |
+| 改后 | 1 | 7 | 0 | 0 | 1 | 2 | 3 |
+
+- A：新造一枚，`Set c = Nothing` 之后恰好 Terminate **一次**（改前 0）；
+- B：交回的是模块级共用实例，退读数那一枚之后它仍活（tag 读得出 7，terms 不增）；
+- C：`Set d = c` 是裸槽拷贝，`Set c = Nothing` 之后实例**仍活**（C1-alive=0），
+  直到 `Set d = Nothing` 才 Terminate（C2-terms=1）。
+
+（C1 一开始写成读 `d.Tag`，读出来是垃圾 —— `d` 是 `As Object`，读裸工程实例的属性走晚绑定，
+那个读数不可信。改判据为 Terminate 计数之后才量得准：这一处是量具的错，不是发码的错。）
+
+### 四、发码面
+
+- 全清单 **802 行**逐行复算：**22 行变**、其余 780 行 `SAME`，加本刀两行新夹具 ⇒ **804 行**；
+- 每一条变化的字节数都是 −31（`vb6_ComAddRefDispatch(_vrefN); ` 恰好那么长），
+  没有第二种变化；
+- 22 行里 **16 行**机器无关（纯 `.bas` 行 + `ucTreeView` / `VBFlexGridDemo` 聚合行）⇒ 本机值直接登记；
+  另 6 行是 vendor typelib 那一路的聚合行（`b132_typedcom_local_scope/B132Typed.vbp`、
+  `ctrlmscomm`、`guisample` 三份、`TeeChart`）；
+- 首跑 CI（`fb0005ad`）只红 `Emit manifest (shape oracle)` 一条。取 `ci/emit-manifest`
+  （head=`fb0005ad`）逐行比：804 行里只有 **3 行**差，全是 `guisample` 那三份聚合行
+  （`ascii256` 三行完全相同，只有 vendor 名字那一段文本不同），另外三行本机值与 CI 逐字相同；
+- 按 CI 侧清单对齐这三行后（`b16ed0f6`），**804 行与 CI 清单 0 差**，CI **22/22 success**。
+
+### 五、闸与连带
+
+- `check_manifest_coverage`：`inputs=804 [.vbp=300 .bas=504]`，registered=804，集合相等；
+- 九门 **9/9 rc=0**（emitted=1574，exe sha=`4ecee736d8c6`）；
+- 本刀没有新增 RTL 出口，`check_builtin_slot_returns` 的派生表不动（仍 63 条）。
+
+### 六、下一刀
+
+同一条桥的**写口**：`Set <晚绑定对象>.<属性> = <对象>` —— 交出去的那一枚由谁持有、
+桥在 `IDispatch::Invoke` 的 `DISPATCH_PROPERTYPUT` 那一路是否已经取走，是这把尺还没量过的第三站。
