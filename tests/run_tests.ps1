@@ -12396,6 +12396,17 @@ $b149Needles = @(
 "B149-Z-item-terms=0", "B149-DONE")
 Test-Vbp 'b149_chain_write' "$Tests\b149_chain_write\B149Res.vbp" $b149Needles
 Test-Vbp 'b149_chain_write_x86' "$Tests\b149_chain_write\B149Res.vbp" $b149Needles -Arch "x86"
+
+# 账 #305 §11.131（第一百五十刀）：链写**接收者**那一枚临时引用。
+# 改前 `vb6_ComSetRef(vb6_ComGetObjectProp(p, L"Child"), …)` —— 取回来的那一枚没人放，
+# 中间那枚对象永不 Terminate（box-terms 1）；改后落 _rcvN、派发完即放（box-terms 2）。
+#   A2: 写进去的确实是 it 那一枚
+#   Z : 根 + 子都 Terminate = 2；Z-item 停在 0 = 写口打包那一枚（§11.110 在册）
+$b150Needles = @(
+"B150-A2-held-tag=9", "B150-C1-item-terms=0", "B150-Z-box-terms=2",
+"B150-Z-item-made=1", "B150-Z-item-terms=0", "B150-DONE")
+Test-Vbp 'b150_chain_recv_ref' "$Tests\b150_chain_recv_ref\B150Res.vbp" $b150Needles
+Test-Vbp 'b150_chain_recv_ref_x86' "$Tests\b150_chain_recv_ref\B150Res.vbp" $b150Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

@@ -12,9 +12,10 @@ Option Explicit
 ' A 路: 根对象 o 的 Held 必须还是空（没写到根上）
 ' B 路: 子对象 o.Child 的 Held 里必须是 it 那一枚
 ' C 路: 同一枚的证人 —— 改 h1.Tag 后 it.Tag 跟着变
-' Z 路: 收尾。box 停在 1 而非 2 是**在册**的: 链写里接收者 `o.Child` 交回的那一枚临时引用
-'      没人放（见 §11.131 那一把尺; 分账探针 .temp/k149/p1: 只取不放 = 2, 链写一次 = 3）,
-'      子对象因此不 Terminate, 它手里的 item 也跟着留下一枚。本刀只管「写到哪一枚、写的值对不对」。
+' Z 路: 收尾。box 停在 1 而非 2 是**在册**的: 本夹具里 `Set h1 = o.Child.Held` 是一发
+'      **嵌套读链**，中间那枚 `o.Child` 交回的引用没人放（§11.132 那把尺）。
+'      链写那一站（`Set p.Child.Held = it`）的接收者已在 §11.131 对平 ——
+'      只留链写的形状见 tests/b150_chain_recv_ref（box-terms 1→2）。
 
 Public gBoxTerms As Long
 Public gItemTerms As Long

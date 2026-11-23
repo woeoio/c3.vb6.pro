@@ -698,23 +698,43 @@
             value = "vb6_VariantToObjectVal(" + value + ")";
         }
     }
+        /* 账 #305 §11.131 (第一百五十刀): 接收者是从**链上取回**的一枚引用
+         * (`vb6_ComGetObjectProp` 交回来就归调用方, §11.126) —— 这一站只拿它递一次派发,
+         * 没人放 ⇒ 每发链写漏一枚, 中间那枚对象永不 Terminate。
+         * 实测 (.temp/k150/p2, 累计 Terminate): A 只取一次又放回 = 2 (干净);
+         * B 走一发链写 = 3 (多一枚)。落成临时量、派发完即放。
+         * 不占 tempCounter_: 名字用独立的 _rcvN 序, 存量形状零移动 (§11.103 同一条理由)。 */
+        const bool rcvOwnedChain = objExpr.rfind("vb6_ComGetObjectProp(", 0) == 0
+            || objExpr.rfind("vb6_ComCallObject(", 0) == 0;
+        std::string rcvTmp;
+        if (rcvOwnedChain) {
+            rcvTmp = "_rcv" + std::to_string(setRefRecvSeq_++);
+            c_.emitLine("void* " + rcvTmp + " = " + objExpr
+                        + ";  /* 链上中间那一枚 (§11.131) */");
+        }
+        const std::string objCall = rcvOwnedChain ? rcvTmp : objExpr;
+        const std::string rcvDrop = rcvOwnedChain
+            ? ("vb6_ReleaseObject((void**)&" + rcvTmp + ");") : std::string();
         // 第一百八十五刀: 同一枚写读者 (putref_ 档), 与 Let 那条同一口径。
         const std::string vSetView = legacyViewSetterCallExpr(
-            objExpr, memberName, value, "void*", ProcKind::PropertySet);
+            objCall, memberName, value, "void*", ProcKind::PropertySet);
         if (!vSetView.empty()) {
             c_.emitLine(vSetView + ";  /* Property Set (视图直槽) */");
+            if (!rcvDrop.empty()) c_.emitLine(rcvDrop);
             return;
         }
         // 账 #305 (R4 收口): With 载体是新式视图时同一问 (临时量已登记 knownIvrefVars_)。
         {
             const std::string vSetViewR4 = ivrefViewSetterCallExpr(
-                objExpr, memberName, value, ProcKind::PropertySet, {}, node.value.get());
+                objCall, memberName, value, ProcKind::PropertySet, {}, node.value.get());
             if (!vSetViewR4.empty()) {
                 c_.emitLine(vSetViewR4 + ";  /* Property Set (视图直槽) */");
+                if (!rcvDrop.empty()) c_.emitLine(rcvDrop);
                 return;
             }
         }
-        c_.emitLine("vb6_ComSetRef(" + objExpr + ", L\"" + memberName + "\", " + value + ");  /* COM SetRef */");
+        c_.emitLine("vb6_ComSetRef(" + objCall + ", L\"" + memberName + "\", " + value + ");  /* COM SetRef */");
+        if (!rcvDrop.empty()) c_.emitLine(rcvDrop);
         return;
     }
 

@@ -54,6 +54,9 @@
     // 所有 _vs/_e/_ag/_fe_var 的**序号**整体后移, 十几枚发码形状针会一起红,
     // 而它们的形状一字未改。独立计数 = 新站点自己可数, 存量形状零移动。
     int refClaimSeq_ = 0;            // Set 取引用临时量 (_vrefN) 的序号
+    // 账 #305 §11.131 (第一百五十刀): 链写接收者临时量 (_rcvN) 的序号。
+    // 与 refClaimSeq_ 同一条理由独立计数: 不占 tempCounter_, 存量形状零移动。
+    int setRefRecvSeq_ = 0;          // 链写接收者临时量 (_rcvN) 的序号
 
     // 表达式求值结果 (累加器模式: 每个emitExpr调用设置lastExpr_)
     std::string lastExpr_;           // 最近一次表达式生成的C代码字符串
