@@ -7241,3 +7241,79 @@ VB6 语义一侧，With 临时量活到 `End With` ⇒ 这一枚引用该由块�
 - 语料 **800 → 802 行**（b144 夹具两行：`B144Main.bas` / `B144Res.vbp`），既有行零变化
   （b141 / b142 逐行实算 `SAME`，`.temp/k144/rows144.ps1`）；
 - 九门 9/9（802 行、注册 802，`.vbp=299 / .bas=503`）。
+
+---
+
+## §11.126（第一百四十五刀）`With <晚绑定对象>.<属性>`：先把桥对平，再让四口接管
+
+### 一、桥的两站各多交一枚
+
+上一刀量出来的是「一次读数交出 3 枚，调用方只该拿 1」。多出来的两枚各自有主：
+
+| 站 | 改前 | 改后 |
+|---|---|---|
+| 适配器装箱（`src/backend/detail/util/cgen_util_dllentry_collect.inc`） | `vb6_VariantObject(vb6_ComObject_FromInstance(…))` —— `FromInstance` 已把实例那一枚交给包装器，`vb6_VariantObject` 又按 Fix 024 的口径 AddRef 一次 | `vb6_VariantObjectTransfer(…)` —— 接管那一枚，不再 AddRef |
+| 服务端打包（`src/rtl/core/vb6comserver/vb6comserver_obj.c`） | `vb6_VariantPackCopyInto(&tmpRet, pVarResult)` 是**带权副本**（串深拷贝、对象 AddRef），副本归对端；`tmpRet` 自己那一枚原封不动漏在服务端 | 打包后补一句 `vb6_VariantClear(&tmpRet)` |
+
+新出口 `vb6_VariantObjectTransfer`（`src/rtl/core/vb6rtl/vb6rtl_variant.h`）与
+`vb6_VariantObject` / `vb6_VariantObjectBorrowed` 并列为三兄弟，**不合并**：借来的一枚随时
+可能被原主退掉，转移来的一枚只有收到它的人退 —— 共用一枚出口，下一次有人给 `Borrowed`
+加口径（比如改成「仅在…」）就必然连带改坏转移的语义。
+
+改后读数（`C3_COM_RC_TRACE=1`）：`FROM-INST cnt=1 → ADDREF cnt=2 → RELEASE cnt=1`，
+一次读数**恰好交出 1 枚**。
+
+### 二、顺带对出来的一枚毒：拥有型包装器拆解要问实例自己的引用计数
+
+桥对平之后夹具 B 路立刻跳红：`B144-B2-terms=2`（应为 1）。原因是 `ComObj_Release` 的
+拥有型那一档直接 `destroyFunc(instance)` —— 对 `New` 出来的那一枚没错，但 `Property Get
+SameObj() As B144Item` 交回的是**模块级共用实例** `gKeep`，拆包装器时把还在用的实例也
+`Class_Terminate` 了（调用方手里留一根悬空指针）。这一档改成先摘 `__comObj` 回填、再调
+`desc->classRelease(instance)`（问实例自己的 `__refcount`），与下面借用型那一档一字相同；
+`destroyFunc` 只留给「没有 `classRelease` 可问」的旧描述符。改后 B2-terms 回到 1。
+
+### 三、With 四口接管
+
+认形是一行的事（`src/backend/stmt/cgen_with.cpp` 的 `withComProp145`）：
+
+```
+tempType == "void*" && lastExpr_.rfind("vb6_ComGetObjectProp(", 0) == 0
+```
+
+所有权口径由 RTL 钉住：`vb6_ComGetObjectProp` 取走 `pv->pdispVal` 之后只
+`vb6_ComVarFree(pv)`，而那个函数明写「仅释放结构体，对象引用已转移给调用方」。也就是说
+Invoke 给属性返回值加的那一枚引用**归调用方**，With 临时量就是它的主人。
+
+接进去的是同样的三处 + 一个出口：`ownsCarrier`（认领）、`anyOwn142`（`_vb6_own[]` 落点
+登记，护住 `GoTo` 出块）、`inProtectedBlock_`（给 `Resume Next` 补落点），以及块尾
+`vb6_ReleaseObject((void**)&_vb6_with_N)`。借用型（`With gColl` / 字段 / 裸变量）的初始化器
+不是这个前缀，天然落在门外。
+
+### 四、读数（x64 与 x86 逐条相同）
+
+| 口 | A2 | B2-tag | B2-terms | C1 | D1 | E1 | Z | Z-tag |
+|---|---|---|---|---|---|---|---|---|
+| 改前 | 0 | 8 | 1 | 0 | 0 | 0 | 0 | 8 |
+| 改后 | 1 | 8 | 1 | 2 | 3 | 4 | 4 | 8 |
+
+（B 路是反面证人：交回的是模块级共用实例，退掉自己那一枚之后 `gKeep` 的 tag 仍读得出 8，
+terms 仍是 1 —— 这一枚退的是「读数交出来的那一枚」，不是实例本身。）
+
+### 五、发码面
+
+- 全清单 **802 行**逐行复算，**只有 14 行**变（7 个 `.vbp` 聚合行 + 7 个 `.bas` 行），
+  其余 788 行 `SAME`；
+- 14 行每一行的 ASCII 骨架变化都能对上本刀的两处手笔（适配器 `vb6_VariantObjectTransfer`
+  改名 + `§11.126` 块尾放手），没有第三种变化；
+- 既有夹具零回归：b133 / b134 / b135 / b142 的读数与各自 needle 逐条相符。
+
+### 六、闸上的连带
+
+新 RTL 出口必须进 `src/backend/detail/expr/cgen_variant_slot_prefixes.inc`（由
+`scripts/gen_variant_slot_prefixes.ps1` 从 RTL 派生，62 → 63 条）；`check_builtin_slot_returns`
+的 R2（漏登记）/ R8（派生不一致）由此转绿。九门 9/9。
+
+### 七、下一刀
+
+`Set x = <晚绑定读数>` 的 setlet 站（§11.125 步骤 4）：桥对平之后它是第二枚多交的 AddRef，
+与 With 这一刀同一条桥、不同的主人。
