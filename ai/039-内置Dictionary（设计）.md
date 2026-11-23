@@ -6828,7 +6828,7 @@ With 临时量就是它的主人。与 §11.115 两座工厂同一个口径，�
 本档的前置是 §11.120：只要 `Resume Next` 还落在 `End With` 之后，"可能回块内"这一档就连
 正常的块尾放手都拿不到。所以顺序是：
 
-1. **§11.120**：修 `Resume Next` / `Resume <label>` 的落点位置（与 VB6 对齐：回到出错语句的
+1. **§11.120**（**第一百三十八刀已关闭**）：修 `Resume Next` 的落点位置（与 VB6 对齐：回到出错语句的
    下一条，仍在块内）；
 2. **§11.119 落码**：提槽 + 名册 + 落点放手，夹具三路 —— A（handler 无 Resume）关掉、
    B（`Resume Next`）交给块尾收、C（`With gColl` 借用型）一枚都不动。
@@ -6839,7 +6839,55 @@ With 临时量就是它的主人。与 §11.115 两座工厂同一个口径，�
 - `Resume <label>` 指向块内深处（跳过一部分语句）时，块尾仍会在真正离块时放手 —— 本档不改这条；
 - `GoTo` 跳出 With 块仍在册（§11.116 五）。
 
-## §11.120（在册）`Resume Next` 在 With 块内的落点位置
+## §11.120 `Resume Next` 在块内的落点位置（第一百三十八刀）
+
+### 一、缺口
+
+发码里 resume 点只在**过程顶层**的语句表上发（`emitStmtList(body, hasResume_)`），
+`With` / `If` / `For` / `Select` 的体走的是默认 `false`。于是块内报错时
+`vb6_err_resume_next_point` 还是"进入这一整条块语句之前"设的那一号，`Resume Next` 落到块尾
+**之后**：块内剩下的语句被跳过，块尾那句放手也被跳过（`§11.119` 一 的 B 路，`B1b` 一句没打）。
+
+VB6 的语义是"回到**出错语句的下一条**"，与嵌套深浅无关 —— 所以这是控制流本身的缺口。
+
+### 二、改法（一处判据）
+
+`cgen_stmt.cpp` 的 `emitStmtList`：条件从 `emitResumePoints && inProtectedBlock_` 改成只用
+`inProtectedBlock_`。`inProtectedBlock_` 只在过程里用了 `Resume` 时才置位
+（`cgen_jumps.cpp` 的 `On Error GoTo` 站），处理器的体又不在保护区内（同文件的标签站清旗），
+所以这一改既覆盖所有嵌套层，也不给"没有 Resume 的过程"多发一行。
+
+`emitResumePoints` 形参保留（调用点不改），只作兼容。
+
+### 三、读数（夹具 `tests/b137_resume_in_block/`，x64 与 x86 逐字相同）
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B137-A1-count` / `A2-terms` | handler 里一句 `Resume` 都没有（§11.119 那一档） | 1 / 0 → **0**（在册，本刀刻意不动） |
+| `B137-B1-count` / `B1b-after-error` / `B2-terms` | 块内报错 + `Resume Next`，回到出错语句的下一条，块尾放手 | 1 / **没打 → 打了** / **0 → 1** |
+| `B137-C1-count` / `C1c-after-error` / `C2-terms` | 同一条错，但嵌在 `If` 里再套 `With`（两层） | 1 / **没打 → 打了** / **0 → 2** |
+| `B137-Z-terms` | 累计 | **0 → 2** |
+
+修前那一列是拿本刀之前的 exe 实跑（stash 后重建，`.temp/k137/fx_pre`）。
+
+### 四、发码面
+
+语料 **790 行**（780 + b130…b137 夹具）。**既有行零变化**：本刀判据只对"过程里用了
+`Resume` 语句"的那些生效，而全语料没有一条独立的 `Resume` / `Resume Next` 语句
+（`On Error Resume Next` 是另一条路，不发 setjmp、不置 `inProtectedBlock_`）。
+本刀只新增 b137 两行。
+
+### 五、回归
+
+- §11.119 一 的 A 路读数不变（`A2-terms=0`，在册边界照旧）；
+- b133/b134/b135/b136 夹具读数逐字相同；九门 9/9（exe sha `26110e726f47`）。
+
+### 六、边界（在册）
+
+- **出错语句是块内最后一条**时，`Resume Next` 的落点自然落到块外（块尾那句放手被跨过）——
+  这一形仍漏，归 §11.119 的活载体名册（落点放手）与"块尾放手补点"两档，本刀不碰；
+- handler 里一句 `Resume` 都没有的那些（A 路）归 §11.119；
+- `GoTo` 跳出 With 块仍在册（§11.116 五）。
 
 实测（§11.119 一 的 B 路）：块内报错、handler `Resume Next` 之后，既没回到出错语句的下一条，
 也没执行 `End With` 的放手 —— 发码里 `vb6_err_resume_next_point` 在 With 体内仍是进入 With 前
