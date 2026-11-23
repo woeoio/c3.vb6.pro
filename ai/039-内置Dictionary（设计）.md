@@ -6507,5 +6507,7 @@ dict_native NewBind 1 (d)
 
 - **地址交给外部 Declare 那一格**仍是整条腿④ 的共同边界（写它的一站在计数系统外面；
   泛对象档与类型化接口档共用同一条 `isLateObj` 登记与撤登面）。
-- 模块级 / 类字段仍不放手（`Public K As IDictionary` 那格在 b132 里是靠显式置空才拆的）。
+- 模块级 / 类字段仍不放手（b132 里 `Set gBox.K = d` 那格是靠显式置空才拆的；夹具那个字段
+  声明成 `As Object`，因为 `Public K As IDictionary` 这种**类字段的类型解析**在两台机器上
+  发码不一致 —— 形状 oracle 亲眼把那一行攼了出来（第一百三十二刀补）。
 - `FileSystemObject.FileExists` 一类的**谓词返回**口径不在本刀（两版同形，另册）。
