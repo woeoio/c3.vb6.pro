@@ -12328,6 +12328,17 @@ $b142Needles = @(
 "B142-Z-terms=3", "B142-DONE")
 Test-Vbp 'b142_propget_with' "$Tests\b142_propget_with\B142Res.vbp" $b142Needles
 Test-Vbp 'b142_propget_with_x86' "$Tests\b142_propget_with\B142Res.vbp" $b142Needles -Arch "x86"
+
+# 账 #305 §11.125（第一百四十四刀 · 设计刀）：`With <晚绑定对象>.<属性>` 交回的引用。
+# **本刀只量不改** —— 读数 0 是今天的事实（桥里多交了两枚引用，见 ai/039 §11.125）。
+# 这一组 needle 是下一刀（修桥 + With 归位）的 oracle：修好后 A2/C1/D1/E1 应变成 1/2/3/4。
+# B 路反面证人：交回的是模块级共用实例，退自己那一枚之后值仍读得出（tag=8）。
+$b144Needles = @(
+"B144-A2-terms=0", "B144-B2-tag=8", "B144-B2-terms=0",
+"B144-C1-terms=0", "B144-D1-terms=0", "B144-E1-terms=0",
+"B144-Z-terms=0", "B144-Z-tag=8", "B144-DONE")
+Test-Vbp 'b144_late_with_prop' "$Tests\b144_late_with_prop\B144Res.vbp" $b144Needles
+Test-Vbp 'b144_late_with_prop_x86' "$Tests\b144_late_with_prop\B144Res.vbp" $b144Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
