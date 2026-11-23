@@ -6599,3 +6599,61 @@ changed=6   added=2   missing=0
   过程出口机制不同源，另册。
 - **`With <函数返回>`**（`With f()`）不在本刀：那一格是 Variant / 解封后的借用值，
   所有权归调用那一站，要单独量。
+## §11.116 `With New …` 体内 `Exit` 那一格：goto 出块前先放手（第一百三十四刀）
+
+### 一、缺口与读数
+
+第一百三十三刀只补了**块尾**那一发（`End With`）。体内 `Exit Sub/Function/Property` 走的是
+`goto vb6_proc_exit` —— 一出块就没人再问那枚载体，于是它活到进程结束：
+
+```vb
+Private Sub ExitInside()
+    With New Collection
+        .Add New B134Item
+        Exit Sub          ' 修前: 这里出去, 载体与元素都还在
+    End With
+End Sub
+```
+
+夹具 `tests/b134_with_exit_scope/`（x64 与 x86 逐字相同）：
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B134-A1-count` / `A2-terms` | 对照：正常走到 `End With`（§11.115 那一发） | 1 / **0 → 1** |
+| `B134-F1-count` / `F2-terms` | `Exit Sub` 从 `With New Collection` 体内跳出 | 1 / **0 → 2**（累计） |
+| `B134-G1-count` / `G2-terms` | 反面证人：`With <字段>` 里 `Exit Sub`（借用型，不许退） | 1 / 0 → **0** |
+| `B134-H1` / `H2-terms` | `Exit Function` 从 `With New …` 跳出（返回值仍落位） | 7 / **0 → 3** |
+| `B134-I2-terms` | 两层自家载体 + `Exit Sub`（内层先退、外层后退） | **0 → 5** |
+| `B134-Z-terms` | 累计 | **0 → 5** |
+
+修前那四个 `0` 同样是本机实跑（`.temp/k134/pre`，本刀之前的那份 exe）。
+
+### 二、机制（两处，一位主人 + 一枚印）
+
+- `cgen_with.cpp`（§11.115 那站）在认出发码形状是 `vb6_NewObject` / `vb6_CreateObject` 时，
+  顺手把 `ownsCarrier` 盖在**当前这一帧**的 `WithObjInfo` 上；
+- `cgen_jumps.cpp` 的 `visit(ExitStmt&)`：`Exit Sub/Function/Property` 三条臂在发
+  `goto vb6_proc_exit;` **之前**，从信息栈顶往下把盖过印的帧各发一句
+  `vb6_ReleaseObject((void**)&_vb6_with_N);`。
+
+载体声明就在 With 体内那一层 ⇒ 走到这条 `Exit` 时它仍在作用域里；`vb6_ReleaseObject` 自己置空，
+所以块尾那一发与这里这一发不会二次退。借用型 / 窗体默认实例 / 工程类 `New` 那三档没有印，
+一条都不发（G 路就是这条反面证人）。
+
+### 三、发码面
+
+语料 **784 行**（原 780 + b133 两行 + 夹具两行）。本刀动的只有 `Exit` 那三条臂，而它们只在
+**盖过印的帧**存在时才多出一句 —— 全仓 `With New` 只有 `VBFlexGridDemo/MainForm.frm` 那三处
+`With New InputForm`（窗体默认实例，没有印）⇒ 语料里预计零行变，形状 oracle 在 CI 上复算 784 行验证。
+
+### 四、回归
+
+- `b445` W1–W39、`b412` `TERM=23`、`b133` 十二针、`b132` 十二针逐字相同；
+- 九门 9/9（exe sha `1ac6d1f05070`）。
+
+### 五、边界（在册）
+
+- **`GoTo` 跳出 With 块**：`GoTo <label>` 越过块尾那一发，与 `Exit` 不同源，本刀不接。
+- **错误处理器**（`On Error GoTo` 落进 handler）那一格：`vb6_ErrRaise` 的 longjmp 路径上
+  With 载体仍漏一枚 —— 要接得先给错误边界一张"活着的载体"名册，另册。
+- **`With <函数返回>`** 仍不在册（同 §11.115 五）。
