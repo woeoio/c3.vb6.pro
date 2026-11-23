@@ -6541,8 +6541,8 @@ End Sub
 | `B133-B1-count` / `B2-terms` | `With CreateObject("Scripting.Dictionary")` | 1 / **0 → 2**（累计） |
 | `B133-C1-count` / `C2-terms` | 反面证人一：`With gBox.C`（**字段**借来的那一份） | 1 / 0 → **0**（不动） |
 | `B133-D1-count` / `D2-terms` | 反面证人二：`With c`（**局部** `Set` 取的引用） | 2 / 0 → **0**（不动） |
-| `B133-E1-tag` / `E2-terms` | 在册边界：`With New <工程类>` | 11 / 0 → **0**（本刀刻意不发） |
-| `B133-Z-terms` | 累计 | **0 → 2** |
+| `B133-E1-tag` / `E2-terms` | 在册边界：`With New <工程类>` | 11 / 0 → **0**（本刀刻意不发；**§11.117 已补**，补后 = 3） |
+| `B133-Z-terms` | 累计 | **0 → 2**（§11.117 之后为 3） |
 
 修前那四个 `0` 是本机实跑：把源码 stash 回本刀之前、重编一份 exe 跑同一个夹具
 （产物在 `.temp/k133/b133pre`），不是按形状推的。
@@ -6593,7 +6593,8 @@ changed=6   added=2   missing=0
 ### 五、边界（在册）
 
 - **`With New <工程类>`**：`tempType` 是 `vb6_cls_*`，走类自己的 `_New`/`_Release` 那一档，
-  本刀闸刻意挡在外面（夹具 E 路 `E2-terms=0` 是**预期**读数，不是漏）。
+  本刀闸刻意挡在外面（夹具 E 路 `E2-terms=0` 是本刀的**预期**读数，不是漏）；
+  **第一百三十五刀 §11.117 已补上**（块尾与 Exit 两处都发 `vb6_cls_X_Release`）。
 - **`Exit <proc>` 从 With 体内直接跳出**：With 临时量是块内局部，登记进 `slotsToRelease_`
   会在嵌套位置发成越界引用（C2065），所以本刀不登记 —— 早退那一格仍漏一枚，与腿④ 的
   过程出口机制不同源，另册。
@@ -6657,3 +6658,56 @@ End Sub
 - **错误处理器**（`On Error GoTo` 落进 handler）那一格：`vb6_ErrRaise` 的 longjmp 路径上
   With 载体仍漏一枚 —— 要接得先给错误边界一张"活着的载体"名册，另册。
 - **`With <函数返回>`** 仍不在册（同 §11.115 五）。
+## §11.117 `With New <工程类>` 的载体：块尾与 Exit 两处放手（第一百三十五刀）
+
+### 一、缺口与读数
+
+§11.115 的闸只认晚绑定两座工厂（`vb6_NewObject` / `vb6_CreateObject`）；`With New <工程类>`
+发的是 `vb6_cls_B133Item* _vb6_with_4 = (vb6_cls_B133Item*)(vb6_cls_B133Item_New())`，
+一句都不发 —— b133 夹具的 E 路当场记着这条边界（`E2-terms=0`），本刀把它关掉：
+
+夹具 `tests/b135_with_class_carrier/`（x64 与 x86 逐字相同）：
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B135-A1-tag` / `A2-terms` | `With New B135Item` 走到 `End With` | 11 / **0 → 1** |
+| `B135-B1-tag` / `B2-terms` | 同上但体内 `Exit Sub` | 22 / **0 → 2**（累计） |
+| `B135-C1-tag` / `C2-terms` | 反面证人一：`With gBox.It`（字段里的实例） | 33 / 0 → **0**（不动） |
+| `B135-E1-tag` / `E2-terms` | 反面证人二：`With <局部>` + `Exit Sub`（局部那一份归过程出口） | 44 / 0 → **0**（不动） |
+| `B135-Z-terms` | 累计 | **0 → 2** |
+| `B135-D1-field` | 字段里那枚实例到收尾仍活着 | 44 |
+
+修前那一列同样是拿本刀之前的 exe 实跑（`.temp/k135/pre`，sha `215903550809`）。
+
+### 二、机制（与 §11.115/§11.116 同一对站点，各加一档）
+
+- `cgen_with.cpp`：`tempType` 是 `vb6_cls_X*` 且初始化器里含 `vb6_cls_X_New()`（同一类名两头
+  对上）⇒ 块尾发 `if (_vb6_with_N) vb6_cls_X_Release(_vb6_with_N);`，并把类名盖到这一帧的
+  `carrierClass` 上；
+- `cgen_jumps.cpp` 的 Exit 三条臂：帧上有 `carrierClass` 就发同一句（不是 `vb6_ReleaseObject`）。
+
+**为什么不用 `vb6_ReleaseObject`**：裸工程实例不是可分派对象，Fix 191 那道判据只清槽不 Release
+—— 用它等于没退。工程类那一档本来就有唯一出口（`vb6_cls_X_Release`），这里只是接上去。
+
+### 三、旧读数随之更新（b133 的 E 路）
+
+`B133-E2-terms` 2 → **3**、`B133-Z-terms` 2 → **3**（b133 夹具的 E 路就是这条边界），
+`tests/run_tests.ps1` 的 `$b133Needles` 同步改。
+
+发码侧：b133 的 `.vbp` 聚合行变（`bytes` 15788 → 15920），而 `B133Main.bas` 的**单文件行不变**
+—— 单文件编译没有工程上下文，`As B133Item` 认不出是工程类 ⇒ 闸不认它。这与全仓"单文件口径"
+一致，不是漏。
+
+### 四、发码面
+
+语料 **786 行**（780 + b133/b134/b135 三组夹具各两行）。变的只有 b133 的聚合行 + b135 的两行新增。
+
+### 五、回归
+
+- `b445` W1–W39、`b412` `TERM=23`、`b134` 十一针、`b133`（新读数）、`b132` 十二针逐字相同；
+- 九门 9/9（exe sha `64f3651debbc`）。
+
+### 六、边界（在册）
+
+- **单文件（`.bas` 单独 `--emit-c`）**不认识工程类 ⇒ 闸不认（与全仓单文件口径一致）。
+- `GoTo` 跳出 With 块 / 错误处理器 longjmp / `With <函数返回>` 三条仍与 §11.116 五 同册。
