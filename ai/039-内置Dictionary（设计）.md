@@ -8412,3 +8412,171 @@ vb6_ComGetStringProp(o, L"Held")
 - `Set c->f = o`（`o` 是 `As Variant` **形参**）仍走 `vb6_VariantFromValue` 浅拷贝。
 - `vb6_ReleaseObject` 对**裸类实例**是空转（§11.136 在册第一笔）。
 - `§11.110` 值侧打包、`.temp/k150/p4` 的 V2 记账照旧在册。
+
+## §11.139（第一百五十七刀）声明为 Variant 的晚绑定读不再按目标档钉型别
+
+### 一、撞见
+
+上一刀（§11.137）在册第一笔写得明明白白：`v = o.Held` 读进 Variant 时**型别不对**，
+而且它和"`n = o.Held` 那条 C2440 同一族"。这一刀来收那一族。
+
+先造探针量 §11.138（晚绑定读进 Variant 的型别保真）——`.temp/k157/p1`，`B157Box` 有
+`Property Get Num() As Long` / `Txt() As String` / `Flag() As Boolean` / `Rate() As Double`，
+四句 `v = o.Num` 之类。**读数全对**：
+
+```
+N-type=3 val=11     VT_I4
+T-type=8 val=hi     VT_BSTR
+B-type=11 val=True  VT_BOOL
+D-type=5 val=1.5    VT_R8
+```
+
+发码是 `vb6_VariantFromComResult(vb6_ComCall(o, L"Num", NULL, 0))` —— 服务端交回什么就是什么，
+型别一点没丢。所以 §11.138 那条**在册项本身是错的推理，量不到病**，不修；本刀改收真正会发病的那一支。
+
+那个真正发病的形状在 `.temp/k158/p1`：`B158Box` 有 `Property Get V() As Variant` 与
+`Property Let V(ByVal x As Variant)`，主程序（`o As Object`，晚绑定）：
+
+```vb
+Dim n As Long
+Dim s As String
+box.V = 11
+n = o.V          ' L1
+n = o.V + 1      ' L2
+s = CStr(o.V)    ' L3
+```
+
+**整份工程编不过，rc=1**：
+
+```
+B158Main.c(26): error C2440: 无法从 'int32_t' 转换为 'vb6_VARIANT'
+```
+
+发码两形：
+
+```c
+n  = vb6_ChkLong(vb6_VariantToLong(vb6_ComGetIntProp(o, L"V")));          /* L1 */
+n  = vb6_ChkLong(vb6_VariantToLong(vb6_VarAddV(
+       vb6_VariantFromValue(vb6_ComGetIntProp(o, L"V")),                  /* L2 */
+       vb6_VariantInt((int16_t)(1)))));
+```
+
+### 二、两站各说一套
+
+- **读口**（`resolveComValue(unpackType)`）按**目标档**发码：目标 `Long` ⇒
+  `vb6_ComGetIntProp`。这一发内部已经做过 `VariantChangeType(…, VT_I4)` 与 `VarClear`，
+  C 类型**就是 `int32_t`** —— 它对"值"这件事答得完全正确。
+- **consumer 站**按**声明档**：`inferExprType(o.V)` 走"按裸成员名查模块符号"的兼底，属性
+  声明是 `Variant`，于是这一句又被当成"手里揣着整只 Variant"，套上
+  `vb6_VariantToLong(...)`（L2 更先在算术那一站被改道成 `vb6_VarAddV`，用
+  `vb6_VariantFromValue(int32_t)` 装箱）。
+
+两边都不问对面。**同一句 `o.V`：读口说是 `int32_t`、consumer 说是 `vb6_VARIANT`。**
+
+### 三、先试的那条路（失败，记账）
+
+第一反应是让**读口**服从声明档：只要成员声明为 Variant 就一律走通用读口
+`vb6_VariantFromComResult(vb6_ComGetProp(...))`，把整只 Variant 交出去。这条路**编得过、
+读数也对**（L1=11 L2=12 L3=11 L4=42 L5=8/42），而且和 L3 那句一直在用的形状同一个出口。
+
+但夹具读数把它按住了：
+
+```
+b144: A2-terms=1 → 0   B2-terms=1 → 0   C1-terms=2 → 0   D1-terms=3 → 0   E1=4 → 0   Z=4 → 0
+b153: Z-terms=1 → 0    C1-terms=2 → 1
+```
+
+`terms` 是夹具数项目类 `Terminate` 的次数。整只 Variant 被交到**标量消费点**以后没人
+`vb6_VariantClear`，里面揣着的那一份对象引用就再也不放 —— 引用计数漏了，实例永不
+`Terminate`。这条路会把晚绑定读的所有对象寿命拖坏，**回收**。
+
+### 四、修：判据只看"已经发出来的那一段文本"
+
+落点不是"按声明档选臂"，而是**不让 consumer 二次解释一个已经交回标量的读**。新增一枚
+共用判据（`cgen_helpers.inc` 声明 / `cgen_util_classtype.cpp` 定义）：
+
+```cpp
+bool CCodeGen::isScalarComReadText(const std::string& cExpr) {
+    return cExpr.compare(0, 18, "vb6_ComGetIntProp(") == 0
+        || cExpr.compare(0, 21, "vb6_ComGetDoubleProp(") == 0
+        || cExpr.compare(0, 23, "vb6_ComGetLongPtrProp(") == 0;
+}
+```
+
+三处消费点复用同一问：
+
+1. `toLongIfVariant` —— 需要 `int32_t` 的上下文（整除/索引/For 上下界…）直通：
+   ```cpp
+   if (isScalarComReadText(cExpr)) return cExpr;
+   ```
+2. `cgen_assign_value_sem.inc` 的 `valueIsVariant` 支（`n = o.V` 这一形就落在这里）：
+   ```cpp
+   if (isScalarComReadText(value)) { c_.emitLine(target + " = " + value + ";"); return; }
+   ```
+3. `cgen_expr_binary.cpp` 的 `routeOperand86` —— 不进 Variant 算术改道（否则 L2 会被
+   `vb6_VarAddV(vb6_VariantFromValue(int32_t), …)` 装箱）：
+   ```cpp
+   if (isScalarComReadText(cExpr)) return false;
+   ```
+
+判据的纪律与 §11.137 同一条：**信发生过的事，不信对它的描述**（文本是发生过的事，
+`inferExprType` 是描述）。收窄到数值三档，是因为**能命中这三档的以前一律是 C2440** ——
+对今天能编译的表达式零影响，这一点由全语料清单逐行验过（见第五节）。
+
+改后发码：
+
+```c
+n = vb6_ChkLong(vb6_ComGetIntProp(o, L"V"));                    /* L1 */
+n = vb6_ChkLong((vb6_ComGetIntProp(o, L"V") + 1));              /* L2 按 C 整数算 */
+vb6_BSTR_AssignFromVariant(&s,                                  /* L3 一字未动 */
+     vb6_VariantFromValue(vb6_VariantFromComResult(vb6_ComGetProp(o, L"V"))));
+```
+
+L3 那句原本就是按 Variant 走的（String 上下文没触发目标档钉型别），本刀没碰它 ——
+这正是"收窄"的意思。
+
+### 五、读数
+
+新夹具 `tests/b158_late_variant_prop_read`（六针），x64 与 x86 同值：
+
+| 针 | 改前 | 改后 | 意思 |
+|---|---|---|---|
+| `L1` | **编不过** | 11 | Variant 属性读进 Long |
+| `L2` | **编不过** | 12 | 参与算术（不再被装箱进 `VarAddV`） |
+| `L3` | 编不过 | 11 | `CStr(o.V)`（这一形本来就对，本刀不碰） |
+| `L4` | 编不过 | 42 | 盒里揣串时按 VB6 隐式转换取数 |
+| `L5` | 编不过 | `8/42` | 读进 Variant，型别仍是服务端那一档 |
+| `DONE` | — | — | — |
+
+**回归读数（改前改后逐字相同）**：
+
+```
+b144  A2-terms=1  B2-tag=8  B2-terms=1  C1-terms=2  D1-terms=3  E1-terms=4  Z-terms=4  Z-tag=8
+b146  A1-terms=1  B1-tag=7  B2-terms=0  C1-alive=0  C2-terms=1  Z-terms=2  Z-made=3
+b148  A2-self-tag=5  A3-tag=6  B2-fresh-tag=11  B3-item-terms=1  C2-held-tag=77  C3-item-terms=2
+      Z-box-terms=0  Z-item-made=2  Z-item-terms=2
+b153  A1-terms=0  A2-held-tag=5  A3-terms=0  Z-terms=1  B1-len=1  B2-len=4  C1-terms=2
+```
+
+这四份是第三节那条弯路**当场**掀翻的夹具；本刀改完它们与本次改动前一字不差。
+
+### 六、发码面
+
+- 清单 **824→826**（新夹具 `.bas` 与 `.vbp` 两行，行数 1357）；
+- 全语料 826 行，**只有 6 条机器侧行移动**（b132、ctrlmscomm、GUISample×3、
+  TeeChart/DisplayProject）—— 按老规矩**以 CI 为准**，本地与 CI 逐行 COMPARE = 0 差异；
+  其余 820 行逐字未动（其中 5 条 b 系列 `.vbp` 行在第三节那条弯路上曾移动过，改回收窄之后
+  **回到原值**）；
+- 九门 9/9 rc=0（`inputs=826 [.vbp=311 .bas=515]`；`emit-manifest` 1357 行）；
+- CI 22/22（run 45363102958，sha `861851d0`）。
+
+### 七、在册（未修）
+
+- `§11.138`（"晚绑定读进 Variant 的型别保真"）**量不到病**：`VariantFromComResult(ComCall(...))`
+  把服务端交回的 VT 原样留着（第一节四行读数）。这条从在册里划掉，不是待修项。
+- 本刀只管**数值三档**的读：`vb6_ComGetStringProp` 进数值上下文（`n = o.Note`，Note 声明
+  String）仍是另一族，没动；`vb6_ComGetObjectProp` 同理。
+- `Set c->f = o`（`o` 是 `As Variant` **形参**）仍走 `vb6_VariantFromValue` 浅拷贝。
+- `Set obj.Prop = Nothing`（控件伪对象那一档）未动。
+- `vb6_ReleaseObject` 对**裸类实例**是空转（§11.136 在册第一笔）。
+- `§11.110` 值侧打包、`.temp/k150/p4` 的 V2 记账照旧在册。
