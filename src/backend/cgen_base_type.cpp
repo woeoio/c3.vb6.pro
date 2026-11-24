@@ -263,8 +263,14 @@ std::string CCodeGen::cDispatchArgVt(const ParameterInfo& p) {
     // 工程类/接口槽: 读臂取的是 pdispVal ⇒ VT_DISPATCH (与下面 Object 那一档同一个答案)。
     if (!cParamClassPtrType(p).empty()) return "VT_DISPATCH";
     const Vb6Type t = p.type;   // 刻意**不加** Array 位掩码: 与读臂那条 == 比较逐字同形
-    if (t == Vb6Type::Long || t == Vb6Type::Integer || t == Vb6Type::Byte ||
-        t == Vb6Type::Boolean) return "VT_I4";
+    // 账 #305 §11.141 (第一百五十九刀): Boolean 不再借 VT_I4 那一档。
+    // 撞见的形态 (`.temp/k160/p1`, `Property Let B(ByVal x As Boolean)`):
+    //     o.B = 7   →  服务端槽是 VT_I4 的 7 ⇒ m_B 存 7
+    //     n = box.B →   7（真 VB6 要 **-1**：CBool(7) = True）
+    // VB6 的 Boolean 真值是 -1 (与本仓 vb6_CBool 同口径)，而 "数值 → Boolean 形参"
+    // 在 VB6 里是一次 CBool 换算（非零即 -1）。借 VT_I4 就地透传等于跳过这次换算。
+    if (t == Vb6Type::Boolean) return "VT_BOOL";
+    if (t == Vb6Type::Long || t == Vb6Type::Integer || t == Vb6Type::Byte) return "VT_I4";
     if (t == Vb6Type::Double || t == Vb6Type::Single) return "VT_R8";
     if (t == Vb6Type::String) return "VT_BSTR";
     if (t == Vb6Type::Object) return "VT_DISPATCH";

@@ -12520,6 +12520,16 @@ $b159Needles = @(
 "B159-S6=8/101", "B159-S7=77", "B159-Z-terms=1", "B159-DONE")
 Test-Vbp 'b159_late_decl_typed_read' "$Tests\b159_late_decl_typed_read\B159Res.vbp" $b159Needles
 Test-Vbp 'b159_late_decl_typed_read_x86' "$Tests\b159_late_decl_typed_read\B159Res.vbp" $b159Needles -Arch "x86"
+# 账 #305 §11.141 (第一百五十九刀): 晚绑定写进 Boolean 形参要有 CBool 那一步换算。
+# 改前 `o.B = 7` 借 VT_I4 就地透传 ⇒ m_B 真的存 7，`n = box.B` 答 7（真 VB6 是 -1）。
+#   W1~W4/W7/W8: 数值→Double、数值→String、串→Double、Double→Integer (2.5→2)、
+#                串→Integer、Variant→Integer (9.75→10)
+#   W5/W6: 数值→Boolean 存成 True、读回 Boolean 转 Long = -1
+$b160Needles = @(
+"B160-W1=2", "B160-W2=2", "B160-W3=3.5", "B160-W4=2", "B160-W5=True",
+"B160-W6=-1", "B160-W7=42", "B160-W8=10", "B160-Z=2/3.5", "B160-DONE")
+Test-Vbp 'b160_late_bool_arg' "$Tests\b160_late_bool_arg\B160Res.vbp" $b160Needles
+Test-Vbp 'b160_late_bool_arg_x86' "$Tests\b160_late_bool_arg\B160Res.vbp" $b160Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
