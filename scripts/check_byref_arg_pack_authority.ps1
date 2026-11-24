@@ -64,12 +64,12 @@ Expect 'R2 comByRefArgExpr declared' (Count-Pattern $helpers 'std::string comByR
 Expect 'R2 comByRefArgExpr called'   (Count-Pattern $bindInc 'comByRefArgExpr\(') 3 '三处消费者: 早绑定位置/命名 + 晚绑定'
 
 # R3 —— 五档映射 + Integer 的宽度问句
-Expect 'R3 IntRef mapping'      (Count-Pattern $utilC 'fn = "vb6_ComPackIntRef"') 1 'Long → VT_I4'
-Expect 'R3 IntegerRef mapping'  (Count-Pattern $utilC 'fn = "vb6_ComPackIntegerRef"') 1 'Integer → VT_I2'
-Expect 'R3 BoolRef mapping'     (Count-Pattern $utilC 'fn = "vb6_ComPackBoolRef"') 1 'Boolean → VT_BOOL'
-Expect 'R3 SingleRef mapping'   (Count-Pattern $utilC 'fn = "vb6_ComPackSingleRef"') 1 'Single → VT_R4'
-Expect 'R3 DoubleRef mapping'   (Count-Pattern $utilC 'fn = "vb6_ComPackDoubleRef"') 1 'Double → VT_R8'
-Expect 'R3 BSTRRef mapping'     (Count-Pattern $utilC 'fn = "vb6_ComPackBSTRRef"') 1 'String → VT_BYREF|VT_BSTR (§11.143)'
+Expect 'R3 IntRef mapping'      (Count-Pattern $utilC '"vb6_ComPackIntRef" \}.*// int32_t\*') 1 'Long → VT_I4'
+Expect 'R3 IntegerRef mapping'  (Count-Pattern $utilC '"vb6_ComPackIntegerRef" \}.*// int16_t\*') 1 'Integer → VT_I2'
+Expect 'R3 BoolRef mapping'     (Count-Pattern $utilC '"vb6_ComPackBoolRef" \}.*// int16_t\* \(VT_BOOL\)') 1 'Boolean → VT_BOOL'
+Expect 'R3 SingleRef mapping'   (Count-Pattern $utilC '"vb6_ComPackSingleRef" \}.*// float\*') 1 'Single → VT_R4'
+Expect 'R3 DoubleRef mapping'   (Count-Pattern $utilC '"vb6_ComPackDoubleRef" \}.*// double\*') 1 'Double → VT_R8'
+Expect 'R3 BSTRRef mapping'     (Count-Pattern $utilC '"vb6_ComPackBSTRRef" \}.*// BSTR\*') 1 'String → VT_BYREF|VT_BSTR (§11.143)'
 Expect 'R3 Integer asks knownIntVars_' (Count-Pattern $utilC 'knownIntVars_\.count\(lower\) \? Vb6Type::Integer') 1 'inferExprType 对 Integer 答 Long, 宽度必须问专属表'
 
 # R4 —— 早绑定那一支只对 ByRef 形参取址
@@ -88,9 +88,13 @@ Expect 'R5 by-value witnesses' ([regex]::Matches($h, 'vb6_ComPackInt\((7|\(n \+ 
 Expect 'R5 bstr fixture cases' ([regex]::Matches($h, "Test-Vbp 'b162_byref_string_arg")).Count 2 '两格: x64 + x86'
 # §11.144 (第一百六十二刀): 引用形不只裸标识符 —— 数组元素与成员访问两形的判据面。
 Expect 'R7 array-elem shape'   (Count-Pattern $utilC 'static const std::regex arrElemRe\(') 1 '数组元素那一形只此一处判'
-Expect 'R7 field shape asks decl' (Count-Pattern $utilC 'classFieldIsBstrSlot\(cls, ma\.memberName\)') 1 '类字段那一形问声明表, 不读尾注'
-Expect 'R7 with shape asks decl'  (Count-Pattern $utilC 'classFieldIsBstrSlot\(wi\.className, wm\)') 1 'With 成员同一问'
+Expect 'R7 field shape asks decl' (Count-Pattern $utilC 'classFieldKind\(cls, ma\.memberName\)') 1 '类字段那一形问声明表, 不读尾注'
+Expect 'R7 with shape asks decl'  (Count-Pattern $utilC 'classFieldKind\(wi\.className, wm\)') 1 'With 成员同一问'
 Expect 'R7 addr fixture cases' ([regex]::Matches($h, "Test-Vbp 'b163_byref_addr")).Count 2 '两格: x64 + x86'
+# §11.145 (第一百六十三刀): 按引用打包器那张表只许住一处, 三个消费点 (裸标识符/数组元素/类字段) 都问它。
+Expect 'R8 ref-tier table'      (Count-Pattern $utilC 'kComPackRefTiers\[\]') 1 '表只住 cgen_util_com.cpp 一处'
+Expect 'R8 ref-tier askers'     (Count-Pattern $utilC 'comByRefPackFnForVbType\(') 4 '定义 1 + 三处消费点'
+Expect 'R8 numeric fixture cases' ([regex]::Matches($h, "Test-Vbp 'b164_byref_numeric_addr")).Count 2 '两格: x64 + x86'
 Expect 'R5 absent lesion' ([regex]::Matches($h, 'vb6_ComPackInt\(&n\)')).Count 1 '改前那一形只许留在 Absent'
 
 if ($fails.Count -gt 0) {

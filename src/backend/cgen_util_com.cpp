@@ -1114,39 +1114,61 @@ std::string CCodeGen::comPackExpr(Expr& expr) {
 // 若该标识符是**本过程**的 ByRef 形参，C 侧它已经是 T*，直接交指针，不再取一次地址。
 std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText,
                                       bool allowVariantRef) {
-    /* 账 #305 §11.144 (第一百六十二刀): 数组元素与类字段 —— 改前只认裸标识符 / `me->字段`，
-     * `o.Bump arr(i)` 与 `o.Bump box.S` 一律按值发，体里的写回落空。
-     * 两形各问一处权威，都不去解析发射文本的尾注:
-     *   ① 数组元素: `VB6_SA_AT(BSTR, <载体>, <下标>)` 的首参就是元素档 (同一份文本已有五处
-     *      消费点)，展开后是 `*(BSTR*)vb6_SaElemPtr(...)` —— 一枚左值，取址合法；
-     *   ② 类字段: 问声明侧那一位主人 classFieldIsBstrSlot (与方法/属性那一路同一条否决)。
-     * With 块成员 (WithMemberExpr) 的宿主类在 With 栈上，也按同一问。
+    /* 账 #305 §11.145 (第一百六十三刀): 数组元素与类字段的**数值五档** —— 改前这一族只认裸标识符 /
+     * `me->字段` (§11.144 只开了 String 那一档)，`o.Inc arr(i)` / `o.Inc box.N` 一律按值发，
+     * 体里的写回落空，`o.SetB flag` 也拿不到 -1。
+     * 型不从发码文本读: `int16_t` 既是 Integer 也是 Boolean、`double` 既是 Double 也是 Date，
+     * 文本只能当「这是一枚可取址的什么形」的形状证据，档一律问声明侧:
+     *   ① 数组元素 `VB6_SA_AT(<C型>, <载体>, <下标>)` → arrayElemTypes_ / 模块符号表
+     *      (与 cgen_expr_call_prelude.inc 发这一格时同一条链)；
+     *   ② 类字段 → classFieldKind (与 §11.144 的 String 那一问同一个出口)。
      * 其余形一律交回调用点保持按值: 属性读 (vb6_X_prop_get_Y(base))、控件默认属性折叠、
      * 对象成员 (`Db.Rs` 那种 voidptr 链)、数组本体都不在这一族。 */
     if (expr.kind != ASTNodeKind::IdentifierExpr) {
         static const std::regex arrElemRe(
-            R"(^VB6_SA_AT\(BSTR,\s*[A-Za-z_][A-Za-z0-9_]*,\s*[^;]+\)$)");
-        if (std::regex_match(argText, arrElemRe)) {
-            return "vb6_ComPackBSTRRef(&" + argText + ")";
+            R"(^VB6_SA_AT\([^,]+,\s*([^,]+),\s*[^;]+\)$)");
+        std::smatch am;
+        if (std::regex_match(argText, am, arrElemRe)) {
+            std::string carrier = am[1].str();
+            while (!carrier.empty() && carrier.back() == ' ') carrier.pop_back();
+            if (carrier.rfind("me->", 0) == 0) carrier = carrier.substr(4);
+            if (carrier.size() > 4 && carrier[0] == '(' && carrier[1] == '*'
+                && carrier.back() == ')') {
+                carrier = carrier.substr(2, carrier.size() - 3);
+            }
+            Vb6Type et = Vb6Type::Unknown;
+            auto itA = arrayElemTypes_.find(Symbol::toLower(carrier));
+            if (itA != arrayElemTypes_.end()) {
+                et = itA->second;
+            } else if (const Symbol* sa = symTab_.lookupModule(carrier)) {
+                if (sa->kind == SymbolKind::Variable && sa->isArray) et = sa->type;
+            }
+            const std::string fnA = comByRefPackFnForVbType(et);
+            if (!fnA.empty()) return fnA + "(&" + argText + ")";
+            return "";
         }
-        std::string clsField;  // 非空 = 宿主类名 (成员是 String 字段的那一问已中)
+        std::string clsField;  // 非空 = 宿主类名 (成员那两问之一已命中)
+        Vb6Type fieldVt = Vb6Type::Unknown;
         if (expr.kind == ASTNodeKind::MemberAccessExpr) {
             auto& ma = static_cast<const MemberAccessExpr&>(expr);
             const std::string cls = ma.object ? inferClassTypeOfExpr(*ma.object) : std::string();
-            if (!cls.empty() && resolveClassMemberCall(cls, ma.memberName).empty()
-                && classFieldIsBstrSlot(cls, ma.memberName)) {
-                clsField = cls;
+            if (!cls.empty() && resolveClassMemberCall(cls, ma.memberName).empty()) {
+                const Vb6Type ft = classFieldKind(cls, ma.memberName);
+                if (ft != Vb6Type::Unknown) { clsField = cls; fieldVt = ft; }
             }
         } else if (expr.kind == ASTNodeKind::WithMemberExpr && !withObjectInfoStack_.empty()) {
             const WithObjInfo& wi = withObjectInfoStack_.back();
             const std::string& wm = static_cast<const WithMemberExpr&>(expr).memberName;
             if (wi.kind == WithObjKind::ClassInstance && !wi.className.empty()
-                && resolveClassMemberCall(wi.className, wm).empty()
-                && classFieldIsBstrSlot(wi.className, wm)) {
-                clsField = wi.className;
+                && resolveClassMemberCall(wi.className, wm).empty()) {
+                const Vb6Type ft = classFieldKind(wi.className, wm);
+                if (ft != Vb6Type::Unknown) { clsField = wi.className; fieldVt = ft; }
             }
         }
-        if (!clsField.empty()) return "vb6_ComPackBSTRRef(&(" + argText + "))";
+        if (!clsField.empty()) {
+            const std::string fnF = comByRefPackFnForVbType(fieldVt);
+            if (!fnF.empty()) return fnF + "(&(" + argText + "))";
+        }
         return "";
     }
     auto& id = static_cast<const IdentifierExpr&>(expr);
@@ -1183,22 +1205,11 @@ std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText,
         return "vb6_ComPackVariantRef(" + (isByRefParam ? argText : "&" + argText) + ")";
     }
     std::string fn;
-    // Integer 必须问专属表: inferExprType 对 Integer 局部/形参答 Long (VB6 表达式提升),
+    // Integer 必须问专属表: inferExprType 对 Integer 局部/形参答 Long (VB6 表达式提升)，
     // 而 C 存储只有 2 字节 —— 按 I4 打写回会越界写 4 字节。
     Vb6Type refVt = knownIntVars_.count(lower) ? Vb6Type::Integer : inferExprType(expr);
-    switch (refVt) {
-        case Vb6Type::Long:    fn = "vb6_ComPackIntRef"; break;
-        case Vb6Type::Integer: fn = "vb6_ComPackIntegerRef"; break;
-        case Vb6Type::Boolean: fn = "vb6_ComPackBoolRef"; break;
-        case Vb6Type::Single:  fn = "vb6_ComPackSingleRef"; break;
-        case Vb6Type::Double:  fn = "vb6_ComPackDoubleRef"; break;
-        // 账 #305 §11.143 (第一百六十一刀): 第六档 —— 字符串。这块改前一律落 default
-        // 回按值打包，于是 `Bump(ByRef s As String)` 体里的赋值落在我们的副本上
-        // (.temp/k162/p1 实测 R3 仍是 "hi"). 字符串 lvalue 在 C 侧就是 BSTR 槽，
-        // 直接交地址；所有权那一间归服务端那两臂 (入槽拷一份、出站转移)。
-        case Vb6Type::String:  fn = "vb6_ComPackBSTRRef"; break;
-        default: return "";
-    }
+    fn = comByRefPackFnForVbType(refVt);
+    if (fn.empty()) return "";
     return fn + "(" + (isByRefParam ? argText : "&" + argText) + ")";
 }
 
@@ -1237,6 +1248,31 @@ std::string CCodeGen::comPackFnForVbType(Vb6Type vt) {
         if (e.vt == vt) return e.fn;
     }
     return std::string();   // 这一型在这里答不了，交回调用方兜底
+}
+
+// 账 #305 §11.145 (第一百六十三刀): 「VB 型 ↔ **按引用**打包器」这一张配对表只住这里。
+// 三个消费点共用: 裸标识符 / 数组元素 / 类字段 —— 以前裸标识符那一支自带一份 switch，
+// 另两形要开新档就只能再拄一份，于是同一枚型可能给出两个答案。
+// ⚠ 只许接 RTL 真有的六枚 (src/rtl/core/vb6com/vb6com.h 的 *Ref 一族): 没有
+//   UI1 (Byte) / CY (Currency) / DATE (Date) / Object 那一档 —— 那几型一律交回按值打包，
+//   宁可按值也不按一个错标签写回 (Byte 按 I2 写回是越界写，Date 按 R8 写回是返回值类型错)。
+struct ComPackRefTier { Vb6Type vt; const char* fn; };
+const ComPackRefTier kComPackRefTiers[] = {
+    { Vb6Type::Long,    "vb6_ComPackIntRef" },      // int32_t*
+    { Vb6Type::Integer, "vb6_ComPackIntegerRef" },  // int16_t*
+    { Vb6Type::Boolean, "vb6_ComPackBoolRef" },     // int16_t* (VT_BOOL)
+    { Vb6Type::Single,  "vb6_ComPackSingleRef" },   // float*
+    { Vb6Type::Double,  "vb6_ComPackDoubleRef" },   // double*
+    // 账 #305 §11.143 (第一百六十一刀): 第六档 —— 字符串 lvalue 在 C 侧就是 BSTR 槽，
+    // 直接交地址；所有权那一间归服务端那两臂 (入槽拷一份、出站转移)。
+    { Vb6Type::String,  "vb6_ComPackBSTRRef" },     // BSTR*
+};
+
+std::string CCodeGen::comByRefPackFnForVbType(Vb6Type vt) const {
+    for (const ComPackRefTier& e : kComPackRefTiers) {
+        if (e.vt == vt) return e.fn;
+    }
+    return std::string();
 }
 
 // 账 #256 / 账 #305 (第一百八十一刀补, 第五十六刀): 「一枚**折成默认属性读数**的值该按哪一档

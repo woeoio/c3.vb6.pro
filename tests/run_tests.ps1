@@ -12556,6 +12556,15 @@ $b163Needles = @(
 "B163-A5=ws-ok", "B163-A6=pt", "B163-A7=mg-ok", "B163-A8=tw-ok-ok", "B163-DONE")
 Test-Vbp 'b163_byref_addr' "$Tests\b163_byref_addr\B163Res.vbp" $b163Needles
 Test-Vbp 'b163_byref_addr_x86' "$Tests\b163_byref_addr\B163Res.vbp" $b163Needles -Arch "x86"
+# 账 #305 §11.145 (第一百六十三刀): 数值五档 / Boolean 的引用形也认数组元素与类字段。
+# N12 是 Byte（无 UI1 那一档，仍按值）、N13 是属性读（不可取址，仍按值），两条都是在册的负对照；
+# N10/N11 是要分清 `int16_t` 既是 Integer 也是 Boolean 的那两格（档靠声明表）。
+$b164Needles = @(
+"B164-N1=11", "B164-N2=21", "B164-N3=31", "B164-N4=41", "B164-N5=51",
+"B164-N6=61", "B164-N7=71.5", "B164-N8=81.5", "B164-N9=90.5",
+"B164-N10=True", "B164-N11=True", "B164-N12=1", "B164-N13=5", "B164-N14=2", "B164-DONE")
+Test-Vbp 'b164_byref_numeric_addr' "$Tests\b164_byref_numeric_addr\B164Res.vbp" $b164Needles
+Test-Vbp 'b164_byref_numeric_addr_x86' "$Tests\b164_byref_numeric_addr\B164Res.vbp" $b164Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

@@ -1279,6 +1279,9 @@
     // 成员访问那一形只能靠它说话（发射文本里只有字段名、没有型）。
     std::string comByRefArgExpr(Expr& expr, const std::string& argText,
                                 bool allowVariantRef = false);
+    // 账 #305 §11.145 (第一百六十三刀): 「这枚 VB 型该按哪个 *Ref 打包器发」(空 = 没有那档，按值)。
+    // 裸标识符 / 数组元素 / 类字段 三处共用它 —— 配对表只住 cgen_util_com.cpp 一处。
+    std::string comByRefPackFnForVbType(Vb6Type vt) const;
 
     // 账 #256: 「这枚裸控件名会不会被折成默认属性读数、折出来是什么 VB 型」只此一处回答。
     // 两个消费点共用它：标识符发码那条路拿 readFn/prop/ctrlType 去发 `readFn(句柄)`，
