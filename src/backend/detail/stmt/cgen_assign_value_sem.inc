@@ -464,6 +464,21 @@
             // 目标类型未知 (void*/对象等) → 不动, 维持原赋值路径.
         }
         if (valueIsVariant) {
+            // 账 #305 §11.139 (第一百五十七刀): **读口已经交回标量** 时不再拆箱。
+            //
+            // 撞见的形态 (`.temp/k158/p1`, 工程类 `Property Get V() As Variant`):
+            //     n = o.V   →   vb6_ChkLong(vb6_VariantToLong(vb6_ComGetIntProp(o, L"V")))
+            //     → **C2440**: int32_t 转不成 vb6_VARIANT (整份工程编不过)。
+            // 晚绑定读口是按**目标**档发的 (这里发了 IntProp, RTL 内已做
+            // VariantChangeType + VarClear); 而这一支是按**声明**档 (属性声明是 Variant)
+            // 又套一层拆箱 —— 那一层的入参要的是 vb6_VARIANT。
+            // 判据只看**已经发出来的那一段文本** (与 §11.137 同一条纪律: 信发生过的事,
+            // 不信对它的描述), 且只认型别已经够用的三种数值档:
+            // 能走到这里的以前一律是 C2440, 故对今天能编译的赋值零影响。
+            if (isScalarComReadText(value)) {
+                c_.emitLine(target + " = " + value + ";");
+                return;
+            }
             // C30-11 第七十六刀 (§B224): Null 落到 Boolean / Double 目标时按 VB6 口径
             // 「报 94 且目标不变」(真机 NullExtProbe: A2 `d` 仍 1.5 / err=94, A4 `b` 仍 True /
             // err=94)。以前发 `target = vb6_VariantToLong/VariantToDouble(...)`，raise 之后

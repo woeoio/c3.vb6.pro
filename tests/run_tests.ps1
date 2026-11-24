@@ -12499,6 +12499,17 @@ $b156Needles = @(
 "B156-Q1=11", "B156-Q2=12", "B156-Q3=eq", "B156-Q4=hi", "B156-Q5=11", "B156-DONE")
 Test-Vbp 'b156_late_typed_prop_read' "$Tests\b156_late_typed_prop_read\B156Res.vbp" $b156Needles
 Test-Vbp 'b156_late_typed_prop_read_x86' "$Tests\b156_late_typed_prop_read\B156Res.vbp" $b156Needles -Arch "x86"
+# 账 #305 §11.139 (第一百五十七刀): 声明为 Variant 的成员晚绑定读，按 VARIANT 读（保留真实 VT）。
+# 改前 `n = o.V`（V 是 Property Get V() As Variant）发成
+#   vb6_ChkLong(vb6_VariantToLong(vb6_ComGetIntProp(o, L"V")))
+# —— 目标侧按 Variant 套 VariantToLong，读口却按目标档发 int ⇒ **C2440 编不过**。
+#   L1/L2/L3: 读进 Long / 参与算术 / CStr —— 改前整份工程编不过
+#   L4: 属性里揣着串时按 VB6 隐式转换取数 (42)
+#   L5: 读进 Variant 的型别必须是服务端那一档 (8 = VT_BSTR) 且值对
+$b158Needles = @(
+"B158-L1=11", "B158-L2=12", "B158-L3=11", "B158-L4=42", "B158-L5=8/42", "B158-DONE")
+Test-Vbp 'b158_late_variant_prop_read' "$Tests\b158_late_variant_prop_read\B158Res.vbp" $b158Needles
+Test-Vbp 'b158_late_variant_prop_read_x86' "$Tests\b158_late_variant_prop_read\B158Res.vbp" $b158Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

@@ -374,6 +374,10 @@ void CCodeGen::visit(BinaryExpr& node) {
     // 超集 ⇒「oracle 答 Variant」必然蕴含「改道接走了、交出的是整只槽」，§B147 那一族
     // (oracle 说是槽、发码给裸标量 ⇒ 消费点既不提取也不取整) 就此按构造消失。
     auto routeOperand86 = [&](const std::string& cExpr, const Expr* astExpr) -> bool {
+        // 账 #305 §11.139: 读口已经交回裸标量 (ComGetInt/Double/LongPtrProp) ⇒ 不进
+        // Variant 算术改道。改前这里按 AST 的声明档 (Variant) 改道，却用
+        // `vb6_VariantFromValue(<int32_t>)` 装箱 ⇒ C2440（整份工程编不过）。
+        if (isScalarComReadText(cExpr)) return false;
         return isVariantOperand86(cExpr, astExpr) || isVariantType(astExpr);
     };
 

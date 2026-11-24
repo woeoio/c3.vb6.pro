@@ -1899,6 +1899,16 @@
     // 空 = 真 Variant 槽, 非空 = 声明过具体类型 (Object/接口/类/UDT)。
     std::string udtFieldTypeRefNameOfTarget(const ASTNode* target) const;
 
+    // 账 #305 §11.139 (第一百五十七刀): 这段 C 文本是不是**已经交回标量**的晚绑定读?
+    //
+    // 晚绑定读口是按**目标档**发码的 (`o.V` 进 Long 目标 ⇒ vb6_ComGetIntProp，RTL 内已做
+    // VariantChangeType + VarClear，C 类型就是 int32_t)。而各种 consumer 站按**声明档**
+    // (属性声明是 Variant) 再套一层拆箱 —— 那一层的入参要的是 vb6_VARIANT ⇒ C2440。
+    // 判据只认**已经发出来的那一段文本** (与 §11.137 同一条纪律: 信发生过的事，
+    // 不信对它的描述)，且只列数值三档: 能命中这里的以前一律是 C2440，
+    // 故对今天能编译的表达式零影响。
+    static bool isScalarComReadText(const std::string& cExpr);
+
     // Fix 084o: 若 C 表达式为 Variant (字符串级检测或已知 Variant 变量), 返回
     // vb6_VariantToLong(...) 包装, 否则原样返回. 用于需要 int32_t 的上下文:
     // 整除运算符 \ 的操作数、vb6_VariantArrayGet/GetVal 的索引、For 循环 Variant
