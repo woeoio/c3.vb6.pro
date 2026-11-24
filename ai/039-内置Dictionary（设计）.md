@@ -7708,3 +7708,90 @@ vb6_ReleaseObject((void**)&_rcv0);
    这一形状仍多留一枚（p4：`V2-box` 比 `V1-box` 多 1）。把释放顺序对调（先放 `c` 再链写）
    或写完之后才取子对象，都干净 —— 说明多出来的那一枚是「两处各持一次」的记账，不是悬垂
    （`Set h = c.Held` 在链写之后照旧读得到，`tag=9`）。
+
+
+## §11.132（第一百五十一刀）链读接收者那一枚临时引用
+
+### 一、读数
+
+分账探针 `.temp/k150/p2`（每臂都在干净状态起，尺子是 box 的 Terminate 计数，每臂两枚对象）：
+
+| 臂 | 形状 | 改前 | 改后 |
+|---|---|---|---|
+| A | 取一次子对象又放回 | 2 | 2 |
+| B | 链写 `Set p.Child.Held = it`（§11.131 已对平） | 4 | 4 |
+| C | 嵌套标量读 `v = q.Child.Tag` | 5 | **6** |
+| D | 链写 + 嵌套对象读 `Set h = r.Child.Held` | 6 | **8** |
+
+改前每多一层链就多留一枚。改前发码（一条语句、层层嵌套）：
+
+```c
+vb6_ComGetIntProp(vb6_ComGetObjectProp(q, L"Child"), L"Tag")
+vb6_ComGetObjectProp(vb6_ComGetObjectProp(r, L"Child"), L"Held")
+```
+
+`vb6_ComGetObjectProp` 交回的那一枚按 §11.126 归调用方（`vb6_ComVarFree` 只 free 结构体、
+不 `Release` `pdispVal`），而它被当**接收者**再递一层时谁也不放 ⇒ 中间那枚对象永不
+`Class_Terminate`。
+
+### 二、改法
+
+新增 `hoistComRecvTemp(objExpr)`（`cgen_util_com.cpp`，声明在 `cgen_helpers.inc`）：接收者是
+自有链读/晚绑定调用交回的那一枚（前缀 `vb6_ComGetObjectProp(` / `vb6_ComCallObject(`）时，
+落成 `void* _rrvN` 并登记语句末收回。改后：
+
+```c
+void* _rrv0 = vb6_ComGetObjectProp(q, L"Child");
+int32_t _av1 = (_e0 == vb6_ErrSerial()) ? (vb6_ComGetIntProp(_rrv0, L"Tag")) : (int32_t)0;
+vb6_ReleaseObject((void**)&_rrv0);   /* 语句末收回 */
+```
+
+挂点是 `resolveComValue` 里**晚绑定兜底之前**（`isComMarker_=false` 之后、`getPropArgs`
+之前）—— 必须排在所有 recognizer 之后：一旦提名，文本里的 `L"Tabs"` / `vb6_hwnd_X` /
+`L"SelectedItem"` 这些线索就跟着走了，TabStrip / StatusBar / TreeView 那几族的直译会失配。
+四道闸：过程内 / `indentLevel()==stmtLevel_`（声明与收回同层）/ 非块内条件 / 非拼串左操作数。
+
+收回走既有的 `ownedTempsToFree_` 通道，新增档 3（档 1=BSTR、档 2=VARIANT）⇒ 语句末发
+`vb6_ReleaseObject((void**)&t)`。序号 `comRecvTempSeq_` 独立（`cgen_state.inc` +
+`cgen_base_generate_prologue.inc` 归零），不占 `tempCounter_`，存量 `_vs`/`_e`/`_ag` 编号零移动。
+
+### 三、读数（夹具 `tests/b151_chain_read_ref`，x64 与 x86 八枚逐条相同）
+
+| 行 | 含义 | 改前 | 改后 |
+|---|---|---|---|
+| A2-held-tag | 嵌套对象读 `Set h = p.Child.Held` 的值 | 7 | 7 |
+| B1-child-tag | 嵌套标量读 `v = p.Child.Tag` 的值 | 99 | 99 |
+| C1-two-level-tag | 两层链 `w = p.Child.Child.Tag` 的值 | 99 | 99 |
+| Y-box-made | 出厂 box 数 | 3 | 3 |
+| **Z-box-terms** | 根 + 两级子对象都 Terminate | **1** | **3** |
+| Z-item-terms | 写口打包那一枚（§11.110 在册） | 0 | 0 |
+
+连带：`tests/b149_chain_write` 的 `Z-box-terms` 由 1 变 **2** —— 它自己的嵌套读
+`Set h1 = o.Child.Held` 就是本刀这一格，针同步改了口径。
+
+### 四、发码面
+
+- 全清单 **814 行**（新夹具两行）；语料 **45 行**随本刀改码 —— 链读站点遍地
+  （TeeChart 系列、TreeView `Nodes(i).Text`、StatusBar `Panels(i).Text`、GUISample 的
+  `Parent.Name` 那一族），这正是这把尺一直在漏的地方；
+- 既有 6 行 vendor typelib 本机≠CI 差照旧不动，其中 4 行本次连同改码一起变了 ⇒ 值按
+  **CI 那份清单**登记（`git fetch <remote> ci/emit-manifest` 取 `emit-manifest.txt`），
+  不按本机；
+- 两个发码形状针同步改成新形状：`tv_emitc_shape`（接收者落 `_rrvN` 再递一层）与
+  `pd_parentsem_emitc`（`Parent` 交回的那一枚落 `_rrvN`，`Name` 从它读）。
+
+### 五、闸与连带
+
+- 九门 **9/9 rc=0**（`inputs=814 [.vbp=305 .bas=509]`，emitted=1574，exe sha=`3e0b4d6b55e6`）；
+- 既有桥夹具零回归：b144 九枚、b146 八枚、b147 十二枚、b148 十枚、b149 八枚（其中
+  `Z-box-terms` 1→2）、b150 六枚读数双架构逐条不变；b151 双架构一致；
+- 首推 `03830aea` 的 CI（run `45293640919`）三红：Emit manifest 报**存量 4 行**真变、
+  Tests(vbp #4/#7) 报两个发码形状针失配 —— 都是本刀的预期位移没登记完；
+  补推 `4cbde0a1`（清单 4 行按 CI 那份登记 + 两针改形）后 CI（run `45295861718`）= **22/22 success**。
+
+### 六、在册
+
+分账探针 `.temp/k150/p4` 里还剩一格：**链写时同一枚子对象另握在别的变量里**
+（`Set c = q.Child` … `Set q.Child.Held = it`）仍多留一枚；把释放顺序对调（先放 `c` 再链写）
+或写完之后才取子对象，都干净 —— 说明那是「两处各持一次」的记账而不是悬垂
+（链写之后 `Set h = c.Held` 照旧读得到 `tag=9`）。另：写口打包那一枚（`§11.110`）也仍在册。
