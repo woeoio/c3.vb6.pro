@@ -7705,14 +7705,18 @@ if ($Category -in @("all", "run", "vbp")) {
         'if (pNM42->code == -451 && (void*)pNM42->hwndFrom == vb6_hwnd_tv1) {',
         'vb6_TreeView_NotifyExpanded((void*)lParam) == -1',
         # 账 #88: 比较上下文里字符串成员必须按 BSTR 解包 (TV35 那条链式形态)。
-        'vb6_CStr(vb6_VariantFromValue(vb6_ComGetStringProp(vb6_ComCallObject(vb6_TreeView_Nodes(',
+        # 账 #305 §11.132: 接收者（ Nodes(i) 交回的那一枚）现在落成 `_rrvN` 再递一层，
+        # 语句末收回 —— 文本不再是嵌套调用；这两条钉的是「接收者=临时量」与它的来源。
+        'void* _rrv',
+        '= vb6_ComCallObject(vb6_TreeView_Nodes((void*)vb6_hwnd_tv1), L"Item", (void*[]){vb6_ComPackInt(2)}, 1);',
+        'vb6_CStr(vb6_VariantFromValue(vb6_ComGetStringProp(_rrv',
         # 同一条判据的选择性那一半: 数值成员走**数值档**，不许被改成 BSTR 档 ——
         # 它的作用是挡住"为了修字符串把两档一起改成 BSTR"那种反向过度修正。
         # C30-11 后记（遗留问题②）: 关系比较的晚绑定属性改按 Double 解封 ——
         # 真引擎读数 `drv.TotalSize > 0` = True（TypeName=Double/VarType=5），
         # 旧口径发 IntProp 会把 254 GB 截成 0 答 False。所以这里钉的是 DoubleProp，
         # int 档不再出现于关系比较（算术运算仍按 Long，未变）。
-        'vb6_ComGetDoubleProp(vb6_ComCallObject(vb6_TreeView_Nodes((void*)vb6_hwnd_tv1), L"Item", (void*[]){vb6_ComPackInt(2)}, 1), L"Index")',
+        'vb6_ComGetDoubleProp(_rrv',
         'vb6_CStrBool(vb6_TreeView_GetCheckBoxes('
     )
     Test-EmitcAbsent "tv_emitc_no_com_fallback" @("$Tests\ctrltreeview\TvfApp.vbp") @(
@@ -11137,7 +11141,8 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_ComGetStringProp((void*)vb6_UC_ParentObject(), L"Name")',
         'vb6_ComGetStringProp((void*)vb6_UC_ParentObject(), L"Caption")',
         'vb6_ComGetIntProp((void*)vb6_UC_ParentObject(), L"BackColor")',
-        'vb6_ComGetStringProp(vb6_ComGetObjectProp(vb6_hwnd_Label1, L"Parent"), L"Name")')
+        '= vb6_ComGetObjectProp(vb6_hwnd_Label1, L"Parent");',
+        'vb6_ComGetStringProp(_rrv')
     Test-EmitcAbsent "pd_parentsem_emitc_absent" @("$Tests\pd_parentsem\PdParentSem.vbp") @(
         "vb6_Parent_Name", "vb6_Parent_Caption", "vb6_Parent_BackColor")
 
