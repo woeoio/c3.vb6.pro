@@ -11726,6 +11726,10 @@ if ($Category -in @("all", "run", "vbp")) {
     # 「Null→Long」钉报错且客户端活到 DONE; Absent 那一枚钉的是改前的**静默错**(hr=0 交回垃圾) ——
     # 只比 hr 就等于把「换不动」漏成一格没人看。
     # EchoLng ← VT_BOOL / VT_EMPTY 那两发是改前**侥幸对**的档位, 原样钉住 = 这刀没把对的答案改坏;
+    # 账 #305 §11.141 (第一百五十九刀): **EchoBool 那两发改口了** —— 改前 Boolean 形参的
+    # 入站归一化借 VT_I4 就地透传，`EchoBool:i` 答 40 / `EchoBool:s` 答 12（把 CBool 那一步
+    # 跳过了）；真 VB6 里「数值/字符串 → Boolean 形参」是一次 CBool 换算，所以两发都答 **-1**。
+    # 现在 cDispatchArgVt 给 VT_BOOL，读臂读 boolVal 折成 -1/0（tests/b160_late_bool_arg）。
     # EchoVar 那两发钉 Variant 形参没被换算(VarType 照原标签答 3/8), 就是表里 VB6_ARGVT_SKIP 的证人。
     # 账 #305 §B224 (第二百三十八刀): EchoStr ← VT_BOOL 改前答 <-1> (Automation 的 VarBstrFromBool),
     # 而真 VB6 6.0 服务端实测答 [True]/[False] (ai/probes/bool_string A1/A2, 用户那台跑出来的) ——
@@ -11755,8 +11759,8 @@ if ($Category -in @("all", "run", "vbp")) {
         "VTARG=EchoDbl:s giving=BSTR(12) hr=0x00000000 vt=5 val=12.0000",
         "VTARG=EchoDbl:r giving=VT_R8 hr=0x00000000 vt=5 val=12.7500",
         "VTARG=EchoBool:b giving=VT_BOOL hr=0x00000000 vt=3 val=-1",
-        "VTARG=EchoBool:i giving=VT_I4 hr=0x00000000 vt=3 val=40",
-        "VTARG=EchoBool:s giving=BSTR(12) hr=0x00000000 vt=3 val=12",
+        "VTARG=EchoBool:i giving=VT_I4 hr=0x00000000 vt=3 val=-1",
+        "VTARG=EchoBool:s giving=BSTR(12) hr=0x00000000 vt=3 val=-1",
         "VTARG=EchoVar:i giving=VT_I4 hr=0x00000000 vt=3 val=3",
         "VTARG=EchoVar:x giving=BSTR(abc) hr=0x00000000 vt=3 val=8",
         "VTARG=SumTwo:i,s giving=VT_I4+BSTR(12) hr=0x00000000 vt=8 val=<12:40> len=5",
@@ -11795,8 +11799,8 @@ if ($Category -in @("all", "run", "vbp")) {
         "VTARG=EchoDbl:s giving=BSTR(12) hr=0x00000000 vt=5 val=12.0000",
         "VTARG=EchoDbl:r giving=VT_R8 hr=0x00000000 vt=5 val=12.7500",
         "VTARG=EchoBool:b giving=VT_BOOL hr=0x00000000 vt=3 val=-1",
-        "VTARG=EchoBool:i giving=VT_I4 hr=0x00000000 vt=3 val=40",
-        "VTARG=EchoBool:s giving=BSTR(12) hr=0x00000000 vt=3 val=12",
+        "VTARG=EchoBool:i giving=VT_I4 hr=0x00000000 vt=3 val=-1",
+        "VTARG=EchoBool:s giving=BSTR(12) hr=0x00000000 vt=3 val=-1",
         "VTARG=EchoVar:i giving=VT_I4 hr=0x00000000 vt=3 val=3",
         "VTARG=EchoVar:x giving=BSTR(abc) hr=0x00000000 vt=3 val=8",
         "VTARG=SumTwo:i,s giving=VT_I4+BSTR(12) hr=0x00000000 vt=8 val=<12:40> len=5",
