@@ -1278,8 +1278,7 @@
     // packFn: 账 #305 §11.144 (第一百六十二刀) —— 调用点已经把这块实参的打包器算出来了，
     // 成员访问那一形只能靠它说话（发射文本里只有字段名、没有型）。
     std::string comByRefArgExpr(Expr& expr, const std::string& argText,
-                                bool allowVariantRef = false,
-                                const std::string& packFn = std::string());
+                                bool allowVariantRef = false);
 
     // 账 #256: 「这枚裸控件名会不会被折成默认属性读数、折出来是什么 VB 型」只此一处回答。
     // 两个消费点共用它：标识符发码那条路拿 readFn/prop/ctrlType 去发 `readFn(句柄)`，

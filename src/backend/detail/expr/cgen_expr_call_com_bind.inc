@@ -850,7 +850,7 @@
                     // 账 #305 §B224 第二半 (第二百三十九刀): 早绑定已知签名 —— 声明是 ByRef 的
                     // 标量形参按引用发 (VT_BYREF|T)，与真 VB6 的写回语义对齐；ByVal 一律不取址。
                     if (i < sig.params.size() && !sig.params[i].isByVal) {
-                        std::string byRefArg = comByRefArgExpr(*node.positional[i], lastExpr_, true, packFn);
+                        std::string byRefArg = comByRefArgExpr(*node.positional[i], lastExpr_, true);
                         if (!byRefArg.empty()) {
                             // FIX-011: VariantRef 档把槽记进出参名册 (取址口径与打包内一致)
                             if (byRefArg.rfind("vb6_ComPackVariantRef(", 0) == 0)
@@ -872,7 +872,7 @@
                     emitExpr(*named.value);
                     { std::string resolved = resolveComMarkerForPack(packFn); if (!resolved.empty()) lastExpr_ = resolved; }
                     if (byRefParamNamedAny(named.name)) {
-                        std::string byRefArg = comByRefArgExpr(*named.value, lastExpr_, true, packFn);
+                        std::string byRefArg = comByRefArgExpr(*named.value, lastExpr_, true);
                         if (!byRefArg.empty()) {
                             // FIX-011: 命名实参与位置实参同口径登记出参槽
                             if (byRefArg.rfind("vb6_ComPackVariantRef(", 0) == 0)
@@ -935,7 +935,7 @@
                 // 对带型变量照样递 VT_BYREF|T (实测 B4: `o.Bump(x)`，o As Object ⇒ x=11) ——
                 // 简单 lvalue + 数值/布尔五档才取址，其余(字面量/表达式/属性读/串/对象/变体)按值。
                 {
-                    std::string byRefArg = comByRefArgExpr(*argExpr, lastExpr_, false, packFn);
+                    std::string byRefArg = comByRefArgExpr(*argExpr, lastExpr_);
                     if (!byRefArg.empty()) { packedArgs.push_back(byRefArg); return; }
                 }
                 // Fix 266: 打包器的**型**与 marker 解析的**型**不同源 ——

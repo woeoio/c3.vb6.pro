@@ -88,8 +88,8 @@ Expect 'R5 by-value witnesses' ([regex]::Matches($h, 'vb6_ComPackInt\((7|\(n \+ 
 Expect 'R5 bstr fixture cases' ([regex]::Matches($h, "Test-Vbp 'b162_byref_string_arg")).Count 2 '两格: x64 + x86'
 # §11.144 (第一百六十二刀): 引用形不只裸标识符 —— 数组元素与成员访问两形的判据面。
 Expect 'R7 array-elem shape'   (Count-Pattern $utilC 'static const std::regex arrElemRe\(') 1 '数组元素那一形只此一处判'
-Expect 'R7 member shape'       (Count-Pattern $utilC 'static const std::regex memberRe\(') 1 '成员访问那一形只此一处判'
-Expect 'R7 packFn handed in'   (Count-Pattern $bindInc 'comByRefArgExpr\(.+, packFn\)') 3 '三处消费点都交打包器那一格'
+Expect 'R7 field shape asks decl' (Count-Pattern $utilC 'classFieldIsBstrSlot\(cls, ma\.memberName\)') 1 '类字段那一形问声明表, 不读尾注'
+Expect 'R7 with shape asks decl'  (Count-Pattern $utilC 'classFieldIsBstrSlot\(wi\.className, wm\)') 1 'With 成员同一问'
 Expect 'R7 addr fixture cases' ([regex]::Matches($h, "Test-Vbp 'b163_byref_addr")).Count 2 '两格: x64 + x86'
 Expect 'R5 absent lesion' ([regex]::Matches($h, 'vb6_ComPackInt\(&n\)')).Count 1 '改前那一形只许留在 Absent'
 
