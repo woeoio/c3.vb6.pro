@@ -8904,3 +8904,68 @@ if (t == Vb6Type::Long || t == Vb6Type::Integer || t == Vb6Type::Byte ||
 - 声明为 String 的成员读进数值档（§11.140 第六节）；
 - `Set c->f = o`（Variant 形参）浅拷贝、`Set obj.Prop = Nothing`（控件伪对象档）、
   `vb6_ReleaseObject` 对裸类实例空转、`§11.110` 值侧打包照旧在册。
+
+## §11.143 续（第一百六十一刀 · 修补）：引用要按签名说话
+
+### 一、第一次 CI 红
+
+`Tests (vbp #5)` 报 `[GUI] czUI ... FAIL (exit=13)` —— tests/czUI-main 的表单在
+`UserControl_ReadProperties` 里当场倒。查发码：那一族只多了 7 处
+`vb6_ComPackBSTRRef(...)`，全在 `With PropBag` 里（6 处 `WriteProperty` + 1 处
+`ReadProperty`，`PropBag As Object` 晚绑定到 `MSSTDFMT.PropertyBag`）。
+
+**真 VB6 客户端在这里不会递引用**：`PropBag` 的签名来自 typelib（`WriteProperty(PropName,
+ByVal Value As Variant)`），编译器照签名按值发。我们晚绑定没有签名，把「带型变量一律递
+VT_BYREF|型」这条口径套到了所有对端上 —— 对**自己家的服务端**是对的（本刀要修的就是那
+一格），对**外部 OCX** 就是 13。
+
+### 二、落点：把「有没有签名」这一问交回运行时
+
+`vb6_ComNarrowArgs` 本来就是 ComCall 进 Invoke 之前那一趟「按形参表对表」的闸
+（原先只管 VT_R4/R8 → typedef LONG 的收窄）。本刀给它加第二件事：
+
+| 对端 | 判据 | 处理 |
+|---|---|---|
+| 有 ITypeInfo | 形参带 `PARAMFLAG_FOUT` | 真 ByRef ⇒ 保留引用 |
+| 有 ITypeInfo | 形参不带 FOUT | ByVal ⇒ 降成值副本 |
+| 无 ITypeInfo + 本仓工程类服务端 | `vb6_ComObject_IsVb6Wrapper` 或 `vb6_FindProjectClassDescRaw` | 保留引用（回写走 `vb6_ByRefScalarWriteBack`） |
+| 无 ITypeInfo + 其它 | 上一条不成立 | 降成值副本（与改前同形） |
+
+第三行那半边是本地实测补上的：第一版只问包装器，而 ComCall 走到这里时接收者可能已经被
+剥壳成**裸类实例**（`vb6_FindProjectClassDescRaw` 那张登记表），于是自己的服务端被当成
+外部 OCX 降值 —— 夹具 S1 当场退回 `hi`。两个形都认才是全的。
+
+### 三、`vb6_ComArgNormalize` 的跳过再收一层
+
+「引用形的 pointee 已等于声明档就不换算」只对 `vb6_VariantBorrowIntoSlot` 真搬过的那
+七档（I4/I2/R8/R4/BOOL/UI1/BSTR）成立。其余形（典型 `BYREF|VT_VARIANT`）入槽那臂本就
+不接（槽留 Empty），跳过换算等于把引用变体读成空 —— 那一档必须继续走
+`VariantChangeType` 解引用。
+
+### 四、一次假的「回归」（记在册，免得下次再踩）
+
+修补过程中出现了「夹具 S1~S6 全部退回按值」的现象，一路查到最后是**构建缓存**：
+`Copy-Item` 恢复备份会**连时间戳一起恢复**，恢复出来的 `cgen_util_com.cpp` 比 `.obj` 还旧
+⇒ `cmake --build` 判定无需重编，跑的是实验版二进制。判据不是「build 打印 rc=0」，而是
+**发出来的文本**：`--emit-c` 里那一行到底是 `vb6_ComPackBSTRRef(&s)` 还是
+`vb6_ComPackBSTR(s)`。这和 §11.142 那条「判据只信已经发出来的文本」是同一句话。
+
+### 五、读数与判据面
+
+- 夹具 `tests/b162_byref_string_arg`（x64 = x86）：
+  `S1=5/hi-ok  S2=3/new  S3=0/[]  S4=4/keep  S5=4/loop  S6=3/-ok  S7=42  DONE`；
+  S4 是 ByVal 对照（服务端按值收，不回写），S5 是体里不改（串必须完好），S7 是数值那六档对照。
+- 外部 typelib 那一档另用 `Scripting.FileSystemObject` 对表：`FileExists` / `GetFileName`
+  正常、串不丢、连发两次稳定。
+- 两道门同步到七档：`check_byref_scalar_writeback.ps1` 的 R3/R4（入槽/出站 switch 各 7 条）、
+  `check_byref_arg_pack_authority.ps1` 的 R1（六枚 Ref 打包器）/R3（第六档映射）/R5
+  （vbp 夹具两格）。
+- 清单 832→834（1365 行）；九门 9/9；CI **22/22**（run 45497421693，sha `ac7fd7d0`）。
+
+### 六、在册（本刀之后仍在）
+
+- 引用形只认「裸标识符 / me->字段」这一形状：`o.M arr(i)`、`o.M box.S` 这类实参仍按值发，
+  写回不回来（VB6 会回来）—— 要收这一族得先给「数组元素/成员访问」一个可取址的发射形。
+- 无 typelib 的**外部** VB6 ActiveX DLL 收 ByRef String 时，本刀按「值」发（与改前同形）：
+  写回仍然不回来。要收它得有一条真正可靠的「对端是本仓服务端」之外的分辨法。
+- 入槽那一份副本在「同一发里别的实参换算失败」时会漏一枚串（该路径已报错退出），记小额。
