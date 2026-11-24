@@ -8089,3 +8089,110 @@ C 臂必须两枚持有者都在：改前 C 那一枚从头到尾没被退（`Z`
   `vb6_VariantToLong(vb6_ComGetIntProp(h2, L"V"))` —— 属性读的交回值已经是 `int32_t`，
   外面再套一层 `VariantToLong` 是 C2440（编译不过，不是运行期错）。这一格还没开门，
   只是记在册。
+
+## §11.135（第一百五十四刀）晚绑定属性写口的工程类实参
+
+### 一、怎么撞上的
+
+上一刀收尾时在册里留了一句：`Set c->f = o`（`o` 是 `As Variant` **形参**）仍走浅拷贝。
+照那条去量 —— 先造一枚最小探针（`.temp/k154/p1`）：`B154Box` 有
+`Property Set Item(ByVal it As B154Item)`，主程序两腿，早绑定 `Set box.Item = it` 与
+晚绑定 `Set o.Item = it`（`o` 是 `As Object`，值来自 `Set o = box`）：
+
+```
+A1-held=11     ← 早绑定: 存住了
+B1-held=0      ← 晚绑定: 读回 Nothing
+Z-terms=1
+```
+
+读数不是"晚一点"或"少一枚引用"，是**整枚对象被丢了**。加一枚探针打印
+（`C3_DBG_PUTARG`，量完即撤）能看到服务端那一侧：
+
+```
+[PUTARG] mem=Item ik=8 argc=1 [0]vt=9 p=0000015ED57FE380 want[0]=9
+```
+
+`vt=9`（VT_DISPATCH）、`want[0]=9` ⇒ `vb6_ComArgNormalize` 走的是"同档借用"那一支，
+换算什么都没丢；实参进了适配器，出了适配器就成 NULL 了。
+
+### 二、根因：适配器剥壳那一问只认包装器
+
+工程类的 Property Set 在 `com_entry.c` 里落成一枚适配器，工程类 ByVal 形参那一臂是：
+
+```c
+provided = "(vb6_cls_X*)vb6_ComObject_GetInstance(((VARIANT*)args[0])->pdispVal)";
+```
+
+`vb6_ComObject_GetInstance` 的语义是「**我们自己的包装器** → 裸实例，其余答 NULL」。
+而**同一工程内**的调用点递给 `vb6_ComSetRef` 的是一枚**裸实例**
+（`vb6_ComSetRef(o, L"Item", it)`，`it` 本身就是 `vb6_cls_B154Item*`，从没包装过）
+⇒ 剥壳答 NULL ⇒ 服务端形参收到 `Nothing` ⇒ 属性写把整枚对象丢掉，`S_OK` 照常返回。
+
+判据的**另一口径**早就住在 RTL 里：
+
+```c
+void* vb6_ComObject_UnboxVb6Instance(void* v) {
+    if (!vb6_ComObject_IsVb6Wrapper(v)) return v;   /* 非包装器: 原样交回 */
+    void* inst = vb6_ComObject_GetInstance(v);
+    return inst ? inst : v;
+}
+```
+
+（它的注释写着：For Each 项目类那一路、`cgen_com.cpp` 那些调用点用的就是它。）
+适配器换用它：
+
+```c
+provided = "(vb6_cls_X*)vb6_ComObject_UnboxVb6Instance(((VARIANT*)args[0])->pdispVal)";
+```
+
+一处改，写口（Property Set）与**所有**带工程类 ByVal 形参的公开方法一起修好 ——
+适配器是它们共用的那一格。
+
+### 三、读数
+
+新夹具 `tests/b154_late_prop_set`（九针），x64 与 x86 同值:
+
+| 针 | 改前 | 改后 | 意思 |
+|---|---|---|---|
+| `A1-nothing` | False | False | 早绑定写口对照 |
+| `A2-held` | 11 | 11 | 同上 |
+| `B1-nothing` | **True** | **False** | 晚绑定写口存住了 ← 判据 |
+| `B2-held` | **-1** | **11** | 同上（-1 是夹具里"槽是 Nothing"的记号） |
+| `C1-nothing` | True | False | 放掉调用方那一枚后盒子还握着 |
+| `C2-held` | -1 | 11 | 同上 |
+| `Z-terms` | 1 | 1 | 盒子放手 ⇒ 字段出厂放手 ⇒ item Terminate |
+| `Z-made` | 1 | 1 | — |
+
+`Z` 两档同值不是"本刀没动它"，而是改前那一枚**从没进过盒子**（调用方一放手就 Terminate），
+改后是**盒子握着、随盒子出厂**才 Terminate —— 次数一样，路径不同，`B`/`C` 那一对才是判据。
+
+第一次推送时 CI 在这个夹具上红了两处（x64/x86 各一），原因不在语义：
+夹具打印的是 `A1-nothing=…`，而针写成 `B154-A1-nothing=…`。给输出补上前缀后重推。
+
+### 四、发码面
+
+- 清单 **820 行**（818 + 新夹具两行）；
+- 本刀那一行改在**项目级** `com_entry.c`（适配器），不在清单覆盖的逐输入产物里 ⇒
+  既有 818 行零移动（除 6 行机器侧在册），`cmp.ps1` 只列那 6 行；
+- 九门 9/9 rc=0（`inputs=820 [.vbp=308 .bas=512]`）；相邻桥夹具 b144…b153 读数逐条不变；
+- CI 22/22（`1ada4d7e`）。
+
+### 五、在册（本刀量到、未修）
+
+- **工程类属性置空那一站**：`Set box.Item = Nothing` 发成
+
+  ```c
+  vb6_ReleaseObject((void**)(&(void*){vb6_B154Box_prop_get_Item(box)}));  /* Set Nothing */
+  ```
+
+  拿 **getter** 的返回值去 Release —— `prop_set_Item` 一次都没调，属性没被清空
+  （探针里 `B0-cleared` 一直是 False）。`Fix 056b` 那条改写只认 `prop_set_` / `prop_let_`
+  前缀，而 `emitExpr` 给属性左值发的是 `prop_get_Item(box)` ⇒ 前缀对不上，落到下面
+  "对调用结果 Release"那条通用路。
+- **晚绑定读带类型的属性**：`o.Held`（`Property Get Held() As Long`）发成
+  `vb6_CStrLong(vb6_ComGetStringProp(o, L"Held"))` —— 用 **String** 那一枚读臂读 Long，
+  读回垃圾（实测 `B3-late-held=595138088`）。写口修好之后，这一格是同一族里剩下的一半。
+- `Set c->f = o`（`o` 是 `As Variant` **形参**）仍走 `vb6_VariantFromValue` 浅拷贝
+  （`setcls` 那格形状针钉着它）—— 参数槽与字段槽两笔账。
+- `§11.110` 值侧打包、`.temp/k150/p4` 的 V2 记账照旧在册。
+
