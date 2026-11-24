@@ -726,6 +726,18 @@
                     tgtDbl75 = (knownDoubleVars_.count(t75) != 0);
                 }
                 if (tgtDbl75) {
+                    // 账 #305 §11.140 (第一百五十八刀): 右值已经是**裸 double** 时不再走 BSTR 那一支。
+                    //
+                    // 撞见的形态 (`.temp/k159/p1`, `Property Get S() As String` = "101"):
+                    //     d = o.S  →  vb6_Dbl_AssignFromBSTR(&d, vb6_ComGetDoubleProp(o, L"S"))
+                    //     → **C2440**: double 转不成 BSTR。
+                    // 两支各说一套: 读口按**目标**档 (Double) 发 DoubleProp，而这一支按**声明**档
+                    // (String) 把值当 BSTR 准备去折。与 §11.139 同一条纪律: 判据只认已经发出来的
+                    // 那一段文本（真实类型），不信"它应该是什么"。
+                    if (isScalarComReadText(value)) {
+                        c_.emitLine(target + " = " + value + ";");
+                        return;
+                    }
                     c_.emitLine("vb6_Dbl_AssignFromBSTR(&" + target + ", " + value + ");");
                     return;
                 }

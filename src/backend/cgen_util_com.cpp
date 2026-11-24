@@ -589,17 +589,39 @@ std::string CCodeGen::resolveComValue(const std::string& unpackType) {
 
     std::string getPropArgs = objExpr + ", L\"" + memberName + "\"";
 
-    if (unpackType == "BSTR") {
+    // 账 #305 §11.140 (第一百五十八刀): 成员**声明为浮点档**、目标又是数值档 ⇒ 读口发 DoubleProp。
+    //
+    // 撞见的形态 (`.temp/k159/p1`, `Property Get D() As Double` = 1.5):
+    //     n = o.D  →  vb6_ChkLong(vb6_FltToLng(vb6_ComGetIntProp(o, L"D")))
+    // 读口按目标档 (Long) 发 IntProp，RTL 内 `VariantChangeType(…, VT_I4)` **当场截断**
+    // (1.5 → 1)；consumer 那侧的 FltToLng 再圆也圆不回来 —— 真 VB6 是 CInt(1.5) = **2**。
+    // 截断发生在读口，所以只能由读口让路：浮点档一律交回 double，取整留给 consumer
+    // (与 §11.137 "已是 BSTR 的不再折" 同一个方向 —— 谁的型别谁说话)。
+    // Variant/Object/LongPtr 三档不接管：它们要的不是数值宽度，改了就是另一种病。
+    std::string unpackEff = unpackType;
+    if (unpackEff == "Int" || unpackEff == "Long" || unpackEff == "Boolean"
+        || unpackEff == "Double" || unpackEff == "Single") {
+        const Symbol* ms140 = symTab_.lookupModule(memberName);
+        if (ms140 && (ms140->type == Vb6Type::Double || ms140->type == Vb6Type::Single
+                      || ms140->type == Vb6Type::Currency || ms140->type == Vb6Type::Date)) {
+            unpackEff = "Double";
+        }
+        // 声明为 **String** 的成员不在这条里：读口若改成 BSTR，consumer 各站并不会折数
+        // (实测 `n = o.S` 变成 `vb6_ChkLong(<BSTR>)` —— 指针当整数，运行期报 6)。
+        // 那一族要 consumer 侧配合，另开一刀。
+    }
+
+    if (unpackEff == "BSTR") {
         lastExpr_ = "vb6_ComGetStringProp(" + getPropArgs + ")";
-    } else if (unpackType == "LongPtr") {
+    } else if (unpackEff == "LongPtr") {
         lastExpr_ = "vb6_ComGetLongPtrProp(" + getPropArgs + ")";
-    } else if (unpackType == "Int" || unpackType == "Long" || unpackType == "Boolean") {
+    } else if (unpackEff == "Int" || unpackEff == "Long" || unpackEff == "Boolean") {
         lastExpr_ = "vb6_ComGetIntProp(" + getPropArgs + ")";
-    } else if (unpackType == "Double" || unpackType == "Single") {
+    } else if (unpackEff == "Double" || unpackEff == "Single") {
         lastExpr_ = "vb6_ComGetDoubleProp(" + getPropArgs + ")";
-    } else if (unpackType == "Object") {
+    } else if (unpackEff == "Object") {
         lastExpr_ = "vb6_ComGetObjectProp(" + getPropArgs + ")";
-    } else if (unpackType == "Variant") {
+    } else if (unpackEff == "Variant") {
         // P24-02: COM属性返回原生VARIANT(如dic.Keys/dic.Items返回SAFEARRAY)
         lastExpr_ = "vb6_VariantFromComResult(vb6_ComCall(" + objExpr + ", L\"" + memberName + "\", NULL, 0))";
     } else {

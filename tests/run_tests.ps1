@@ -12510,6 +12510,16 @@ $b158Needles = @(
 "B158-L1=11", "B158-L2=12", "B158-L3=11", "B158-L4=42", "B158-L5=8/42", "B158-DONE")
 Test-Vbp 'b158_late_variant_prop_read' "$Tests\b158_late_variant_prop_read\B158Res.vbp" $b158Needles
 Test-Vbp 'b158_late_variant_prop_read_x86' "$Tests\b158_late_variant_prop_read\B158Res.vbp" $b158Needles -Arch "x86"
+# 账 #305 §11.140 (第一百五十八刀): 成员声明为浮点/串档时，读口不与 consumer 各说一套。
+# 改前三笔真账（B159Box: S As String = "101" / D As Double = 1.5）：
+#   `d = o.S`  → `vb6_Dbl_AssignFromBSTR(&d, vb6_ComGetDoubleProp(...))` = **C2440**
+#   `n = o.S + 1` → `vb6_CStrDbl(vb6_Val(vb6_ComGetIntProp(...)) + 1)` = **运行期 AV**
+#   `n = o.D`  → `FltToLng(ComGetIntProp(...))` 先被 ChangeType 截断 = 1（VB6 要 2）
+$b159Needles = @(
+"B159-S1=101", "B159-S2=102", "B159-S3=101", "B159-S4=1.5", "B159-S5=2",
+"B159-S6=8/101", "B159-S7=77", "B159-Z-terms=1", "B159-DONE")
+Test-Vbp 'b159_late_decl_typed_read' "$Tests\b159_late_decl_typed_read\B159Res.vbp" $b159Needles
+Test-Vbp 'b159_late_decl_typed_read_x86' "$Tests\b159_late_decl_typed_read\B159Res.vbp" $b159Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
