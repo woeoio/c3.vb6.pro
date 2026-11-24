@@ -550,8 +550,8 @@ HRESULT vb6_ComArgNormalize(const VARIANT *src, VARTYPE want, void *slot, VARIAN
  * 以前失败一律报 DISP_E_TYPEMISMATCH，于是收窄越界（`o.I = 40000` 进 Integer 形参）
  * 在客户端被折成 13「类型不匹配」，而真 VB6 报 **6 Overflow** 且目标不变。
  * 失败那一瞬读回（同一 STA 线程、同一个循环里），不要当跨调用状态用。 */
-void vb6_ComArgNormalizeSetLastHr(HRESULT hr);
-HRESULT vb6_ComArgNormalizeLastHr(void);
+void vb6_ComArgNormLastHrSet(HRESULT hr);
+HRESULT vb6_ComArgNormLastHr(void);
 
 /* 账 #305 §B224 (第二百三十八刀): 「VARIANT → 目标档」这一问的唯一出口(定义在 vb6rtl_com.c)。
  * 除了一档之外全交 oleaut32 的 VariantChangeType；那一档是**布尔转字符串**：

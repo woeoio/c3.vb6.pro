@@ -392,7 +392,7 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
                     /* 账 #305 §11.142 (第一百六十刀): 失败那一问不再一律报 DISP_E_TYPEMISMATCH ——
                      * 换不动的**原因**归换算函数答：收窄越界是 DISP_E_OVERFLOW（真 VB6 报 6 Overflow，
                      * `.temp/k161/p1` 实测 `o.I = 40000`），其余仍是 TYPEMISMATCH（13）。 */
-                    argErrHr = vb6_ComArgNormalizeLastHr();
+                    argErrHr = vb6_ComArgNormLastHr();
                     argErrSlot = i;
                     break;
                 }

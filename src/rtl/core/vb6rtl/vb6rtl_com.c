@@ -1170,8 +1170,8 @@ HRESULT vb6_ComChangeType(VARIANT *dest, const VARIANT *src, VARTYPE want) {
  * 服务端 Invoke 在换算失败那一瞬就读回去（就在同一个 STA 线程、同一个循环里），
  * 所以一枚静态就够；不要把它当「跨调用状态」用。 */
 static HRESULT g_vb6_argNormErrHr = DISP_E_TYPEMISMATCH;
-void vb6_ComArgNormalizeSetLastHr(HRESULT hr) { g_vb6_argNormErrHr = hr; }
-HRESULT vb6_ComArgNormalizeLastHr(void) { return g_vb6_argNormErrHr; }
+void vb6_ComArgNormLastHrSet(HRESULT hr) { g_vb6_argNormErrHr = hr; }
+HRESULT vb6_ComArgNormLastHr(void) { return g_vb6_argNormErrHr; }
 
 HRESULT vb6_ComArgNormalize(const VARIANT *src, VARTYPE want, void *slot, VARIANT *scratch) {
     VariantInit(scratch);
@@ -1185,7 +1185,7 @@ HRESULT vb6_ComArgNormalize(const VARIANT *src, VARTYPE want, void *slot, VARIAN
             /* 账 #305 §11.142 (第一百六十刀): 换不动的**原因**要带出去 —— 收窄越界是
              * DISP_E_OVERFLOW(真 VB6 报 6)，其余仍是 TYPEMISMATCH(13)。以前一律折成 13，
              * 于是 `o.I = 40000`(Integer 形参) 在客户端被报成「类型不匹配」。 */
-            vb6_ComArgNormalizeSetLastHr(hrConv);
+            vb6_ComArgNormLastHrSet(hrConv);
             return hrConv;
         }
     }
