@@ -12455,6 +12455,19 @@ $b153Needles = @(
 "B153-B1-len=1", "B153-B2-len=4", "B153-C1-terms=2", "B153-DONE")
 Test-Vbp 'b153_variant_field_teardown' "$Tests\b153_variant_field_teardown\B153Res.vbp" $b153Needles
 Test-Vbp 'b153_variant_field_teardown_x86' "$Tests\b153_variant_field_teardown\B153Res.vbp" $b153Needles -Arch "x86"
+# 账 #305 §11.135 (第一百五十四刀): 晚绑定属性写口的工程类实参。
+# 调用点递的是**裸实例** (`vb6_ComSetRef(o, L"Item", it)`), 而 COM 适配器剥壳问的是
+# `vb6_ComObject_GetInstance`（只认包装器, 其余答 NULL）⇒ 服务端形参收到 Nothing,
+# 属性写静默丢掉整枚对象。改后问 `vb6_ComObject_UnboxVb6Instance`（非包装器原样交回）。
+#   A: 早绑定写口对照（两条路径都必须存住）
+#   B1/B2: 晚绑定 `Set o.Item = it` 之后 `ItemIsNothing=False` 且读回 11（改前 True / -1）
+#   C1/C2: 放掉调用方那一枚后盒子还握着（False / 11）
+#   Z: 盒子放手 ⇒ 字段出厂放手 ⇒ item Terminate = 1（改前也 1: 那一枚从没进过盒子）
+$b154Needles = @(
+"B154-A1-nothing=False", "B154-A2-held=11", "B154-B1-nothing=False", "B154-B2-held=11",
+"B154-C1-nothing=False", "B154-C2-held=11", "B154-Z-terms=1", "B154-Z-made=1", "B154-DONE")
+Test-Vbp 'b154_late_prop_set' "$Tests\b154_late_prop_set\B154Res.vbp" $b154Needles
+Test-Vbp 'b154_late_prop_set_x86' "$Tests\b154_late_prop_set\B154Res.vbp" $b154Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

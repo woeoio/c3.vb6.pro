@@ -410,9 +410,18 @@
                     // "Variant 槽"整份 VARIANT 结构透传, 而定义侧形参是 vb6_cls_X* ⇒
                     // C2440 (实测 com_entry.c 的 vb6_DemoHolder_Wire)。这里剥出实例指针
                     // 再交出去, 与**调用点**那条直传路径同一个口径。
+                    //
+                    // 账 #305 §11.135 (第一百五十四刀): 剥壳那一问的**另一个口径**。
+                    // 上面这两个站点过去一律问 vb6_ComObject_GetInstance —— 它只认我们自己的
+                    // 包装器 (其余答 NULL)。而**同一工程里**的调用点递进来的是一枚裸实例
+                    // (`vb6_ComSetRef(o, L"Item", it)`, it 是 vb6_cls_X*), 不是包装器 ⇒ 剥壳
+                    // 答 NULL ⇒ 服务端形参收到 Nothing, 属性写**静默丢掉整枚对象**:
+                    // 实测 .temp/k154/p1 (Set o.Item = it 之后 box.Held 读回 -1 = Nothing)。
+                    // 口径归 vb6_ComObject_UnboxVb6Instance: 包装器还原成裸实例, **非包装器
+                    // 原样交回** (与 cgen_com.cpp 那些调用点、For Each 项目类那一路同一个函数)。
                     const std::string cpCls = cParamClassPtrType(prm);
                     if (!cpCls.empty() && cpCls.compare(0, 8, "vb6_cls_") == 0) {
-                        provided = "(" + cpCls + ")vb6_ComObject_GetInstance("
+                        provided = "(" + cpCls + ")vb6_ComObject_UnboxVb6Instance("
                                    "((VARIANT*)args[" + idx + "])->pdispVal)";
                         missing = "NULL";
                     } else if (pType == Vb6Type::Long || pType == Vb6Type::Integer ||
