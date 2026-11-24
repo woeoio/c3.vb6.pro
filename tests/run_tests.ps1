@@ -12549,6 +12549,13 @@ $b162Needles = @(
 "B162-S5=4/loop", "B162-S6=3/-ok", "B162-S7=42", "B162-DONE")
 Test-Vbp 'b162_byref_string_arg' "$Tests\b162_byref_string_arg\B162Res.vbp" $b162Needles
 Test-Vbp 'b162_byref_string_arg_x86' "$Tests\b162_byref_string_arg\B162Res.vbp" $b162Needles -Arch "x86"
+# 账 #305 §11.144 (第一百六十二刀): 引用形不只裸标识符 —— 数组元素 / 类字段 / With 成员。
+# A6 是属性读（不可取址，仍按值 —— 在册），A8 是同一个元素连发两次（回写后槽仍是能用的串）。
+$b163Needles = @(
+"B163-A1=la-ok", "B163-A2=ma-ok", "B163-A3=new", "B163-A4=fs-ok",
+"B163-A5=ws-ok", "B163-A6=pt", "B163-A7=mg-ok", "B163-A8=tw-ok-ok", "B163-DONE")
+Test-Vbp 'b163_byref_addr' "$Tests\b163_byref_addr\B163Res.vbp" $b163Needles
+Test-Vbp 'b163_byref_addr_x86' "$Tests\b163_byref_addr\B163Res.vbp" $b163Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

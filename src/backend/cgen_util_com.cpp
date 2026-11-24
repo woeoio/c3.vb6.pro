@@ -1113,8 +1113,29 @@ std::string CCodeGen::comPackExpr(Expr& expr) {
 // 返回值 = 完整实参表达式 (空 = 保持改前的按值打包)。
 // 若该标识符是**本过程**的 ByRef 形参，C 侧它已经是 T*，直接交指针，不再取一次地址。
 std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText,
-                                      bool allowVariantRef) {
-    if (expr.kind != ASTNodeKind::IdentifierExpr) return "";
+                                      bool allowVariantRef, const std::string& packFn) {
+    /* 账 #305 §11.144 (第一百六十二刀): 数组元素与成员访问 —— 改前只认裸标识符 / `me->字段`，
+     * `o.Bump arr(i)` 与 `o.Bump box.S` 一律按值发，体里的写回落空。
+     * 判据只信**已经发出来的文本**（与 §11.142 同纪律），不看 inferExprType 的描述：
+     *   ① 数组元素发成 `VB6_SA_AT(BSTR, <载体>, <下标>)` —— 宏首参就是元素档，
+     *      而它就是一枚左值（`*(BSTR*)vb6_SaElemPtr(...)`），取址合法；
+     *   ② 成员访问发成 `<base>-><field>` 并跟一段「class var .<field> field」注释，
+     *      这里没有型可读，所以再问一格：**打包器已经答了 BSTR** (comPackExpr 的产物) 才算。
+     * 其余形一律交回调用点保持按值：属性读 (vb6_X_prop_get_Y(base))、控件默认属性折叠、
+     * 对象成员（`Db.Rs` 那种 voidptr 链）、数组本体都不在这一族。 */
+    if (expr.kind != ASTNodeKind::IdentifierExpr) {
+        static const std::regex arrElemRe(
+            R"(^VB6_SA_AT\(BSTR,\s*[A-Za-z_][A-Za-z0-9_]*,\s*[^;]+\)$)");
+        if (std::regex_match(argText, arrElemRe)) {
+            return "vb6_ComPackBSTRRef(&" + argText + ")";
+        }
+        static const std::regex memberRe(
+            R"(^[A-Za-z_][A-Za-z0-9_]*(?:->[A-Za-z_][A-Za-z0-9_]*)+(?:\s*/\* (?:class var|With class) \.[A-Za-z_][A-Za-z0-9_]* field \*/)?$)");
+        if (packFn == "vb6_ComPackBSTR" && std::regex_match(argText, memberRe)) {
+            return "vb6_ComPackBSTRRef(&(" + argText + "))";
+        }
+        return "";
+    }
     auto& id = static_cast<const IdentifierExpr&>(expr);
     std::string lower = Symbol::toLower(id.name);
     // 富贵竹 FIX-011 (账 #610 第341刀): Variant 实参从「直接放弃 → 按值打包 →

@@ -1275,8 +1275,11 @@
     // 口径见实现处注释: 简单 lvalue + 数值/布尔五档, 按 C 存储宽度选 VT_BYREF|<型>。
     // allowVariantRef: 富贵竹 FIX-011 (账 #610 第341刀) —— 只在早绑定已知签名且
     // 该形参非 ByVal 的调用点开启; 晚绑定无签名一路保持按值 (保守, 不把入参变可写)。
+    // packFn: 账 #305 §11.144 (第一百六十二刀) —— 调用点已经把这块实参的打包器算出来了，
+    // 成员访问那一形只能靠它说话（发射文本里只有字段名、没有型）。
     std::string comByRefArgExpr(Expr& expr, const std::string& argText,
-                                bool allowVariantRef = false);
+                                bool allowVariantRef = false,
+                                const std::string& packFn = std::string());
 
     // 账 #256: 「这枚裸控件名会不会被折成默认属性读数、折出来是什么 VB 型」只此一处回答。
     // 两个消费点共用它：标识符发码那条路拿 readFn/prop/ctrlType 去发 `readFn(句柄)`，
