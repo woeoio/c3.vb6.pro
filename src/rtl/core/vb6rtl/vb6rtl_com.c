@@ -1166,14 +1166,28 @@ HRESULT vb6_ComChangeType(VARIANT *dest, const VARIANT *src, VARTYPE want) {
  * 对端那份资源一个字节都不动，产物住在调用方给的 scratch 里由调用方回收。
  * 同档那一发也刻意不调换算：槽里那一份是 §B144 的借用，本来就正确，多走一趟反而会把
  * 借来的指针换成我们自己的副本(就没人回收了)。 */
+/* 账 #305 §11.142 (第一百六十刀): 上一趟换算失败的原因。
+ * 服务端 Invoke 在换算失败那一瞬就读回去（就在同一个 STA 线程、同一个循环里），
+ * 所以一枚静态就够；不要把它当「跨调用状态」用。 */
+static HRESULT g_vb6_argNormErrHr = DISP_E_TYPEMISMATCH;
+void vb6_ComArgNormalizeSetLastHr(HRESULT hr) { g_vb6_argNormErrHr = hr; }
+HRESULT vb6_ComArgNormalizeLastHr(void) { return g_vb6_argNormErrHr; }
+
 HRESULT vb6_ComArgNormalize(const VARIANT *src, VARTYPE want, void *slot, VARIANT *scratch) {
     VariantInit(scratch);
     if (want == VB6_ARGVT_SKIP) return S_OK;   /* 这一格不问，也不许顺手清一下 */
     if (!src || src->vt == want) return S_OK;  /* 同档：借用就是答案 */
     /* 账 #305 §B224: 目的档是 BSTR 时口径归 VB 语言(布尔答 True/False)，见 vb6_ComChangeType。 */
-    if (FAILED(vb6_ComChangeType(scratch, src, want))) {
-        VariantInit(scratch);
-        return DISP_E_TYPEMISMATCH;
+    {
+        const HRESULT hrConv = vb6_ComChangeType(scratch, src, want);
+        if (FAILED(hrConv)) {
+            VariantInit(scratch);
+            /* 账 #305 §11.142 (第一百六十刀): 换不动的**原因**要带出去 —— 收窄越界是
+             * DISP_E_OVERFLOW(真 VB6 报 6)，其余仍是 TYPEMISMATCH(13)。以前一律折成 13，
+             * 于是 `o.I = 40000`(Integer 形参) 在客户端被报成「类型不匹配」。 */
+            vb6_ComArgNormalizeSetLastHr(hrConv);
+            return hrConv;
+        }
     }
     vb6_VariantBorrowIntoSlot(scratch, slot);
     return S_OK;

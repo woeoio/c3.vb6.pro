@@ -270,7 +270,15 @@ std::string CCodeGen::cDispatchArgVt(const ParameterInfo& p) {
     // VB6 的 Boolean 真值是 -1 (与本仓 vb6_CBool 同口径)，而 "数值 → Boolean 形参"
     // 在 VB6 里是一次 CBool 换算（非零即 -1）。借 VT_I4 就地透传等于跳过这次换算。
     if (t == Vb6Type::Boolean) return "VT_BOOL";
-    if (t == Vb6Type::Long || t == Vb6Type::Integer || t == Vb6Type::Byte) return "VT_I4";
+    // 账 #305 §11.142 (第一百六十刀): Integer/Byte 不再借 VT_I4 就地透传。
+    // 撞见的形态 (`.temp/k161/p1`, `Property Let I(ByVal x As Integer)`, 先置 7):
+    //     o.I = 40000  →  静默存成 **-25536**；真 VB6 报 **错误 6 Overflow** 且目标不变。
+    // 借 VT_I4 等于把那一次收窄换算整段跳过。改成 VT_I2/VT_UI1 后，换算由
+    // vb6_ComArgNormalize 做（VariantChangeType 越界答 DISP_E_OVERFLOW，客户端把它
+    // 折成 VB 6）；读臂同时改读 iVal/bVal，否则读 lVal 会读到高位的垃圾字节。
+    if (t == Vb6Type::Integer) return "VT_I2";
+    if (t == Vb6Type::Byte) return "VT_UI1";
+    if (t == Vb6Type::Long) return "VT_I4";
     if (t == Vb6Type::Double || t == Vb6Type::Single) return "VT_R8";
     if (t == Vb6Type::String) return "VT_BSTR";
     if (t == Vb6Type::Object) return "VT_DISPATCH";

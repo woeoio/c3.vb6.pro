@@ -343,6 +343,7 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
     void* coercedArgs = NULL;   /* 槽阵列, 每槽 vb6_VarSlot */
     VARIANT* scratch = NULL;    /* 账 #305 §B219: 换算产物住这里, 服务端在收尾那一臂回收 */
     int argErrSlot = -1;        /* 账 #305 §B219: 换算不动的那一枚(声明序下标), -1 = 没有 */
+    HRESULT argErrHr = DISP_E_TYPEMISMATCH;   /* §11.142: 那一枚换不动的原因 (越界 ⇒ DISP_E_OVERFLOW) */
 
     if (argc > 0) {
         args = (void**)CoTaskMemAlloc(argc * sizeof(void*));
@@ -388,6 +389,10 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
                 VARIANT* src = &pDispParams->rgvarg[argc - 1 - i];
                 vb6_VarSlot* slot = &((vb6_VarSlot*)coercedArgs)[i];
                 if (FAILED(vb6_ComArgNormalize(src, method->paramVts[i], slot, &scratch[i]))) {
+                    /* 账 #305 §11.142 (第一百六十刀): 失败那一问不再一律报 DISP_E_TYPEMISMATCH ——
+                     * 换不动的**原因**归换算函数答：收窄越界是 DISP_E_OVERFLOW（真 VB6 报 6 Overflow，
+                     * `.temp/k161/p1` 实测 `o.I = 40000`），其余仍是 TYPEMISMATCH（13）。 */
+                    argErrHr = vb6_ComArgNormalizeLastHr();
                     argErrSlot = i;
                     break;
                 }
@@ -466,7 +471,7 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
     /* 账 #305 §B219: 换算不动那一枚 —— pArgErr 交的是 **rgvarg 的下标**(逆序那一头), 不是声明序。 */
     if (argErrSlot >= 0) {
         if (puArgErr) *puArgErr = (UINT)(argc - 1 - argErrSlot);
-        return DISP_E_TYPEMISMATCH;
+        return argErrHr;
     }
     /* 账 #305 §B185: 收尾(上面那批回收)之后才交回错误 —— 顺序是硬要求。 */
     if (srvErrNum != 0)

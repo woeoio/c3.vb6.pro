@@ -12534,6 +12534,13 @@ $b160Needles = @(
 "B160-W6=-1", "B160-W7=42", "B160-W8=10", "B160-Z=2/3.5", "B160-DONE")
 Test-Vbp 'b160_late_bool_arg' "$Tests\b160_late_bool_arg\B160Res.vbp" $b160Needles
 Test-Vbp 'b160_late_bool_arg_x86' "$Tests\b160_late_bool_arg\B160Res.vbp" $b160Needles -Arch "x86"
+# 账 #305 §11.142 (第一百六十刀): 窄整型形参的入站收窄要有溢出语义。
+# 改前 Integer/Byte 借 VT_I4 就地透传 ⇒ `o.I = 40000` 静默存成 -25536（真 VB6 报错误 6且目标不变）。
+$b161Needles = @(
+"B161-I1=ok 4000", "B161-I2=err6 val=4000", "B161-I3=err6 val=4000",
+"B161-Y1=ok 200", "B161-Y2=err6 val=200", "B161-L1=ok 2000000000", "B161-DONE")
+Test-Vbp 'b161_narrow_arg_overflow' "$Tests\b161_narrow_arg_overflow\B161Res.vbp" $b161Needles
+Test-Vbp 'b161_narrow_arg_overflow_x86' "$Tests\b161_narrow_arg_overflow\B161Res.vbp" $b161Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

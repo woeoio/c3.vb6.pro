@@ -424,8 +424,16 @@
                         provided = "(" + cpCls + ")vb6_ComObject_UnboxVb6Instance("
                                    "((VARIANT*)args[" + idx + "])->pdispVal)";
                         missing = "NULL";
-                    } else if (pType == Vb6Type::Long || pType == Vb6Type::Integer ||
-                        pType == Vb6Type::Byte) {
+                    } else if (pType == Vb6Type::Integer) {
+                        // 账 #305 §11.142 (第一百六十刀): 槽是 **VT_I2**，读 `iVal`。
+                        // 仍读 `lVal` 会把 short 之外的三个字节一起读进来（高位垃圾）。
+                        provided = "((VARIANT*)args[" + idx + "])->iVal";
+                        missing = "0";
+                    } else if (pType == Vb6Type::Byte) {
+                        // 同上：槽是 **VT_UI1**，读 `bVal` (无符号单字节)。
+                        provided = "((VARIANT*)args[" + idx + "])->bVal";
+                        missing = "0";
+                    } else if (pType == Vb6Type::Long) {
                         provided = "((VARIANT*)args[" + idx + "])->lVal";
                         missing = "0";
                     } else if (pType == Vb6Type::Boolean) {
@@ -458,6 +466,8 @@
                     // ByRef: 传递VARIANT中的值指针
                     if (pType == Vb6Type::Long || pType == Vb6Type::Integer ||
                         pType == Vb6Type::Byte) {
+                        // ByRef **不归一化**（cDispatchArgVt 对 ByRef 一律答 VB6_ARGVT_SKIP）⇒
+                        // 槽里是调用方原标签那份，仍是 §11.142 之前那一口（&lVal）。
                         provided = "&((VARIANT*)args[" + idx + "])->lVal";
                         missing = "&(int32_t){0}";
                     } else if (pType == Vb6Type::Boolean) {

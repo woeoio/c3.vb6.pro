@@ -268,6 +268,13 @@ static int32_t vb6_HresultToErrNum(long hr) {
     case 0x8002000EUL: return 450;  // DISP_E_BADPARAMCOUNT  → 参数个数错误
     case 0x8002000FUL: return 449;  // DISP_E_PARAMNOTOPTIONAL → 参数不是可选的
     case 0x8002000BUL: return 451;  // DISP_E_BADINDEX       → 对象不是集合
+    /* 账 #305 §11.142 (第一百六十刀): 入站实参收窄换算越界。
+     * 撞见的形态 (`.temp/k161/p1`): `Property Let I(ByVal x As Integer)`，`o.I = 40000`。
+     * 真 VB6 报 **错误 6 Overflow** 且目标不变；之前那一格根本走不到这里
+     * （Boolean/Integer/Byte 都借 VT_I4 就地透传，40000 被静默存成 -25536），
+     * 本刀把 Integer/Byte 的入站归一化改回 VT_I2/VT_UI1，于是 oleaut32 答
+     * DISP_E_OVERFLOW —— 这里把它折成 VB 6（而不是交给 default 原样交负 hr）。 */
+    case 0x8002000AUL: return 6;    // DISP_E_OVERFLOW      → 溢出
     /* C30-11 后记（遗留问题①的第二个不一致）: E_INVALIDARG(0x80070057) 的低 16 位是 87，
      * 旧口径直接截低字 → 报出 87「参数错误」。真 VB 引擎读数（VBScript 晚绑定 scrrun）:
      *   files.Item(1) -> Err.Number = 5「无效的过程调用或参数」
