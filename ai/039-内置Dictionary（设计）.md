@@ -7928,3 +7928,164 @@ Fix 191 判据拦下 —— 非可分派只清指针、不解引用 `lpVtbl`，�
   是「两处各持一次」的记账，仍在册；
 - `As Variant` 字段的出厂：`vb6_VARIANT` 槽那一格本刀没动（`VariantClear` 会连 BSTR
   一起放，语料面比 `As Object` 大得多），另开一刀。
+
+## §11.134（第一百五十三刀）`As Variant` 字段的读写两站
+
+### 一、怎么撞上的
+
+上一刀（§11.133）收尾时明确记着「`As Variant` 字段的出厂本刀没动，另开一刀」。照那条
+接着做，先量 —— 读数却是**反的**：
+
+`.temp/k153` 的 A 臂（`Set h.V = it` → 放 `it` → 读回 → 放 `h`）在改前就已经
+`Z-terms=1`，item 明明走了一次 `Class_Terminate`。可是
+`vb6_cls_B153Holder_Destroy` 里一个字都没有（只有 `vb6_Free(me)`）。在
+`Class_Terminate` 里加一行打点之后真相出来了：
+
+```
+B153-A1-terms=0
+B153-A2-held-tag=5
+[b153-term tag=5]     ← 死在 Set got = Nothing 这一句, 不是死在持有者出厂
+B153-Z-terms=1
+```
+
+RC 账（item 包装器指针最后 6 位）：
+
+```
+INVOKE holder V argc=1      ← Set h.V = it
+ADDREF item cnt=2           ← 写口 VariantAssign 取的那一枚（槽持有）
+RELEASE item cnt=1          ← Set it = Nothing
+INVOKE holder V argc=0      ← Set got = h.V
+RELEASE item cnt=1 → 0      ← 改前: 读出去的那一枚**没有**取引用,
+                              放它就把槽里还握着的那一具拆了 ⇒ 槽里留悬垂
+```
+
+所以这里不是「漏」，是**悬垂**：①读出去那一枚 `Variant` 与字段**共用**同一个对象；
+②出厂那一站不清槽，槽随 `vb6_Free(me)` 一起消失时那一枚也彻底丢了。两站成对。
+
+### 二、改法 ①：读出去那一枚要取引用
+
+`V = mV`（Property Get 体，两边都是 Variant）改前发码：
+
+```c
+vb6_VariantClear(&vb6_ret_V);
+vb6_ret_V = vb6_VariantFromValue(me->mV);   /* ← _Generic 对 vb6_VARIANT 落 Identity 浅拷贝 */
+```
+
+`vb6_VariantFromValue` 对 `vb6_VARIANT` 实参落 `vb6_VariantIdentity`（纯浅拷贝:
+不 AddRef、不拷 BSTR）—— 这一格本身是**故意的**（函数返回 / 集合取回那些临时量靠它
+按值交回来，多拷一次就多一枚引用）。错在**站点把字段当成了「自有」**。
+
+判据住在一处（`variantRhsOwnsValue`，意思是「右值自己持有这份值吗 —— 那就不用再拷」）。
+改前它只把**本地** Variant 变量当槽:
+
+```cpp
+if (rhs && rhs->kind == ASTNodeKind::IdentifierExpr) {
+    if (knownVariantVars_.count(...name...) > 0) return false;
+}
+```
+
+类里的字段在 AST 里是一枚**裸 IdentifierExpr**（不带 `me->`），`knownVariantVars_`
+里没有它 ⇒ 落到 `return true`（「自有」）⇒ 浅拷贝。改后按**字段表**问两句:
+
+```cpp
+if (rhs && !exprHasLateBoundComRead(rhs)) {
+    if (rhs->kind == ASTNodeKind::IdentifierExpr) {
+        // 裸名 = 本模块字段 (隐式 me->): 问类成员表
+        if (classVariantMembers_.count(nm) || classVariantMembers_.count("m_" + nm))
+            return false;
+    } else if (rhs->kind == ASTNodeKind::MemberAccessExpr) {
+        // Me.f / <类引用>.f: 问 driver 注入的工程级字段档表
+        if (!cls.empty() && classFieldIsVariantSlot(cls, ma.memberName)) return false;
+    }
+}
+```
+
+口径一句话：**只有调用**（函数 / Property Get 交回的临时量）才「自有」；字段这些
+**槽**是借来的，必须深拷贝。改后发码:
+
+```c
+vb6_VariantAssign(&vb6_ret_V, vb6_VariantFromValue(me->mV));
+```
+
+**这一格第一版判错了门**：首版按「源码里长得像左值 + `inferExprType` 答 Variant」判
+（IdentifierExpr / MemberAccessExpr 一律算槽），本地六枚形状针位置都对，推上去
+CI 直接红六处 —— `cvp_emitc_variant_fallback`（`at.value` 那种晚绑定读）与
+b251/b252/b253/b254/b255（On Error 站的 `_vsN` 暂存）钉的正是**所有权转移**那一形:
+
+```
+missing: v = vb6_VariantFromComResult(vb6_ComGetProp(at, L"value"));
+missing: if (_e0 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _vs0; }
+missing: me->f = vb6_VariantFromValue(o);
+```
+
+晚绑定成员读交回的是一枚**新造**的 Variant（`vb6_VariantFromComResult` /
+`vb6_ComGet*Prop`），`_vsN` 是 On Error 站自己刚写进去的暂存 —— 两者都是「转移」，
+按槽判会变成「深拷贝 + 原来那一枚没人放」。于是加 `!exprHasLateBoundComRead(rhs)`
+这道门，并把「像左值」换成「查得到是一枚 Variant 字段」。六针恢复，b153 读数不变。
+
+### 三、改法 ②：出厂清槽
+
+`_Destroy` 的逐字段放手补一档（与 §11.133 的 `As Object` 同一处，判据换成
+`Vb6Type::Variant`）:
+
+```c
+vb6_VariantClear(&me->mV);  /* 账 #305 §11.134: Variant 字段出厂清槽 */
+```
+
+`vb6_VariantClear` 就是与写口 `vb6_VariantAssign` 成对的那一半（写口 Clear + 深拷贝，
+出厂清槽），对空槽是空转 —— 工厂里 `As Variant` 字段初始化就是 `vb6_VariantEmpty()`。
+
+### 四、新夹具 `tests/b153_variant_field_teardown`
+
+`B153Holder`：`Private mV As Variant` + Get/Let/Set 三站 + `PutText`（槽里放串）+
+`TextLen`（类内读回）。八枚针，x64 与 x86 同值:
+
+| 针 | 改前 | 改后 | 意思 |
+|---|---|---|---|
+| `A1-terms` | 0 | 0 | 写进槽、放掉局部变量后 item 仍被槽握着 |
+| `A2-held-tag` | 5 | 5 | 槽里读得回 |
+| `A3-terms` | **1** | **0** | 读回并放掉那一枚之后 item 仍活着 ← 悬垂那一条的判据 |
+| `Z-terms` | 1 | 1 | 放掉持有者 ⇒ 出厂清槽 ⇒ Terminate（改前是「早死」，不是「晚死」） |
+| `B1-len` | 1 | 1 | 槽里放标量 7，清槽不弄坏 |
+| `B2-len` | 4 | 4 | 槽里放串 `"abcd"` |
+| `C1-terms` | **1** | **2** | 两枚持有者各握一枚 ⇒ A(1)+C(1) ← 漏的判据 |
+| `DONE` | — | — | — |
+
+C 臂必须两枚持有者都在：改前 C 那一枚从头到尾没被退（`Z` 上只有 A 的 1），
+改后 C 结束在 `Set q = Nothing` 那一句（栈式记账: `New`(1) → p 槽(2) → q 槽(3) →
+`Set it2 = Nothing`(2) → p 出厂(1) → q 出厂(0)）。
+
+### 五、发码面
+
+- 全清单 **818 行**（816 + 新夹具两行）；
+- **14 行**随本刀改码: b168/b169/b170/b171/b172/b173 那一族槽夹具、`b433`、`setcls`、
+  `ve_list`、`ucSlider_2022`、`ucTreeView`、`Charts 2020`、`dbgdlg`、`VBFlexGridDemo`；
+- 既有 6 行机器侧（b132、ctrlmscomm、GUISample ×3、TeeChart）本机≠CI 差照旧不动 ——
+  用**改前编译器**逐行重算过: 这 6 行改前改后同值，本刀对它们零影响。
+
+记账口径补一句：首版把「像左值的 Variant 右值」全判成槽时，清单里有 41 行动；
+收窄到字段表之后只剩 14 行 —— 那 27 行的差**不是**本刀的语义，是首版判门过宽顺手
+带出来的（`test_late_*`、`dict_native` 这些正是靠「转移」才对的）。
+
+### 六、闸与连带
+
+- 九门 **9/9 rc=0**（`inputs=818 [.vbp=307 .bas=511]`，emitted=1574）；
+- 相邻桥夹具零回归: b144 九枚、b146 八枚、b147 十二枚、b148 十枚、b149 八枚、
+  b150 六枚、b151 八枚、b152 六枚读数逐条不变；
+- CI 22/22（`99511f8f`）。
+
+### 七、在册
+
+- `vb6_VariantFromValue` 对 `vb6_VARIANT` 实参仍是 `vb6_VariantIdentity`（浅拷贝）——
+  **本刀没动 RTL**：那一格是「临时量按值交回」用的，动它就多拷一枚引用。这一刀只把
+  「字段」这一族从它射程里挪出去（判据落在站点上，不住 RTL）；
+- 形如 `Set c->f = o`（`o` 是 `As Variant` **形参**）仍走 `vb6_VariantFromValue(o)`
+  浅拷贝 —— `setcls` 那格的形状针钉的就是它。参数槽与字段槽是两笔账，本刀只动了
+  读出口与出厂，写口的形参那一族另开一刀；
+- `§11.110` 值侧打包（`vb6_ComSetProp` 那一族 `vb6_ComPackObject` 给 AddRef 之后没人放）:
+  仍在册，要一枚真走 Pattern F 的靶；
+- `.temp/k150/p4` 的 V2 盒子记账（两处各持一次）仍在册，与本刀无关（读数前后同值）；
+- `.temp/k153/p1` 里记着一格: `n = h2.V`（晚绑定读 Variant 属性直接赋给 Long）会发
+  `vb6_VariantToLong(vb6_ComGetIntProp(h2, L"V"))` —— 属性读的交回值已经是 `int32_t`，
+  外面再套一层 `VariantToLong` 是 C2440（编译不过，不是运行期错）。这一格还没开门，
+  只是记在册。
