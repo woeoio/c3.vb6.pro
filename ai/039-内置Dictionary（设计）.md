@@ -7795,3 +7795,136 @@ vb6_ReleaseObject((void**)&_rrv0);   /* 语句末收回 */
 （`Set c = q.Child` … `Set q.Child.Held = it`）仍多留一枚；把释放顺序对调（先放 `c` 再链写）
 或写完之后才取子对象，都干净 —— 说明那是「两处各持一次」的记账而不是悬垂
 （链写之后 `Set h = c.Held` 照旧读得到 `tag=9`）。另：写口打包那一枚（`§11.110`）也仍在册。
+
+## §11.133（第一百五十二刀）`As Object` 字段出厂那一枚引用
+
+### 一、怎么撞上的
+
+§11.132 收工后，b149/b150/b151 的最后一行读数还停在 `Z-item-terms=0`：item 造出来、
+写进字段、局部变量也放掉了，可它**一次 Terminate 都没走**。前两把刀都把这枚记在
+`§11.110`（「`Set` 值侧只 `free` 结构体不清内容」）名下。这一刀把它拆开看：
+
+尺子 `.temp/k152/p10`（同一夹具两臂，每臂都在干净状态起）：
+
+| 臂 | 形状 | 改前 item-terms | 改后 |
+|---|---|---|---|
+| s | 单层写 `Set q.Held = it` → 放 `it` → 放 `q` | 0 | **1** |
+| t | 链写 `Set q.Child.Held = it` → 放 `it` → 放 `q` | 0 | **2** |
+
+`C3_COM_RC_TRACE=1` 下 item 那一枚包装器的进出账（单层那一臂，指针取末 6 位）：
+
+改前 —— `ADDREF cnt=2` / `RELEASE cnt=1`，少一发：
+
+```
+[189] FROM-INST W=…EC40B0 inst=…EB7D70 cls=B151Item
+[189] ADDREF  W=…EC40B0 cnt=2        ← Set it = Nothing 之前: 字段那一枚
+[189] RELEASE W=…EC40B0 cnt=1 owns=1 ← Set it = Nothing 放手
+[189] INVOKE  W=…EC48F0 cls=B151Box mem=Held argc=1
+        …放 q → Class_Terminate 走了, 但没有 item 的 RELEASE
+```
+
+改后 —— 同一臂 `ADDREF 2 / RELEASE 2`，最后一发是持有者出厂时字段放的那一下：
+
+```
+[189] RELEASE W=…EC48F0 cnt=0 owns=1 inst=…EB2880   ← 持有者出厂
+[189] RELEASE W=…EC40B0 cnt=0 owns=1 inst=…EB7D70   ← 字段那一枚（新）
+```
+
+即：写口那一枚**没有多 AddRef**（`vb6_ComSetRef` 那条路不打包，见 §11.129 末尾），
+缺的是**出厂**这一站 —— 前两把刀把账记错了行。这一刀纠正账面：
+`§11.110` 的「值侧打包」依然在册（`vb6_ComSetProp` 那一族，要一枚真走到 Pattern F 的靶），
+但 b149/b150/b151 的 `Z-item-terms` **不是它**，是字段出厂。
+
+### 二、改法
+
+`_Destroy`（`cgen_com.cpp`）逐字段做出厂时，三段判据只认得：数组、`String`、
+以及 `projectClsStructOfCType(mapTypeRef(...))` 答得出 `vb6_cls_X*` 的**类类型字段**。
+`As Object` / `As Collection` / 外部接口在 C 里是裸 `void*`，答不出类结构体 ⇒ 整支不出现在
+出厂体里。改前发码（`tests/b152_object_field_teardown` 的 `vb6_cls_B152Holder_Destroy`）：
+
+```c
+void vb6_cls_B152Holder_Destroy(vb6_cls_B152Holder* me) {
+    int32_t vb6_termErr = 0;
+    if (!me) return;
+    vb6_termErr = vb6_RunVbProtected((void(*)(void*))vb6_B152Holder_Class_Terminate, me);
+    vb6_Free(me);                       /* mHold / mSelf 一格都没出现在这里 */
+    ...
+}
+```
+
+改后同体多出一行（字段名按声明序，与腿②/腿③ 同一个问句）：
+
+```c
+    vb6_ReleaseObject((void**)&me->mHold);  /* 账 #305 §11.133: As Object 字段出厂放手 */
+```
+
+判据不开第二问：`projectClsStructOfCType(mapTypeRef(...))` 那一问照旧（类类型字段走原路），
+答不出类结构体时再问一句**声明名是不是字面量 `Object`**（`isObjectTypeName`，同一个文件里的
+静态小函数，六个字母大小写不敏感）。是，就发：
+
+```c
+    vb6_ReleaseObject((void**)&me->mHold);  /* 账 #305 §11.133: As Object 字段出厂放手 */
+```
+
+**闸只那一把字面量 `Object`**，不是「所有落 `void*` 的字段」—— 这一条是首推（`0b862965`）
+三红换来的：那一版按 `Vb6Type::Object || C 类型 == "void*"` 放闸，于是 `As <工程接口>`
+的字段（k175 的 `m_lv`，语义上是 `&instance->__iv_IK175` 那枚**视图**）也被写进了出厂体，
+而视图那一枚从来没 AddRef 过 ⇒ 出厂 Release 就是越权调用。三红各自的读数：
+
+| 红的作业 | 读数 | 根因 |
+|---|---|---|
+| `Tests (vbp #6)` | `[EMITC-ABSENT] k175_viewstmt_com_fallback_gone ... 还在场: vb6_ReleaseObject((void**)&me->m_lv)` | 正是上面那一条：k175 那条 absent 针原本钉的就是「旧晚绑定 fallback 不认得视图字段」，新行撞上了它 |
+| `Tests (compile #2)` | `CLASS-REFCOUNT-AUTHORITY FAIL - mapTypeRef(var.asType.get()) question sites = 7 (want exactly 6)` | 新分支多问了一次 `mapTypeRef`，破的是「同一问只有六处」那条普查 |
+| `Emit manifest (shape oracle)` | `tests/b132_typedcom_local_scope/B132Typed.vbp` 一行（本机 17448 / CI 17429） | b132 有 `Public K As Object`，本刀确实改了它；机器侧差异按 CI 那份登记 |
+
+**裸实例那一格**（`Set mSelf = Me` 之类，见 §11.126）由 `vb6_ReleaseObject` 自己的
+Fix 191 判据拦下 —— 非可分派只清指针、不解引用 `lpVtbl`，所以新加的这一行不会把
+「裸实例」当接口调 Release。夹具的第二臂就是这个钉子。
+
+### 三、新夹具 `tests/b152_object_field_teardown`
+
+`B152Holder`：`Private mHold As Object`（腿②/腿③ 已是 `vb6_ReleaseObject`）、
+`Private mSelf As Object`（裸实例那一格）。六枚针，x64 与 x86 同值：
+
+| 针 | 读数 | 意思 |
+|---|---|---|
+| `B152-A1-items` | 0 | 写进字段、放掉局部变量之后仍被字段握着 |
+| `B152-A2-held-tag` | 7 | 字段那一枚读得回（放手不是「先放后读」） |
+| `B152-Z-items` | **1** | 放掉持有者 ⇒ item Terminate（改前 0）← 本刀判据 |
+| `B152-B1-self-nothing` | False | 裸实例 `Me` 进字段后还认得出 |
+| `B152-B2-ok` | — | 出厂放手没有越权 Release ⇒ 走到这里 |
+| `B152-DONE` | — | — |
+
+### 四、发码面
+
+- 全清单 **816 行**（814 + 新夹具两行）；
+- **19 行**随本刀改码（全是「类里有字面量 `As Object` 字段」的那一族：b130/b131/b132/b133/b134
+  承载者、`Charts 2020` 六个 uc、`ucTreeView`、`VBFlexGridDemo`、`k3138`、`Gifcontrol`、
+  `dbgdlg`、`BalloonTooltips`、`ucSegmentedControl`、`ucSlider_2022`、b149/b150/b151）；
+- 窄口之前那一版（`0b862965`）还多改了 8 行 —— 那些是只有 `As <工程接口>` 字段的工程
+  （`b445_refcount`、`k2947_setview`、`k3060_setvariant`、`k3122_own_prop_set`、`ve_list` 等），
+  窄口后逐个回到原值；
+- 既有 6 行机器侧（b132、ctrlmscomm、GUISample ×3、TeeChart）登记 **CI 那份清单**的值
+  （`git fetch <remote> ci/emit-manifest`），本机照旧读不出同值。
+
+### 五、闸与连带
+
+- 九门 **9/9 rc=0**（`inputs=816 [.vbp=306 .bas=510]`，emitted=1574，exe sha=`4bb4e…`），
+- `check_class_refcount_authority.ps1` 那条普查在窄口后回到原答（`6 field-type questions`，
+  没有第七处 `mapTypeRef` 站点）；k175 那条 absent 针窄口后原样通过（`m_lv` 不出现在出厂体里）；
+- CI 三趟：首推 `0b862965`（宽口）run `45307425519` 三红（19 表那三行）；改窄口后
+  `a3f08841` run `45312597405` 只剩 `Emit manifest` 一红，差的就是 b132 一行（本机 17448 /
+  CI 17429 那位机器侧）；把那一行按 CI 那份登记（`c48339cd`）后 run `45314230404` = **22/22 success**。
+- 桥夹具双架构零回归：b144 九枚、b146 八枚、b147 十二枚、b148 十枚读数逐条不变；
+  b149 八枚、b150 六枚、b151 八枚只动 `Z-item-terms` 0→1，另有两针口径同步改口；
+- b144/b146/b147/b148 的 `Z` 行不变，说明这几族本来就没有「`As Object` 字段被漏放」的账。
+
+### 六、在册
+
+- `§11.110` 值侧打包（`vb6_ComSetProp` 那一族 `vb6_ComPackObject` 给 AddRef 之后没人放）：
+  仍在册，要一枚真走 Pattern F 的靶；- `.temp/k150/p4` 的 **V2** 那个盒子：取 `c = q.Child` → 链写 → 放 `c` → 放 `q`，
+  root 走了 Terminate 而 child 没有（V2b「先放 c 再链写」、V2c「链写后才取 c」都干净）。
+  本刀前后该探针读数逐条同值（`V2-box=1 / V2b=3 / V2c=5`）⇒ 与字段出厂无关，
+  是「两处各持一次」的记账，仍在册；
+- `As Variant` 字段的出厂：`vb6_VARIANT` 槽那一格本刀没动（`VariantClear` 会连 BSTR
+  一起放，语料面比 `As Object` 大得多），另开一刀。
