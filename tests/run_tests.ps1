@@ -12468,6 +12468,19 @@ $b154Needles = @(
 "B154-C1-nothing=False", "B154-C2-held=11", "B154-Z-terms=1", "B154-Z-made=1", "B154-DONE")
 Test-Vbp 'b154_late_prop_set' "$Tests\b154_late_prop_set\B154Res.vbp" $b154Needles
 Test-Vbp 'b154_late_prop_set_x86' "$Tests\b154_late_prop_set\B154Res.vbp" $b154Needles -Arch "x86"
+# 账 #305 §11.136 (第一百五十五刀): `Set <工程类>.Prop = Nothing` 必须调 setter 传 NULL。
+# 改前发成 `vb6_ReleaseObject((void**)(&(void*){vb6_B155Box_prop_get_Item(box)}))` ——
+# 拿 getter 的返回值 (借来的槽指针, 没 AddRef) 去 Release: 属性没清空 + 多算一次引用。
+#   P1: 置空后 ItemIsNothing=True (改前 False) ← 判据
+#   P2: 晚绑定置空经 COM 派发 (对照, 两档都 True)
+#   P3: 置空后再写还能存住 11
+#   P4: 放掉调用方那一枚后盒子还握着 (False)
+#   Z: 盒子放手 ⇒ item Terminate=1 (改前 0: 置空那一站把引用算坏了)
+$b155Needles = @(
+"B155-P1-held=11", "B155-P1-cleared=True", "B155-P2-cleared=True", "B155-P3-held=11",
+"B155-P4-nothing=False", "B155-Z-terms=1", "B155-Z-made=1", "B155-DONE")
+Test-Vbp 'b155_prop_set_nothing' "$Tests\b155_prop_set_nothing\B155Res.vbp" $b155Needles
+Test-Vbp 'b155_prop_set_nothing_x86' "$Tests\b155_prop_set_nothing\B155Res.vbp" $b155Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

@@ -78,6 +78,48 @@
                     }
                 }
             }
+            // 账 #305 §11.136 (第一百五十五刀): `Set <工程类>.Prop = Nothing` —— 置空也是**写**。
+            // 改前这里直接落到下面 `emitExpr(*node.target)` + 对求值结果 Release 的通用路：
+            //   Set box.Item = Nothing
+            //     → vb6_ReleaseObject((void**)(&(void*){vb6_B154Box_prop_get_Item(box)}))
+            // 拿 **getter** 的返回值去 Release —— `prop_set_Item` 一次都没调，属性根本没被清空
+            // (实测 .temp/k154/p1: `B0-cleared=False` 一直是 False)。
+            // Fix 056b 那条改写只认 `prop_set_`/`prop_let_` 前缀，而 emitExpr 给属性左值
+            // 发的是 `prop_get_Item(box)` ⇒ 前缀对不上。
+            // 判据只问**符号**（与上面 Set 值那一支同一张表），不问文本；接收者那几道闸
+            // (窗体控件 / 宿主伪对象 / UDT / 晚绑定) 与那一支同源，命中才发 setter。
+            if (node.target->kind == ASTNodeKind::MemberAccessExpr) {
+                auto& maN = static_cast<MemberAccessExpr&>(*node.target);
+                Symbol* psN = symTab_.lookupModuleByKind(maN.memberName, SymbolKind::PropertySet);
+                if (psN && maN.object) {
+                    const std::string objClsN = inferClassTypeOfExpr(*maN.object);
+                    bool okN = !objClsN.empty();
+                    // 墓碑接收者不是工程类 (同一道闸: 控件 / 宿主伪对象 / UDT 链)
+                    if (okN && maN.object->kind == ASTNodeKind::IdentifierExpr) {
+                        const std::string oidN = Symbol::toLower(
+                            static_cast<IdentifierExpr&>(*maN.object).name);
+                        if (knownFormControls_.count(oidN) || hostPseudoIsObject(oidN)) okN = false;
+                    }
+                    if (okN && !inferUdtTypeOfExpr(*maN.object).empty()) okN = false;
+                    // 外部同名符号: 只有属性确实属于接收者那个类才直发
+                    if (okN && psN->isExternal
+                        && Symbol::toLower(psN->sourceModule) != Symbol::toLower(objClsN))
+                        okN = false;
+                    if (okN) {
+                        const bool savedVirtN = suppressVirtDispatch_;
+                        suppressVirtDispatch_ = true;
+                        emitExpr(*maN.object);
+                        suppressVirtDispatch_ = savedVirtN;
+                        std::string objN = std::move(lastExpr_);
+                        if (isComMarker_) objN = resolveComValue("Object");
+                        const std::string fnN =
+                            cProcName("prop_set_" + maN.memberName, psN->access, objClsN);
+                        c_.emitLine(fnN + "(" + objN +
+                                    ", NULL);  /* Set Nothing (property setter) */");
+                        return;
+                    }
+                }
+            }
             // 左值求值期间关掉虚表派发 (ai/022 B08e-4 站点⑭: Pattern C/D2 要对这段文本做
                 // `prop_get_` -> `prop_let_` 的字符串级改写, 派发表达式会被换成表里不存在的槽字段)
             const bool savedVirtLhs = suppressVirtDispatch_;
