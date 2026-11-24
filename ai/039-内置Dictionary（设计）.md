@@ -8818,3 +8818,89 @@ ByRef Boolean 不在这一刀：`cDispatchArgVt` 对 ByRef 本来就答 `VB6_ARG
 - 声明为 Integer/Byte 的成员仍按目标档发读臂（同族未量到病）；
 - `Set c->f = o`（Variant 形参）浅拷贝、`Set obj.Prop = Nothing`（控件伪对象档）、
   `vb6_ReleaseObject` 对裸类实例空转、`§11.110` 值侧打包照旧在册。
+
+## §11.142（第一百六十刀）窄整型形参的入站收窄要报错误 6
+
+### 一、撞见
+
+上一刀（§11.141）修的是 Boolean 形参的入站换算。同一张表上紧挨着的一格还没人问：
+**Integer / Byte 形参收到超范围的值会怎样？** 探针 `.temp/k161/p1`
+（`Property Let I(ByVal x As Integer)`，先 `box.I = 7`）：
+
+```vb
+o.I = 40000
+```
+
+```
+B160-R1=no-error val=-25536
+```
+
+真 VB6 是 **错误 6 Overflow**，且目标保持 7 不变。C3 既没报错，还把 40000 静默存成
+**-25536** —— 这正是 VB6 里最容易被漏掉的那种"值坏了但程序继续跑"。
+
+### 二、根因：和上一刀同一张表、同一个毛病
+
+`cDispatchArgVt` 当时写的是
+
+```cpp
+if (t == Vb6Type::Long || t == Vb6Type::Integer || t == Vb6Type::Byte ||
+    t == Vb6Type::Boolean) return "VT_I4";
+```
+
+把 Integer / Byte 一起并进 VT_I4 就地透传 —— 收窄换算（`VariantChangeType` VT_I4→VT_I2）
+整段跳过，服务端读臂再把这个 40000 塞进 `int16_t`。**三档一起并进 VT_I4 是"省一次换算"，
+代价是把 VB6 的溢出语义一起省掉了。**
+
+### 三、修：四处成对
+
+1. `cDispatchArgVt`：`Integer → VT_I2`、`Byte → VT_UI1`（让换算真的发生，
+   越界时 oleaut32 自己答 `DISP_E_OVERFLOW`）；
+2. 读臂（`cgen_util_dllentry_collect.inc`）：ByVal Integer 读 **`iVal`**、Byte 读 **`bVal`**
+   —— 槽已经是窄档，继续读 `lVal` 会带上高位的垃圾字节；Long 维持 `lVal`；
+   **ByRef 三档一律不动**（`cDispatchArgVt` 对 ByRef 本答 `VB6_ARGVT_SKIP`，槽还是调用方那份）；
+3. `vb6_ComArgNormalize`：失败时把**原因 hr** 记进一枚静态并经
+   `vb6_ComArgNormLastHr()` 交回（以前一律折成 `DISP_E_TYPEMISMATCH`，
+   于是越界和"类型不匹配"被压成同一个号）；服务端 Invoke 把这一枚原样返回；
+4. 客户端 `vb6_HresultToErrNum`（唯一那张表）增一格
+   `0x8002000A DISP_E_OVERFLOW → 6`。
+
+### 四、读数
+
+新夹具 `tests/b161_narrow_arg_overflow`（八针），x64 与 x86 同值：
+
+| 针 | 改前 | 改后 | 意思 |
+|---|---|---|---|
+| `I1` | ok 4000 | ok 4000 | Integer 合法写入 |
+| `I2` | **no-error（存成 -25536）** | **err6 val=4000** | Integer 正向越界：报 6 且目标不变 |
+| `I3` | 同 I2 | err6 val=4000 | 负向越界 |
+| `Y1` | ok 200 | ok 200 | Byte 合法写入 |
+| `Y2` | **no-error（存成 44）** | **err6 val=200** | Byte 越界 |
+| `L1` | ok 2000000000 | ok 2000000000 | Long 宽档不受影响 |
+| `DONE` | — | — | — |
+
+老夹具回归读数逐字相同（b144 / b146 / b148 / b153 / b158 / b159 / b160）。
+
+### 五、发码面与第一次 CI 红
+
+- 清单 **830→832**（新夹具 `.bas` 与 `.vbp` 两行，1363 行）；
+- 全语料 832 行，只有 6 条机器侧行移动（b132、ctrlmscomm、GUISample×3、TeeChart）；
+- 九门 9/9 rc=0；
+- 第一次 CI 红在 `Tests (compile #2)` 的 `[STATIC] disp_inbound_argvt_authority`：
+
+  ```
+  FAIL R2 vb6_ComArgNormalize defined  = 2, want 1
+  FAIL R2 vb6_ComArgNormalize declared = 2, want 1
+  ```
+
+  本刀新加的两枚 helper 起名 `vb6_ComArgNormalizeSetLastHr` / `vb6_ComArgNormalizeLastHr`，
+  前缀与"唯一出口"同一个词，被那道门数成第二份。**门是对的，名字挑错了** ——
+  改名 `vb6_ComArgNormLastHrSet` / `vb6_ComArgNormLastHr`，三处同步；
+- 第二次 CI **22/22**（run 45398364506，sha `e3026449`）。
+
+### 六、在册（未修）
+
+- **ByRef 形参整体**：`cDispatchArgVt` 对 ByRef 一律 `VB6_ARGVT_SKIP`（不换算），
+  于是 ByRef Integer 收 40000 仍然不会被拦。要收这一族得先量清楚 ByRef 槽的标签与回写口径。
+- 声明为 String 的成员读进数值档（§11.140 第六节）；
+- `Set c->f = o`（Variant 形参）浅拷贝、`Set obj.Prop = Nothing`（控件伪对象档）、
+  `vb6_ReleaseObject` 对裸类实例空转、`§11.110` 值侧打包照旧在册。
