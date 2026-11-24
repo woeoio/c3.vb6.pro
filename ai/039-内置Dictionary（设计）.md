@@ -8710,3 +8710,111 @@ b158  L1=11 L2=12 L3=11 L4=42 L5=8/42
 - `Set obj.Prop = Nothing`（控件伪对象那一档）未动。
 - `vb6_ReleaseObject` 对**裸类实例**是空转（§11.136 在册第一笔）。
 - `§11.110` 值侧打包、`.temp/k150/p4` 的 V2 记账照旧在册。
+
+## §11.141（第一百五十九刀）晚绑定写进 Boolean 形参要有 CBool 那一步
+
+### 一、撞见
+
+前两刀修的都是**读**口。这一刀把写口（`o.Prop = 值`）的跨档一样量一遍：探针
+`.temp/k160/p1`，`B160Box` 有 `S As String` / `D As Double` / `I As Integer` / `B As Boolean`
+四个属性，主程序 `o As Object`：
+
+```vb
+o.D = 2        ' W1
+o.S = 2        ' W2
+o.D = "3.5"    ' W3
+o.I = 2.5      ' W4
+o.B = 7        ' W5
+n = box.B      ' W6
+o.I = "42"     ' W7
+o.I = <Variant 9.75>  ' W8
+```
+
+八笔里**七笔对**，一笔错：
+
+```
+B160-W1=2   B160-W2=2   B160-W3=3.5   B160-W4=2
+B160-W5=True
+B160-W6=7      ← 真 VB6 是 -1
+B160-W7=42  B160-W8=10
+```
+
+（顺带记：`o.I = 2.5` 答 2、`o.I = 9.75` 答 10 —— 四舍六入五成双那一套在写口是对的一档。）
+
+### 二、根因：Boolean 形参借了 VT_I4 那一档
+
+晚绑定写走 `vb6_ComSetProp` ⇒ 服务端 `IDispatch::Invoke`。入站实参在
+`vb6comserver_obj.c` 里按 `method->paramVts` 归一化到**形参声明档**，而生成本表的那一问
+是 `cDispatchArgVt`：
+
+```cpp
+if (t == Vb6Type::Long || t == Vb6Type::Integer || t == Vb6Type::Byte ||
+    t == Vb6Type::Boolean) return "VT_I4";
+```
+
+Boolean 被并进 VT_I4，于是 7 原样落进槽，读臂再读 `lVal` 存进 `m_B`（本仓 Boolean 的
+存储是 int16/int32，真值 **-1**，与 `vb6_CBool` 同口径）。**VB6 里"数值 → Boolean 形参"
+是一次 CBool 换算（非零即 -1）**，借 VT_I4 就地透传等于把这次换算整段跳过。
+
+### 三、修：成对的两处，缺一不可
+
+1. `cDispatchArgVt`：Boolean → **VT_BOOL**，换算那一步交给 `vb6_ComArgNormalize`
+   （内部 `VariantChangeType`，`VT_I4 7 → VARIANT_TRUE`、`BSTR "12" → VARIANT_TRUE`、
+   `BSTR "abc"` 换不动 ⇒ `DISP_E_TYPEMISMATCH` ⇒ 客户端折成 VB 13，与 VB6 同号）；
+2. `cgen_util_dllentry_collect.inc` 的 ByVal Boolean 读臂：**读 `boolVal` 并折成本仓的
+   -1/0**：
+
+   ```cpp
+   provided = "(((VARIANT*)args[i])->boolVal ? -1 : 0)";
+   ```
+
+   只改第一处不改第二处不行：槽变成 VT_BOOL 以后 `lVal` 读到的是 `VARIANT_BOOL` 之外
+   的字节（高位不是符号扩展），那是另一个坑。
+
+ByRef Boolean 不在这一刀：`cDispatchArgVt` 对 ByRef 本来就答 `VB6_ARGVT_SKIP`（不归一化），
+读臂保持 `&lVal` 原样。
+
+### 四、读数
+
+新夹具 `tests/b160_late_bool_arg`（十针），x64 与 x86 同值：
+
+| 针 | 改前 | 改后 | 意思 |
+|---|---|---|---|
+| `W1` | 2 | 2 | 数值 → Double 属性 |
+| `W2` | 2 | 2 | 数值 → String 属性（存 `"2"`） |
+| `W3` | 3.5 | 3.5 | 串 → Double 属性 |
+| `W4` | 2 | 2 | Double → Integer 属性（2.5 → 2） |
+| `W5` | True | True | 数值 → Boolean 属性（存成 True） |
+| `W6` | **7** | **-1** | Boolean 属性 → Long（VB6 真值） |
+| `W7` | 42 | 42 | 串 → Integer 属性 |
+| `W8` | 10 | 10 | Variant 9.75 → Integer 属性 |
+| `Z` | 2/3.5 | 2/3.5 | 读回两个属性 |
+| `DONE` | — | — | — |
+
+老夹具回归读数逐字相同（b144 / b146 / b148 / b153 / b158 / b159）。
+
+### 五、发码面与第一次 CI 红
+
+- 清单 **828→830**（新夹具 `.bas` 与 `.vbp` 两行，1361 行）；
+- 全语料 830 行，只有 6 条机器侧行移动（b132、ctrlmscomm、GUISample×3、TeeChart），以 CI 为准；
+- 九门 9/9 rc=0；
+- 第一次 CI 红在两处 `Tests (vbp #6)/(vbp #7)` 的 `[DISPATCH] b220_inbound_argvt`
+  ——§B219 那一刀按"Boolean 借 VT_I4 就地透传"钉下的两颗针：
+
+  ```
+  改前期望: VTARG=EchoBool:i giving=VT_I4  … val=40
+            VTARG=EchoBool:s giving=BSTR(12) … val=12
+  CI 实测:  val=-1 / val=-1
+  ```
+
+  两发 **-1** 正是 CBool 语义（真实 VB6 里 `EchoBool(40)` / `EchoBool("12")` 都是 True），
+  于是把那两颗钉改口 -1 并把改前/改后的由来写进注释（`run_tests.ps1` 那一段）；
+- 第二次 CI **22/22**（run 45390455157，sha `365531c8`）。
+
+### 六、在册（未修）
+
+- ByRef Boolean 形参未归一到 VT_BOOL（`cDispatchArgVt` 对 ByRef 一律 SKIP，读臂 `&lVal`）；
+- 声明为 String 的成员读进数值档（§11.140 第六节那一条）；
+- 声明为 Integer/Byte 的成员仍按目标档发读臂（同族未量到病）；
+- `Set c->f = o`（Variant 形参）浅拷贝、`Set obj.Prop = Nothing`（控件伪对象档）、
+  `vb6_ReleaseObject` 对裸类实例空转、`§11.110` 值侧打包照旧在册。
