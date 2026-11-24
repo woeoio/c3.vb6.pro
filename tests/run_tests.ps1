@@ -12395,11 +12395,11 @@ Test-Vbp 'b148_selfcls_return_x86' "$Tests\b148_selfcls_return\B148Res.vbp" $b14
 #   A1: 根对象自己的 Held 仍是空（没写到根上）
 #   A2/A3: 子对象上写的确实是 it 那一枚（改 h.Tag 后 it.Tag 跟着变）
 #   Z:  box = 2（根 + 子都 Terminate）。本夹具里的嵌套读链 `Set h1 = o.Child.Held` 由 §11.132
-#       对平，所以这一行从 1 变 2；item 仍由写口打包那一枚夹着（§11.110）
+#       对平，所以这一行从 1 变 2；item 那枚由 §11.133 对平（0→1）
 $b149Needles = @(
 "B149-A1-root-held=empty", "B149-A2-child-held=B149Item", "B149-A3-tag=9",
 "B149-C1-item-terms=0", "B149-Z-box-terms=2", "B149-Z-item-made=1",
-"B149-Z-item-terms=0", "B149-DONE")
+"B149-Z-item-terms=1", "B149-DONE")
 Test-Vbp 'b149_chain_write' "$Tests\b149_chain_write\B149Res.vbp" $b149Needles
 Test-Vbp 'b149_chain_write_x86' "$Tests\b149_chain_write\B149Res.vbp" $b149Needles -Arch "x86"
 
@@ -12407,10 +12407,10 @@ Test-Vbp 'b149_chain_write_x86' "$Tests\b149_chain_write\B149Res.vbp" $b149Needl
 # 改前 `vb6_ComSetRef(vb6_ComGetObjectProp(p, L"Child"), …)` —— 取回来的那一枚没人放，
 # 中间那枚对象永不 Terminate（box-terms 1）；改后落 _rcvN、派发完即放（box-terms 2）。
 #   A2: 写进去的确实是 it 那一枚
-#   Z : 根 + 子都 Terminate = 2；Z-item 停在 0 = 写口打包那一枚（§11.110 在册）
+#   Z : 根 + 子都 Terminate = 2；Z-item 也 Terminate（§11.133: As Object 字段出厂放手）
 $b150Needles = @(
 "B150-A2-held-tag=9", "B150-C1-item-terms=0", "B150-Z-box-terms=2",
-"B150-Z-item-made=1", "B150-Z-item-terms=0", "B150-DONE")
+"B150-Z-item-made=1", "B150-Z-item-terms=1", "B150-DONE")
 Test-Vbp 'b150_chain_recv_ref' "$Tests\b150_chain_recv_ref\B150Res.vbp" $b150Needles
 Test-Vbp 'b150_chain_recv_ref_x86' "$Tests\b150_chain_recv_ref\B150Res.vbp" $b150Needles -Arch "x86"
 
@@ -12419,13 +12419,25 @@ Test-Vbp 'b150_chain_recv_ref_x86' "$Tests\b150_chain_recv_ref\B150Res.vbp" $b15
 # 每多一层链漏一枚（box-terms 1）；改后接收者落 _rrvN、语句末放（box-terms 3）。
 #   A2/B1: 嵌套对象读 / 嵌套标量读的值都对
 #   C1: 两层链 `p.Child.Child.Tag` 的值
-#   Z : 根 + 两级子对象都 Terminate = 3（改前 1）；Z-item 停在 0 = 写口打包那一枚（§11.110）
+#   Z : 根 + 两级子对象都 Terminate = 3（改前 1）；Z-item 也 Terminate（§11.133）
 $b151Needles = @(
 "B151-A2-held-tag=7", "B151-B1-child-tag=99", "B151-C1-two-level-tag=99",
 "B151-Y-box-made=3", "B151-Z-box-terms=3", "B151-Z-item-made=1",
-"B151-Z-item-terms=0", "B151-DONE")
+"B151-Z-item-terms=1", "B151-DONE")
 Test-Vbp 'b151_chain_read_ref' "$Tests\b151_chain_read_ref\B151Res.vbp" $b151Needles
 Test-Vbp 'b151_chain_read_ref_x86' "$Tests\b151_chain_read_ref\B151Res.vbp" $b151Needles -Arch "x86"
+
+# 账 #305 §11.133（第一百五十二刀）：`As Object` 字段出厂那一枚引用。
+# 改前 `_Destroy` 只放类类型字段（`if (me->mChild) vb6_cls_X_Release(...)`），`As Object`
+# 那一格整支不出现 ⇒ 字段里握着的实例永不走 Class_Terminate（改前 Z-items=0）。
+#   A1: 写进字段、放掉局部变量之后仍被字段握着 = 0
+#   Z : 放掉持有者之后 item Terminate = 1（改前 0）—— 本刀的判据
+#   B1/B2: 裸实例 (Me) 进字段后出厂放手只清指针（Fix 191 判据），不崩
+$b152Needles = @(
+"B152-A1-items=0", "B152-A2-held-tag=7", "B152-Z-items=1",
+"B152-B1-self-nothing=False", "B152-B2-ok", "B152-DONE")
+Test-Vbp 'b152_object_field_teardown' "$Tests\b152_object_field_teardown\B152Res.vbp" $b152Needles
+Test-Vbp 'b152_object_field_teardown_x86' "$Tests\b152_object_field_teardown\B152Res.vbp" $b152Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
