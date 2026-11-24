@@ -7709,7 +7709,12 @@ if ($Category -in @("all", "run", "vbp")) {
         # 语句末收回 —— 文本不再是嵌套调用；这两条钉的是「接收者=临时量」与它的来源。
         'void* _rrv',
         '= vb6_ComCallObject(vb6_TreeView_Nodes((void*)vb6_hwnd_tv1), L"Item", (void*[]){vb6_ComPackInt(2)}, 1);',
-        'vb6_CStr(vb6_VariantFromValue(vb6_ComGetStringProp(_rrv',
+        # 账 #305 §11.137 (第一百五十六刀): 字符串成员在**比较**上下文里的形状换成了
+        # `vb6_StrCmp(vb6_ComGetStringProp(_rrv…)` —— 以前是先把已验证的 BSTR 重新包成
+        # VARIANT 再 `vb6_CStr(...)` 折回串 (`vb6_CStr(vb6_VariantFromValue(...))`)。
+        # 现在 `vb6_ComGetStringProp(` 登记在 isBstrReturningCall 那张表里，直通给 StrCmp：
+        # 值仍是 RTL 内部 VariantChangeType(…, VT_BSTR) 的产物，一次多余的折叠没有了。
+        'vb6_StrCmp(vb6_ComGetStringProp(_rrv',
         # 同一条判据的选择性那一半: 数值成员走**数值档**，不许被改成 BSTR 档 ——
         # 它的作用是挡住"为了修字符串把两档一起改成 BSTR"那种反向过度修正。
         # C30-11 后记（遗留问题②）: 关系比较的晚绑定属性改按 Double 解封 ——
@@ -12481,6 +12486,19 @@ $b155Needles = @(
 "B155-P4-nothing=False", "B155-Z-terms=1", "B155-Z-made=1", "B155-DONE")
 Test-Vbp 'b155_prop_set_nothing' "$Tests\b155_prop_set_nothing\B155Res.vbp" $b155Needles
 Test-Vbp 'b155_prop_set_nothing_x86' "$Tests\b155_prop_set_nothing\B155Res.vbp" $b155Needles -Arch "x86"
+# 账 #305 §11.137 (第一百五十六刀): 晚绑定读带类型的属性，已验证过的 BSTR 出口不许再套 CStr。
+# `o.Held`（Property Get Held() As Long，o 是 Object）在**拼串/裸值**那一格发成
+#   vb6_CStrLong(vb6_ComGetStringProp(o, L"Held"))
+# —— 把 BSTR 指针当 int32_t（改前 x64 打 128849432、x86 打 14248540）。
+#   Q1: 赋给 Long → ComGetIntProp（本来就对）
+#   Q2: 参与算术 → ComGetIntProp
+#   Q3: 与字面量比 → 对
+#   Q4: 赋给 String 的 String 属性 → ComGetStringProp 直通
+#   Q5: 拼串里的裸值 → 改前垃圾指针、改后 11 ← 判据
+$b156Needles = @(
+"B156-Q1=11", "B156-Q2=12", "B156-Q3=eq", "B156-Q4=hi", "B156-Q5=11", "B156-DONE")
+Test-Vbp 'b156_late_typed_prop_read' "$Tests\b156_late_typed_prop_read\B156Res.vbp" $b156Needles
+Test-Vbp 'b156_late_typed_prop_read_x86' "$Tests\b156_late_typed_prop_read\B156Res.vbp" $b156Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
