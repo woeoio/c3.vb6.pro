@@ -12438,6 +12438,23 @@ $b152Needles = @(
 "B152-B1-self-nothing=False", "B152-B2-ok", "B152-DONE")
 Test-Vbp 'b152_object_field_teardown' "$Tests\b152_object_field_teardown\B152Res.vbp" $b152Needles
 Test-Vbp 'b152_object_field_teardown_x86' "$Tests\b152_object_field_teardown\B152Res.vbp" $b152Needles -Arch "x86"
+
+# 账 #305 §11.134（第一百五十三刀）：`As Variant` 字段的两站 —— 读出去那一枚要取引用,
+# 出厂那一站要清槽。
+# 改前: `V = mV` 发 `Clear + vb6_VariantFromValue(me->mV)`，而 `vb6_VariantFromValue` 对
+# vb6_VARIANT 是 identity **浅拷贝** ⇒ 返回槽与字段**共用**同一个对象，
+# `Set got = h.V` 之后 `Set got = Nothing` 就把字段还握着的那枚实例拆了（悬垂）。
+#   A1: 写进槽、放掉局部变量后 item 仍被槽握着 = 0
+#   A2: 槽里读得回
+#   A3: 读回并放掉那一枚之后 item **仍然活著** = 0（改前 1 ← 本刀的判据之一）
+#   Z : 放掉持有者 ⇒ 出厂清槽 ⇒ item Terminate = 1（改前就是 0 枚，因为早已被拆）
+#   B : 槽里放标量/串，出厂清槽不许把它们弄坏（1 / 4）
+#   C1: 两枚持有者各握一枚 ⇒ A(1) + C(1) = 2（改前 1：C 那一枚漏）
+$b153Needles = @(
+"B153-A1-terms=0", "B153-A2-held-tag=5", "B153-A3-terms=0", "B153-Z-terms=1",
+"B153-B1-len=1", "B153-B2-len=4", "B153-C1-terms=2", "B153-DONE")
+Test-Vbp 'b153_variant_field_teardown' "$Tests\b153_variant_field_teardown\B153Res.vbp" $b153Needles
+Test-Vbp 'b153_variant_field_teardown_x86' "$Tests\b153_variant_field_teardown\B153Res.vbp" $b153Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

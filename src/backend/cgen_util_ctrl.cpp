@@ -3563,6 +3563,42 @@ bool CCodeGen::variantRhsOwnsValue(Expr* rhs, const std::string& rawC) const {
                 static_cast<const IdentifierExpr&>(*rhs).name)) > 0)
             return false;
     }
+    if (rhs && !exprHasLateBoundComRead(rhs)) {
+        // 判据只认「这确实是一枚 Variant **字段**」, 不认「源码里长得像左值」:
+        //   · 晚绑定成员读 (`at.value`) 交回的是一枚**新造**的 Variant (vb6_VariantFromComResult
+        //     / vb6_ComGet*Prop …), 所有权随这一句转移 —— 那不是槽;
+        //   · On Error 站现造的 `_vsN` 暂存同理 (转移, 不是槽)。
+        // 这两族按槽判会把所有权判反 (cvp_emitc_variant_fallback 与 b251..b255 的形状针钉的
+        // 就是它们那一形)。
+        //
+        // 账 #305 §11.134 (第一百五十三刀): 形④ 的**字段**那一格。
+        //
+        // `V = mV` (类里 `Private mV As Variant`) 以前落进 true 那一支:
+        // `knownVariantVars_` 只登记**本地** Variant, 而类里的字段在 C 里是
+        // `me->mV`、在 AST 里是一枚 IdentifierExpr(不带 `me->`) ⇒ 一眼看上去「自有」
+        // ⇒ 发 `vb6_VariantClear(&ret); ret = vb6_VariantFromValue(me->mV);`，
+        // 而 `vb6_VariantFromValue` 对 vb6_VARIANT 实参是 `vb6_VariantIdentity`
+        // (纯浅拷贝: 不 AddRef、不拷 BSTR) ⇒ 调用方拿到的那一枚与字段**共用**同一个对象。
+        //
+        // 实测 (tests/b153): `Set got = h.V` 之后 `Set got = Nothing` 就把字段还握着的那枚
+        // 实例拆了 (Terminate 发生在持有者出厂**之前**), 字段里留一根悬垂指针。
+        //
+        // 口径: 只要右值是**一枚槽** (本地/形参/字段/UDT 成员，即 inferExprType 答 Variant
+        // 的左值形)，就答 false ⇒ 走 `vb6_VariantAssign`(Clear + 深拷贝)。
+        // 只有**调用**(函数/属性 Get 交回的临时量)才「自有」—— 那不是左值形，不在这里接管。
+        if (rhs->kind == ASTNodeKind::IdentifierExpr) {
+            // 裸名 = 本模块字段 (隐式 me->): 问类成员表, 问不到就是别的什么, 不接管。
+            const std::string nm =
+                Symbol::toLower(static_cast<const IdentifierExpr&>(*rhs).name);
+            if (classVariantMembers_.count(nm) || classVariantMembers_.count("m_" + nm))
+                return false;
+        } else if (rhs->kind == ASTNodeKind::MemberAccessExpr) {
+            // `Me.f` / `<类引用>.f`: 问 driver 注入的工程级字段档表。
+            auto& ma = static_cast<const MemberAccessExpr&>(*rhs);
+            const std::string cls = ma.object ? inferClassTypeOfExpr(*ma.object) : std::string();
+            if (!cls.empty() && classFieldIsVariantSlot(cls, ma.memberName)) return false;
+        }
+    }
     // §B167 形⑪ (本刀): 右值是一处借来的串存储。
     return !exprBorrowsBstrStorage(rhs, rawC);
 }

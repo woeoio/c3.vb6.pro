@@ -344,6 +344,15 @@ void CCodeGen::emitClassFactory(Module& module) {
                     // `vb6_ReleaseObject` 自己的 Fix 191 判据拦下 (非可分派只清指针)。
                     c_.emitLine("vb6_ReleaseObject((void**)&me->" + cIdent(var.name) +
                                 ");  /* 账 #305 §11.133: As Object 字段出厂放手 */");
+                } else if (varType == Vb6Type::Variant) {
+                    // 账 #305 §11.134 (第一百五十三刀): `Private mV As Variant` 那一档。
+                    // 槽里那一枚 (VT_DISPATCH 的实例引用 / BSTR / 数组) 归槽自己握 (写口
+                    // 走 `vb6_VariantAssign` = Clear + 深拷贝, 已在同一条路上取过引用),
+                    // 出厂这一站以前整支不出现 ⇒ 槽里那一枚没人退 (漏), 且持有者拆掉之后
+                    // 槽的内存随 `vb6_Free(me)` 一起消失, 那一枚就彻底丢了。
+                    // `vb6_VariantClear` 就是与写口成对的那一半: 对空槽是空转。
+                    c_.emitLine("vb6_VariantClear(&me->" + cIdent(var.name) +
+                                ");  /* 账 #305 §11.134: Variant 字段出厂清槽 */");
                 }            }
         }
     }
