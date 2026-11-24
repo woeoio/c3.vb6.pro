@@ -8311,3 +8311,104 @@ if (node.target->kind == ASTNodeKind::MemberAccessExpr) {
 - `Set c->f = o`（`o` 是 `As Variant` **形参**）仍走 `vb6_VariantFromValue` 浅拷贝
   （`setcls` 那格形状针钉着它）—— 参数槽与字段槽两笔账。
 - `§11.110` 值侧打包、`.temp/k150/p4` 的 V2 记账照旧在册。
+
+## §11.137（第一百五十六刀）已是 BSTR 的晚绑定读不再套 CStr
+
+### 一、撞见
+
+上一刀（§11.136）在册第二笔：晚绑定读带类型的属性发成
+`vb6_CStrLong(vb6_ComGetStringProp(o, L"Held"))`。造探针（`.temp/k156/p1`，
+`B156Box` 有 `Property Get Held() As Long`、`Property Get Note() As String`）量到：
+
+```
+B156-Q1=11        赋给 Long
+B156-Q2=12        Long + 1
+B156-Q3=eq        与字面量比
+B156-Q4=hi        String 属性赋给 String
+B156-Q5=128849432 拼串里的裸值 ← 一个指针值（x86 打 14248540）
+```
+
+Q1~Q4 都对，只有 Q5 是垃圾 —— 而 Q5 正是**最普通的一句** `Debug.Print "…" & o.Held`。
+
+### 二、两站各说一套
+
+读口（`resolveComMarkerForPack`，`packFnHint` 为空那一支）按"不知道类型就当 String"发
+`vb6_ComGetStringProp`。**这一步本身没错**：RTL 那一枚内部是
+
+```c
+BSTR result = vb6_ComUnpackBSTR(pv);   /* vt != VT_BSTR 时 VariantChangeType(…, VT_BSTR) */
+```
+
+`VT_I4` 折成 `"11"`、`VT_BOOL` 折成 `"True"` —— 值是对的。
+
+错在**拼串侧**：`wrapToBSTR` 拿 `inferExprType` 的答案选格式化函数，而 `inferExprType` 走
+的是"按**裸成员名**查模块符号"那条兜底 —— 这个工程里 `Held` 唯一，答 Long ⇒
+`vb6_CStrLong(...)` ⇒ 把 BSTR 指针当 `int32_t` 交给格式化。同一句 `o.Held`：
+**读口说是串、拼串侧说数**，两边都不问对面。
+
+### 三、修：不新开判据，登记进那张老表
+
+`isBstrReturningCall`（`cgen_expr_binary_util.cpp` 的 `kBstrReturningCalls`）本来就是
+"这个调用交回的就是 BSTR，别再折一层"那张表（Fix 100a/100d 那一族的老账：
+`vb6_GetListItem` / `vb6_GetImageListKeyAt` / `vb6_StatusBar_GetPanelText` …）。
+把 `vb6_ComGetStringProp(` 登记进去，`wrapToBSTR` 在数值清单之后、类型推断之前直通：
+
+```cpp
+if (isBstrReturningCall(expr)) return expr;
+```
+
+于是 Q5 的发码从
+
+```c
+vb6_CStrLong(vb6_ComGetStringProp(o, L"Held"))
+```
+
+变成
+
+```c
+vb6_ComGetStringProp(o, L"Held")
+```
+
+—— 值由 RTL 那一步 `VariantChangeType` 说话，上层不再二次解释。
+
+### 四、读数
+
+新夹具 `tests/b156_late_typed_prop_read`（六针），x64 与 x86 同值：
+
+| 针 | 改前 | 改后 | 意思 |
+|---|---|---|---|
+| `Q1` | 11 | 11 | 赋给 Long → `ComGetIntProp`（本来就对） |
+| `Q2` | 12 | 12 | 参与算术 → `ComGetIntProp` |
+| `Q3` | eq | eq | 与字面量比（走 `ComGetDoubleProp`，C30-11 后记那条口径） |
+| `Q4` | hi | hi | String 属性赋给 String → `ComGetStringProp` 直通 |
+| `Q5` | **128849432**（x86 14248540） | **11** | 拼串里的裸值 ← 判据 |
+| `DONE` | — | — | — |
+
+### 五、发码面
+
+- 清单 **822→824**（新夹具两行）；
+- 存量 **86 行 CHG**，全是"把包在 `vb6_CStrXxx(vb6_ComGetStringProp(…))` 外层的那一层
+  CStr 解开"，没有删行、没有别的位移；
+- 41 个受影响工程逐个 `--output-dir` 重建，**0 失败** —— 确认没把 BSTR 塞进要 VARIANT 的槽；
+- **一条形状钉跟着改了形**：`tv_emitc_shape` 原钉
+  `vb6_CStr(vb6_VariantFromValue(vb6_ComGetStringProp(_rrv…`（比较上下文先包 VARIANT 再折回串），
+  现在同一处是 `vb6_StrCmp(vb6_ComGetStringProp(_rrv…`（直通给 `vb6_StrCmp`，它收 BSTR）。
+  同一条判据的**另一半没动**：数值成员仍钉 `vb6_ComGetDoubleProp(_rrv` —— 挡住"为了修字符串
+  把两档一起改成 BSTR"那种反向过度修正；
+- 九门 9/9 rc=0（`inputs=824 [.vbp=310 .bas=514]`）。
+
+### 六、第一次推送红的两处（记账）
+
+1. `Emit manifest (shape oracle)` —— 4 行机器侧（b132 / GUISample×3）在 CI 那台机器上随本刀
+   一起变了哈希（它们本来就含晚绑定读的产物）。按老规矩**以 CI 为准**：把 CI 产出的
+   `emit-manifest.txt` 那 4 行灌回期望，本地与 CI 的 824 行逐行 COMPARE = 0 差异。
+2. `Tests (vbp #7)` —— 就是上面那条形状钉，钉的是**改前**的形。
+
+### 七、在册（未修）
+
+- **`Dim v As Variant: v = o.Held` 仍是 Variant(BSTR `"11"`)，不是 Variant(Long 11)** ——
+  值对、型别不对。这一格要的是"读口按声明类型选臂"，本刀只把"已经读成 BSTR"那一头的二次
+  折叠摆正；型别保真要另开一刀（与 `n = o.Held` 那条 C2440 同一族）。
+- `Set c->f = o`（`o` 是 `As Variant` **形参**）仍走 `vb6_VariantFromValue` 浅拷贝。
+- `vb6_ReleaseObject` 对**裸类实例**是空转（§11.136 在册第一笔）。
+- `§11.110` 值侧打包、`.temp/k150/p4` 的 V2 记账照旧在册。
