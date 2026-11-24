@@ -8969,3 +8969,96 @@ VT_BYREF|型」这条口径套到了所有对端上 —— 对**自己家的服�
 - 无 typelib 的**外部** VB6 ActiveX DLL 收 ByRef String 时，本刀按「值」发（与改前同形）：
   写回仍然不回来。要收它得有一条真正可靠的「对端是本仓服务端」之外的分辨法。
 - 入槽那一份副本在「同一发里别的实参换算失败」时会漏一枚串（该路径已报错退出），记小额。
+
+## §11.144（第一百六十二刀）引用形不只裸标识符：数组元素、类字段、With 成员
+
+### 一、在册那条病
+
+上一刀把 ByRef 的**出站**（String 出站回写）收口之后，账上剩这一条：晚绑定实参的
+「引用形」只认 `^(\w+|me->\w+)$` 两种文本，`o.Bump arr(i)` 与 `o.Bump box.S` 都按值发，
+体里的写回落空（VB6 里这两形都该回写）。先说清为什么当初只认裸标识符：`&expr` 对
+函数调用是非法的，而晚绑定实参那一列里绝大多数"看起来像左值"的东西其实是**调用**
+（属性读 `vb6_X_prop_get_Y(base)`、控件默认属性折叠、`Db.Rs` 那种 voidptr 链）。
+
+### 二、先量可取址形（不改代码先看 --emit-c）
+
+探针 `.temp/k163/p1`（一个类 + 一个模块，六站 `o.Bump ...`），发出来的文本：
+
+| 站 | 实参 | 发射文本 |
+|----|------|----------|
+| A1 | `la(1)`（局部静态数组） | `vb6_ComPackValue(VB6_SA_AT(BSTR, la, 1))` |
+| A2 | `arr(1)`（模块级数组） | `vb6_ComPackBSTR(VB6_SA_AT(BSTR, arr, 1))` |
+| A3 | `box.S`（Public String 字段） | `vb6_ComPackBSTR(box->S  /* class var .S field */)` |
+| A4 | `g`（模块级裸串，基线） | `vb6_ComPackBSTRRef(&g)` |
+| A5 | `box.Tag`（属性） | `vb6_ComPackBSTR(vb6_B163Box_prop_get_Tag(box))` |
+| A6 | `With box` 内 `o.Bump .S` | `vb6_ComPackBSTR(_vb6_with_0->S  /* With class .S field */)` |
+
+`VB6_SA_AT(type, arr, idx)` 展开是 `(*(type*)vb6_SaElemPtr(...))`（`vb6rtl_array.h:213`）
+—— 一枚真左值，`&` 合法。`box->S` 也是左值。A5 是调用，`&` 非法，必须继续按值。
+
+注意 A1 的打包器是 `ComPackValue`（`inferExprType` 对局部静态数组元素答 Variant），
+而 A2 是 `ComPackBSTR` —— 「打包器」这一格对同一个语义形给两个答案，不能拿它当判据。
+
+### 三、两形各问一处权威
+
+- **数组元素**（`expr.kind != IdentifierExpr` 且文本是 `VB6_SA_AT(BSTR, <载体>, <下标>)`）：
+  宏的首参就是元素档，文本本身就是证据。这一问在本仓已有五处消费点
+  （`cgen_expr_call_arg_variant.inc` ×2 / `cgen_expr_call_conv_numeric.inc` /
+  `cgen_expr_call_builtin_pre.inc` 等），不是新发明。命中即
+  `vb6_ComPackBSTRRef(&VB6_SA_AT(...))`。
+- **类字段 / With 成员**：`MemberAccessExpr` 用 `inferClassTypeOfExpr(*ma.object)` 得宿主类，
+  `WithMemberExpr` 从 `withObjectInfoStack_` 栈顶取宿主类（且必须 `kind == ClassInstance`，
+  `void*` 那一档的 With 临时量不是类实例指针）。两形都再问同一组两句：
+  `resolveClassMemberCall(cls, member).empty()`（成员不是方法/属性）+ `classFieldIsBstrSlot(cls, member)`
+  —— 与赋值站 §B168 那条「BSTR 槽」判据同源、同一个否决。
+
+仍按值（在册）：属性读（不可取址，VB6 是经 Let 写回）、控件默认属性折叠、`Db.Rs` 那种
+voidptr 对象成员链、数组本体。
+
+### 四、第一次 CI 红：把尾注当判据
+
+第一版成员那一形是**读发射文本的尾注**（正则匹配 `base->field  /* class var .F field */`）
+再借打包器的答案当型。CI `Tests (compile #1)` 立刻红：
+
+```
+[STATIC] variant_slot_store ... FAIL
+FAIL R5d 名单外的新文件 cgen_util_com.cpp x1 —— 又有人把那句尾注当判据了
+```
+
+这条门逐文件钉死 `class var .` 的处数，原意正是「谁在提这句文本都算，因为这一族就是从
+读尾注长出来的」。两处都不干净：尾注是 `classFieldReadExpr` 的输出而不是字段的声明，
+打包器的答案只是这一发的产物。于是改成问声明表（`classFieldIsBstrSlot`），
+`comByRefArgExpr` 那枚 `packFn` 形参一并撤掉，三处消费点回到原签名。
+
+### 五、读数
+
+夹具 `tests/b163_byref_addr`（x64 = x86 同形）：
+
+```
+B163-A1=la-ok   局部静态数组元素
+B163-A2=ma-ok   模块级数组元素
+B163-A3=new     动态数组元素（ReDim 后）
+B163-A4=fs-ok   类实例 Public String 字段
+B163-A5=ws-ok   With 块里的成员
+B163-A6=pt      属性读（保持按值，在册）
+B163-A7=mg-ok   模块级裸变量（第一百六十一刀的基线）
+B163-A8=tw-ok-ok 同一元素连发两次（回写后槽里仍是能用的串）
+B163-DONE
+```
+
+### 六、账与门
+
+- manifest：corpus 834 → 836（`tests/b163_byref_addr` 两枚），行数 1365 → 1367；
+  真动到的既有行只有 `Charts 2020/ucChartBar` 与 `ucTreeMaps` 两份（各多出按引用的一发），
+  另 6 条仍是机器侧的已知差（CI 那份是判据）。
+- 门 `check_byref_arg_pack_authority.ps1` 加 R7 四条：数组元素那一形只此一处判、
+  类字段那一形问声明表、With 成员同一问、新夹具两格（x64 + x86）。
+- 九门 9/9。CI 22/22（run 45510100696）。
+
+### 七、这一刀之后仍在册的相邻欠项
+
+- 属性读当 ByRef 实参仍按值（VB6 经 Let 写回）—— 要动得先有一条「读-改-写」的
+  双程发射，不是判据问题。
+- 数值五档的引用形同样只认裸标识符（`o.Inc arr(i)` 的 `Long` 元素仍按值）——
+  这一刀的落点只开了 String 档，数值那五档要跟 `VT_BYREF|VT_I4/R8/...` 的宽度一起看。
+- ByRef Boolean 未归一、无 typelib 的外部 VB6 ActiveX DLL 收 ByRef String 仍按值。
