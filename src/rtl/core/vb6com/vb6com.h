@@ -188,6 +188,9 @@ void* vb6_ComPackIntegerRef(int16_t* p);
 void* vb6_ComPackBoolRef(int16_t* p);
 void* vb6_ComPackSingleRef(float* p);
 void* vb6_ComPackDoubleRef(double* p);
+// 账 #305 §11.143 (第一百六十一刀): 第六档 —— ByRef String (VT_BYREF|VT_BSTR)。
+// 改前 String 实参一律按值打包，被调方的写回落在我们的副本上 ⇒ 调用方变量原样不动。
+void* vb6_ComPackBSTRRef(BSTR* p);
 
 // 富贵竹 FIX-011/012 (账 #610 第341刀): Variant 出参按引用打包 (VT_BYREF|VT_VARIANT)。
 // 服务端直写调用方槽 (GetBoundingBox / GetXData 一族); 打包前先经

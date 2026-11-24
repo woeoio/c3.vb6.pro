@@ -7,11 +7,12 @@
 # 改前我们的客户端对**标量一律按值打包**，对外部服务器的 ByRef 写回因此落在虚空。
 #
 # 规则（改坏了会红）：
-#   R1  五枚 Ref 打包器 (Int/Integer/Bool/Single/Double) 在 vb6com_pack.c 各定义 1 次、
+#   R1  六枚 Ref 打包器 (Int/Integer/Bool/Single/Double/BSTR) 在 vb6com_pack.c 各定义 1 次、
 #       在 vb6com.h 各声明 1 次 —— 按 C 存储宽度分标签，Integer/Boolean 都是 2 字节。
+#       (BSTR 那一枚是 §11.143 第一百六十一刀补的: 字符串实参改前一律按值，写回落在虚空。)
 #   R2  「这枚实参该不该按引用」的唯一主人 comByRefArgExpr：定义 1 (cgen_util_com.cpp) +
 #       声明 1 (cgen_helpers.inc) + 调用 2 (com_bind 的早绑定/晚绑定两支)。
-#   R3  类型 → 打包器那张 switch 五档各 1 行；Integer 必须问 knownIntVars_ 而不是
+#   R3  类型 → 打包器那张 switch 六档各 1 行；Integer 必须问 knownIntVars_ 而不是
 #       inferExprType (后者对 Integer 答 Long ⇒ 按 I4 写回 = 越界写 4 字节)。
 #   R4  早绑定那一支只对声明为 ByRef 的形参取址 (ByVal 一律不取址)：positional 与 named 两处闸。
 #   R5  判据面：夹具两件 + runner 里五枚正针 / 两枚「仍按值」证人 / 三枚反面针。
@@ -52,7 +53,7 @@ function Expect($tag, $got, $want, $note) {
 }
 
 # R1 —— 五枚 Ref 打包器：定义各 1、声明各 1
-foreach ($n in @('Int', 'Integer', 'Bool', 'Single', 'Double')) {
+foreach ($n in @('Int', 'Integer', 'Bool', 'Single', 'Double', 'BSTR')) {
     Expect ("R1 vb6_ComPack${n}Ref defined")  (Count-Pattern $packC  ('(?m)^void\* vb6_ComPack' + $n + 'Ref\(')) 1 '定义只许一枚, 在 vb6com_pack.c'
     Expect ("R1 vb6_ComPack${n}Ref declared") (Count-Pattern $comHdr ('void\* vb6_ComPack' + $n + 'Ref\(')) 1 '声明只许一枚, 在 vb6com.h'
 }
@@ -68,6 +69,7 @@ Expect 'R3 IntegerRef mapping'  (Count-Pattern $utilC 'fn = "vb6_ComPackIntegerR
 Expect 'R3 BoolRef mapping'     (Count-Pattern $utilC 'fn = "vb6_ComPackBoolRef"') 1 'Boolean → VT_BOOL'
 Expect 'R3 SingleRef mapping'   (Count-Pattern $utilC 'fn = "vb6_ComPackSingleRef"') 1 'Single → VT_R4'
 Expect 'R3 DoubleRef mapping'   (Count-Pattern $utilC 'fn = "vb6_ComPackDoubleRef"') 1 'Double → VT_R8'
+Expect 'R3 BSTRRef mapping'     (Count-Pattern $utilC 'fn = "vb6_ComPackBSTRRef"') 1 'String → VT_BYREF|VT_BSTR (§11.143)'
 Expect 'R3 Integer asks knownIntVars_' (Count-Pattern $utilC 'knownIntVars_\.count\(lower\) \? Vb6Type::Integer') 1 'inferExprType 对 Integer 答 Long, 宽度必须问专属表'
 
 # R4 —— 早绑定那一支只对 ByRef 形参取址
@@ -82,6 +84,8 @@ foreach ($n in @('vb6_ComPackIntRef(&n)', 'vb6_ComPackIntegerRef(&i)', 'vb6_ComP
     Expect ("R5 needle " + $n) ([regex]::Matches($h, [regex]::Escape($n))).Count 1 '五档 Ref 各一枚正针'
 }
 Expect 'R5 by-value witnesses' ([regex]::Matches($h, 'vb6_ComPackInt\((7|\(n \+ 1\))\)')).Count 2 '字面量/表达式仍按值'
+# §11.143: 字符串那一档的判据面是 vbp 夹具两句 (b162_byref_string_arg / _x86)，不入这一张内联表。
+Expect 'R5 bstr fixture cases' ([regex]::Matches($h, "Test-Vbp 'b162_byref_string_arg")).Count 2 '两格: x64 + x86'
 Expect 'R5 absent lesion' ([regex]::Matches($h, 'vb6_ComPackInt\(&n\)')).Count 1 '改前那一形只许留在 Absent'
 
 if ($fails.Count -gt 0) {

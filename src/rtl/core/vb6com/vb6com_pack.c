@@ -189,6 +189,22 @@ void* vb6_ComPackDoubleRef(double* p) {
     return (void*)pv;
 }
 
+// 账 #305 §11.143 (第一百六十一刀): 第六档 Ref —— ByRef String。
+// 上面五档只认数值/布尔，字符串那一档改前一律按值打包 (vb6_ComPackBSTR)，于是被调方
+// 体里 `x = x & "-ok"` 写在**我们自己**那枚副本上，调用方变量原样不动
+// (.temp/k162/p1 实测 `Dim s As String: s="hi": o.BumpS s` ⇒ 仍是 "hi"，真 VB6 是 "hi-ok")。
+// 这里按晚绑定口径递 VT_BYREF|VT_BSTR，pbstrVal 直指调用方那枚 BSTR 槽；服务端
+// (vb6_VariantBorrowIntoSlot / vb6_ByRefScalarWriteBack 的 VT_BSTR 臂) 先自己拷一份、
+// 出站再把所有权交回这一格 —— 双方都不许就地清楚调用方那枚串。
+// 注意跟 vb6_ComPackObjectRef 的分界：对象那一格递的是 void**，这一格是 BSTR*。
+void* vb6_ComPackBSTRRef(BSTR* p) {
+    VARIANT* pv = (VARIANT*)calloc(1, sizeof(VARIANT));
+    VariantInit(pv);
+    pv->vt = VT_BYREF | VT_BSTR;
+    pv->pbstrVal = p;
+    return (void*)pv;
+}
+
 /* 富贵竹 FIX-011/012 (账 #610 第341刀): Variant 出参按引用打包 —— 五档标量 Ref 族
  * 缺的第六档。调用方槽是 vb6_VARIANT, 与 Windows VARIANT 同布局
  * (vb6rtl_variant.h rev11), pvarVal 直接指它。FIX-012 闭环: 递出前先调

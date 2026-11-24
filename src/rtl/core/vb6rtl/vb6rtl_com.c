@@ -1007,7 +1007,7 @@ void vb6_ArraySlotWriteBack(VARIANT *client, void *slot) {
  * 体里改的也是槽，这里按 pointee 的类型写回对端变量。只认数值/布尔那几档：BSTR 要换分配器、
  * 对象要动引用计数、Variant 要整枚拷贝 —— 都不在本刀（槽留 Empty 那一形与改前同形）。 */
 void vb6_ByRefScalarWriteBack(VARIANT *client, void *slot) {
-    const vb6_VARIANT* s = (const vb6_VARIANT*)slot;
+    vb6_VARIANT* s = (vb6_VARIANT*)slot;
     if (!client || !s) return;
     if ((client->vt & VT_BYREF) == 0 || (client->vt & VT_ARRAY) != 0) return;
     switch (client->vt & VT_TYPEMASK) {
@@ -1017,6 +1017,22 @@ void vb6_ByRefScalarWriteBack(VARIANT *client, void *slot) {
         case VT_R4:   if (client->pfltVal)  *client->pfltVal  = s->fltVal;  break;
         case VT_BOOL: if (client->pboolVal) *client->pboolVal = s->boolVal; break;
         case VT_UI1:  if (client->pbVal)    *client->pbVal    = s->bVal;    break;
+        /* 账 #305 §11.143 (第一百六十一刀): ByRef String 的出站 —— 所有权转移，不是拷贝。
+         * 入槽那一臂已经把对端那枚串拷进槽（槽里那份是**我们的**），体里改的是槽；
+         * 这里把槽里那枚交给对端，同时把对端旧的那枚退掉，顺序不能反（先赋值再退旧，
+         * 对端 `*pbstrVal` 若与槽里那份是同一枚也不会被双重释放 —— 它们永远不同：
+         * 入槽是 SysAllocString，体里赋值又是另一枚）。交出去后把槽置空，
+         * 下面那一圈收尾就不会再去碰它（vb6_VariantSlotRelease 只认数组，本就不得退串）。 */
+        case VT_BSTR:
+            if (client->pbstrVal) {
+                BSTR* dst = client->pbstrVal;
+                BSTR old = *dst;
+                *dst = s->bstrVal;
+                s->bstrVal = NULL;
+                s->vt = vb6_vtEmpty;
+                if (old) SysFreeString(old);
+            }
+            break;
         default: break;
     }
 }
@@ -1124,6 +1140,14 @@ void vb6_VariantBorrowIntoSlot(const VARIANT *src, void *slot) {
             case VT_R4:   s->vt = vb6_vtSingle;  s->fltVal  = src->pfltVal  ? *src->pfltVal  : 0; return;
             case VT_BOOL: s->vt = vb6_vtBoolean; s->boolVal = src->pboolVal ? *src->pboolVal : 0; return;
             case VT_UI1:  s->vt = vb6_vtByte;    s->bVal    = src->pbVal    ? *src->pbVal    : 0; return;
+            /* 账 #305 §11.143 (第一百六十一刀): ByRef String —— 数值那六档是把**值**搬进槽，
+             * 字符串不能照办：体里一句 `x = x & "-ok"` 先 SysFreeString 掉 `*x`，那就是
+             * 调用方那枚串。所以这里给槽**自己的一份副本**（槽的生命周期到出站回写为止，
+             * 回写时所有权直接交给对端），调用方那枚在此期间一个字节不动。 */
+            case VT_BSTR: s->vt = vb6_vtBSTR;
+                          s->bstrVal = (src->pbstrVal && *src->pbstrVal)
+                                           ? SysAllocString(*src->pbstrVal) : NULL;
+                          return;
             default:      return;
         }
     }
@@ -1177,6 +1201,13 @@ HRESULT vb6_ComArgNormalize(const VARIANT *src, VARTYPE want, void *slot, VARIAN
     VariantInit(scratch);
     if (want == VB6_ARGVT_SKIP) return S_OK;   /* 这一格不问，也不许顺手清一下 */
     if (!src || src->vt == want) return S_OK;  /* 同档：借用就是答案 */
+    /* 账 #305 §11.143 (第一百六十一刀): 引用形的 pointee 已经等于声明档 ⇒ **不换算**。
+     * 入槽那一臂 (vb6_VariantBorrowIntoSlot) 已经把 pointee 的值搬成值形槽了，再换一趟
+     * VariantChangeType 会把槽里那份换成 scratch 的副本 —— 而 scratch 在收尾时必被
+     * VariantClear。对数值无害(没有所有权)，对字符串就是命：出站把槽里那枚的所有权交给了
+     * 对端，随后 VariantClear(scratch) 又把它 SysFreeString 掉 ⇒ 调用方手里是一枚已释放的串
+     * (.temp / tests\b162 实测 x64 打印出的是复用的堆内容、x86 侥幸对，经典 use-after-free)。 */
+    if ((src->vt & VT_BYREF) && (src->vt & VT_TYPEMASK) == (want & VT_TYPEMASK)) return S_OK;
     /* 账 #305 §B224: 目的档是 BSTR 时口径归 VB 语言(布尔答 True/False)，见 vb6_ComChangeType。 */
     {
         const HRESULT hrConv = vb6_ComChangeType(scratch, src, want);

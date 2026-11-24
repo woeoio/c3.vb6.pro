@@ -1107,7 +1107,9 @@ std::string CCodeGen::comPackExpr(Expr& expr) {
 // ⇒ x=11)：晚绑定对**带型变量**递的是 VT_BYREF|<该型>，写回直接落到调用方变量上。
 // 这里只认三件同时成立：① 发射文本是简单 lvalue (标识符 / `me->` 字段)；② 类型是数值或
 // 布尔五档 (按 C 存储宽度分标签 —— Integer/Boolean 都是 2 字节，按 I4 打写回会越界写)；
-// ③ 不是数组载体 / Variant / 对象 / 字符串 —— 那几档的写回要动所有权，在册欠项。
+// ③ 不是数组载体 / Variant / 对象 —— 那几档的写回要动所有权，在册欠项。
+//    字符串**在**这一族里（§11.143 第一百六十一刀）：C 侧就是 BSTR 槽，服务端入槽拷一份、
+//    出站转移所有权，两个方向都不碰调用方那枚串。
 // 返回值 = 完整实参表达式 (空 = 保持改前的按值打包)。
 // 若该标识符是**本过程**的 ByRef 形参，C 侧它已经是 T*，直接交指针，不再取一次地址。
 std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText,
@@ -1156,6 +1158,11 @@ std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText,
         case Vb6Type::Boolean: fn = "vb6_ComPackBoolRef"; break;
         case Vb6Type::Single:  fn = "vb6_ComPackSingleRef"; break;
         case Vb6Type::Double:  fn = "vb6_ComPackDoubleRef"; break;
+        // 账 #305 §11.143 (第一百六十一刀): 第六档 —— 字符串。这块改前一律落 default
+        // 回按值打包，于是 `Bump(ByRef s As String)` 体里的赋值落在我们的副本上
+        // (.temp/k162/p1 实测 R3 仍是 "hi"). 字符串 lvalue 在 C 侧就是 BSTR 槽，
+        // 直接交地址；所有权那一间归服务端那两臂 (入槽拷一份、出站转移)。
+        case Vb6Type::String:  fn = "vb6_ComPackBSTRRef"; break;
         default: return "";
     }
     return fn + "(" + (isByRefParam ? argText : "&" + argText) + ")";

@@ -12541,6 +12541,14 @@ $b161Needles = @(
 "B161-Y1=ok 200", "B161-Y2=err6 val=200", "B161-L1=ok 2000000000", "B161-DONE")
 Test-Vbp 'b161_narrow_arg_overflow' "$Tests\b161_narrow_arg_overflow\B161Res.vbp" $b161Needles
 Test-Vbp 'b161_narrow_arg_overflow_x86' "$Tests\b161_narrow_arg_overflow\B161Res.vbp" $b161Needles -Arch "x86"
+# 账 #305 §11.143 (第一百六十一刀): ByRef String 形参的出站回写 —— 改前按值打包，体里的赋值
+# 落在我们的副本上，调用方变量原样不动（"hi" 而不是 "hi-ok"）。S4 是 ByVal 对照（不许回写），
+# S5 是体里不改（串必须完好），S6 是空串进，S7 是同一夹具里数值那六档的对照。
+$b162Needles = @(
+"B162-S1=5/hi-ok", "B162-S2=3/new", "B162-S3=0/[]", "B162-S4=4/keep",
+"B162-S5=4/loop", "B162-S6=3/-ok", "B162-S7=42", "B162-DONE")
+Test-Vbp 'b162_byref_string_arg' "$Tests\b162_byref_string_arg\B162Res.vbp" $b162Needles
+Test-Vbp 'b162_byref_string_arg_x86' "$Tests\b162_byref_string_arg\B162Res.vbp" $b162Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
