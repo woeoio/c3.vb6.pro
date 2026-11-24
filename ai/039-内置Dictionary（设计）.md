@@ -8196,3 +8196,118 @@ provided = "(vb6_cls_X*)vb6_ComObject_UnboxVb6Instance(((VARIANT*)args[0])->pdis
   （`setcls` 那格形状针钉着它）—— 参数槽与字段槽两笔账。
 - `§11.110` 值侧打包、`.temp/k150/p4` 的 V2 记账照旧在册。
 
+
+## §11.136（第一百五十五刀）工程类属性置空要点名 setter
+
+### 一、撞见
+
+上一刀（§11.135）在册第一笔：`Set box.Item = Nothing`（`box` 是工程类）改前发成
+
+```c
+vb6_ReleaseObject((void**)(&(void*){vb6_B154Box_prop_get_Item(box)}));  /* Set Nothing */
+```
+
+拿 **getter** 的返回值去 Release。实测两个症状：
+
+- **语义**：`prop_set_Item` 一次都没调 ⇒ 属性根本没被清空（探针 `P1-cleared=False`）；
+- **引用账**：逐站点打点（`.temp/k155/p3`，改前二进制）看到 item 的 `Terminate` **一次都没发生**
+  （`PT2=0 … PT8=0, Z-terms=0`，改后同一处 `PT8=1`）。
+
+第二条的机理不是"多减一格"，是**多加一格漏在那**：getter 交回的是**自持**引用
+
+```c
+vb6_ret_Item = (vb6_cls_B155Item*)vb6_ComObject_UnboxVb6Instance((void*)(me->mIt));
+if (vb6_ret_Item) vb6_cls_B155Item_AddRef(vb6_ret_Item);   /* ← 自持 */
+```
+
+而 `vb6_ReleaseObject`（`vb6com.c`）对**类实例指针**根本不 Release：
+
+```c
+IUnknown* pUnk = (IUnknown*)(*objPtr);
+if (vb6_ComIsDispatchable(pUnk)) {           /* ← Fix 191 那道闸 */
+    pUnk->lpVtbl->Release(pUnk);
+}
+*objPtr = NULL;
+```
+
+裸类实例不是可分派对象（首字段是引用计数，不是 vtable）⇒ `IsDispatchable` 判否 ⇒
+那一 Release **什么也没做**，getter 的 AddRef 就漏在账上。于是：属性没清空（槽还握着），
+而 item 的计数永远多一格 ⇒ 盒子出厂时收不干净，`Terminate` 不来。
+
+### 二、为什么改写没接上
+
+置空走的是 `cgen_setlet_set_prop.inc` 里最早的那一支：先 `emitExpr(*node.target)`，
+再对求值结果套 `vb6_ReleaseObject`，指望主路（`Fix 056b`）把文本里的 `prop_get_`
+前缀改写成 `prop_let_` / 保持 `prop_set_`。
+
+而 `emitExpr` 给**属性左值**发的本来就是 `prop_get_Item(box)` —— 左值那一路只有
+`prop_get_` 这一个名字可用（写口没有"取引用"这回事）。`Fix 056b` 只认
+`prop_set_`/`prop_let_` 前缀 ⇒ 前缀对不上 ⇒ 一路落到"对调用结果 Release"那条通用路，
+静默发错。**这不是漏了一个分支，是问错了对象：拿文本去认语义。**
+
+### 三、修：置空之前先问符号
+
+在那一支早退**之前**加一段，用与 Set 值那一支**同一张表**（`lookupModuleByKind`）问符号：
+
+```cpp
+if (node.target->kind == ASTNodeKind::MemberAccessExpr) {
+    Symbol* psN = symTab_.lookupModuleByKind(ma.memberName, SymbolKind::PropertySet);
+    ...
+    if (okN) {
+        c_.emitLine(cProcName("prop_set_" + ma.memberName, psN->access, objClsN)
+                    + "(" + objN + ", NULL);  /* Set Nothing (property setter) */");
+        return;
+    }
+}
+```
+
+`okN` 的闸与 Set 值那一支同源，一条不少：
+
+| 闸 | 为什么 |
+|---|---|
+| 推不出类名（晚绑定 `Object`/`Variant`） | 成员的 C 存储是 `void*`，直发等于当实例指针用 ⇒ 交给 COM `SetRef` |
+| `knownFormControls_` 命中 | 控件属性不属该类，`lookupModuleByKind` 全局按名会误命中他类同名属性 |
+| `hostPseudoIsObject` 命中 | `UserControl`/`Ambient`/`VBA` 等宿主伪对象同理 |
+| `inferUdtTypeOfExpr` 非空 | 接收者是 UDT 值/字段链，成员必是结构体字段，永远不是类属性 |
+| 外部符号且 `sourceModule != 接收者类` | 只剩"属性确实属于这个类"才直发 |
+
+晚绑定那一腿没被这个改动碰到：`Set o.Item = Nothing` 照旧发 `vb6_ComSetRef(o, L"Item", NULL)`
+—— 夹具 `P2-cleared=True` 两档都对，就是钉这一条。
+
+### 四、读数
+
+新夹具 `tests/b155_prop_set_nothing`（八针），x64 与 x86 同值：
+
+| 针 | 改前 | 改后 | 意思 |
+|---|---|---|---|
+| `P1-held` | 11 | 11 | 置空前存住 |
+| `P1-cleared` | **False** | **True** | 置空后 `ItemIsNothing` ← 语义判据 |
+| `P2-cleared` | True | True | 晚绑定置空经 COM 派发（对照，堵住"顺手把晚绑定改成直发"） |
+| `P3-held` | 11 | 11 | 置空后再写还能用 |
+| `P4-nothing` | False | False | 放掉调用方那一枚后盒子还握着 |
+| `Z-terms` | **0** | **1** | item Terminate ← 账判据 |
+| `Z-made` | 1 | 1 | — |
+| `DONE` | — | — | — |
+
+`P1-cleared` 与 `Z-terms` 是一行发错踩出来的两件事：前者是语义（写口没点名），后者是账
+（getter 那枚自持引用被一个对裸实例无效的 Release 顶掉）。本刀两件一起回正。
+
+### 五、发码面
+
+- 清单 **822 行**（820 + 新夹具两行，接在 b154 两行之后）；
+- 全语料 **零移动**：存量 820 行里没有一处 `Set <工程类>.Prop = Nothing`，`cmp.ps1` 只列
+  那 6 行机器侧在册（b132 / ctrlmscomm / GUISample×3 / TeeChart）；
+- 九门 9/9 rc=0（`inputs=822 [.vbp=309 .bas=513]`）；相邻夹具 b144…b154 读数逐条不变。
+
+### 六、在册（未修）
+
+- **`vb6_ReleaseObject` 对裸类实例是空转**：本刀只是绕开了它踩的那一格（置空不再走那条路）；
+  但"把类实例塞进 `void*` 再交给 `vb6_ReleaseObject`"仍然到处都能写出来，写一次漏一格。
+  真修要问的是"这个 `void*` 是谁的、该怎么放手"，不是再加一道闸。
+- **晚绑定读带类型的属性**：`o.Held`（`Property Get Held() As Long`）仍发成
+  `vb6_CStrLong(vb6_ComGetStringProp(o, L"Held"))` —— 用 **String** 那一枚读臂读 Long，
+  读回垃圾（§11.135 实测 `B3-late-held=595138088`）。写口这一族（Set 值 / Set 置空）已修，
+  读口这一半是同一张属性表上剩下的那半。
+- `Set c->f = o`（`o` 是 `As Variant` **形参**）仍走 `vb6_VariantFromValue` 浅拷贝
+  （`setcls` 那格形状针钉着它）—— 参数槽与字段槽两笔账。
+- `§11.110` 值侧打包、`.temp/k150/p4` 的 V2 记账照旧在册。
