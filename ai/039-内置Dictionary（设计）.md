@@ -8580,3 +8580,133 @@ b153  A1-terms=0  A2-held-tag=5  A3-terms=0  Z-terms=1  B1-len=1  B2-len=4  C1-t
 - `Set obj.Prop = Nothing`（控件伪对象那一档）未动。
 - `vb6_ReleaseObject` 对**裸类实例**是空转（§11.136 在册第一笔）。
 - `§11.110` 值侧打包、`.temp/k150/p4` 的 V2 记账照旧在册。
+
+## §11.140（第一百五十八刀）声明档说话：浮点属性读不再被目标档截断
+
+### 一、撞见
+
+上一刀（§11.139）修的是"声明为 Variant 的成员被 consumer 二次包装"。收尾时把同一族的
+下一问摆出来：**声明为具体档（String / Double）的成员，读口按目标档发码会不会把值本身弄坏？**
+
+探针 `.temp/k159/p1`（`B159Box` 有 `Property Get S() As String` = `"101"`、
+`Property Get D() As Double` = `1.5`、`Property Get O() As Object`），主程序 `o As Object`：
+
+```vb
+n = o.S       ' S1
+n = o.S + 1   ' S2
+d = o.S       ' S3
+d = o.D       ' S4
+n = o.D       ' S5
+v = o.S       ' S6
+Set it = o.O  ' S7
+```
+
+**整份工程编不过，rc=1**：
+
+```
+B159Main.c(44): error C2440: 无法从 'double' 转换为 'BSTR'
+```
+
+发码（改前）：
+
+```c
+n = vb6_ChkLong(vb6_ComGetIntProp(o, L"S"));                              /* S1 对 */
+n = vb6_ChkLong(vb6_CStrDbl(vb6_Val(vb6_ComGetIntProp(o, L"S")) + 1.0));  /* S2 */
+vb6_Dbl_AssignFromBSTR(&d, vb6_ComGetDoubleProp(o, L"S"));                 /* S3 ← C2440 */
+d = vb6_ComGetDoubleProp(o, L"D");                                        /* S4 对 */
+n = vb6_ChkLong(vb6_FltToLng(vb6_ComGetIntProp(o, L"D")));                /* S5 */
+```
+
+### 二、三笔账，一个根
+
+| 形 | 病 | 性质 |
+|---|---|---|
+| S3 `d = o.S` | 读口发 `DoubleProp`（double），consumer 按**声明档 String** 发 `Dbl_AssignFromBSTR`（要 BSTR） | 编译期 C2440 |
+| S2 `n = o.S + 1` | 读口发 `IntProp`（int32），consumer 按声明档 String 走 Fix 113g 的"串+数"形，`vb6_Val(<int32>)` 把整数当 `wchar_t*` 解引用 | **运行期 0xC0000005** |
+| S5 `n = o.D` | 读口按**目标档 Long** 发 `IntProp`，RTL 内 `VariantChangeType(…, VT_I4)` **当场把 1.5 截成 1**；consumer 那侧的 `FltToLng` 再圆也圆不回来（真 VB6 是 `CInt(1.5)` = **2**） | 静默错值 |
+
+三笔都是同一句：**同一件"这个值是什么型别"的事，读口按目标档说、consumer 按声明档说。**
+
+S5 那笔是最要命的一类 —— 它不吵不闹，只是把小数丢了。而且它证明了一件事：
+**截断发生在读口，consumer 再圆也救不回来**，所以这一类只能由读口让路。
+
+### 三、修：让读口服从声明档（只服浮点那一档）
+
+`resolveComValue` 在按目标档发码之前先问一次成员的声明档（`lookupModule(memberName)`，
+与 `inferExprType` 的兼底**同一个符号源**）：
+
+```cpp
+std::string unpackEff = unpackType;
+if (unpackEff == "Int" || unpackEff == "Long" || unpackEff == "Boolean"
+    || unpackEff == "Double" || unpackEff == "Single") {
+    const Symbol* ms140 = symTab_.lookupModule(memberName);
+    if (ms140 && (ms140->type == Vb6Type::Double || ms140->type == Vb6Type::Single
+                  || ms140->type == Vb6Type::Currency || ms140->type == Vb6Type::Date)) {
+        unpackEff = "Double";
+    }
+}
+```
+
+于是 S5 变成 `vb6_ChkLong(vb6_FltToLng(vb6_ComGetDoubleProp(o, L"D")))` —— 取整交给
+consumer 那一站（它本来就按声明档准备了 `FltToLng`），答案是 2。
+
+另外两笔在 consumer 侧收口，判据用的还是上一刀那枚 `isScalarComReadText`（只认已发出的文本）：
+
+- `cgen_assign_value_sem.inc` 的 Double←String 支：右值已经是裸 double 读 ⇒ 直接
+  `target = value;`，不走 `vb6_Dbl_AssignFromBSTR`；
+- `cgen_expr_binary.cpp` 的 Fix 113g（"串 + 数"那一形）：某一侧是裸标量读 ⇒ 它**不是串**，
+  不进 `vb6_Val` 那一形，让 VB6 的数值加法直接算。
+
+### 四、试过但退回的一条
+
+顺手试过把**声明为 String** 的成员也改成读口发 `StringProp`（"谁声明谁说话"的彻底版）。
+编译**过**了，但 S1 当场报 **错误 6 Overflow**：consumer 那一站按"我收到的就是数"发的
+`vb6_ChkLong(...)`，拿到 BSTR 就是**指针当整数**。这一族要 consumer 各站配合折数
+（`vb6_CStrLong` 等），不是读口一句话能收的，**本刀不碰，记账在册**。
+
+### 五、读数
+
+新夹具 `tests/b159_late_decl_typed_read`（九针），x64 与 x86 同值：
+
+| 针 | 改前 | 改后 | 意思 |
+|---|---|---|---|
+| `S1` | 101 | 101 | String 属性读进 Long |
+| `S2` | **AV 0xC0000005** | 102 | 参与算术（不再把 int 递给 `vb6_Val`） |
+| `S3` | **编不过** | 101 | String 属性读进 Double |
+| `S4` | 1.5 | 1.5 | Double 属性读进 Double |
+| `S5` | **1** | **2** | Double 属性读进 Long（`CInt(1.5)`=2） |
+| `S6` | 8/101 | `8/101` | 读进 Variant，型别保真（§11.138 那条口径） |
+| `S7` | 77 | 77 | Object 属性读出来再取成员 |
+| `Z-terms` | — | 1 | 对象寿命（引用计数没被本刀动过） |
+| `DONE` | — | — | — |
+
+老夹具回归读数**逐字相同**：
+
+```
+b144  A2-terms=1 B2-tag=8 B2-terms=1 C1-terms=2 D1-terms=3 E1-terms=4 Z-terms=4 Z-tag=8
+b146  A1-terms=1 B1-tag=7 B2-terms=0 C1-alive=0 C2-terms=1 Z-terms=2 Z-made=3
+b148  A2-self-tag=5 A3-tag=6 B2-fresh-tag=11 B3-item-terms=1 C2-held-tag=77 C3-item-terms=2
+      Z-box-terms=0 Z-item-made=2 Z-item-terms=2
+b153  A1-terms=0 A2-held-tag=5 A3-terms=0 Z-terms=1 B1-len=1 B2-len=4 C1-terms=2
+b158  L1=11 L2=12 L3=11 L4=42 L5=8/42
+```
+
+### 六、发码面
+
+- 清单 **826→828**（新夹具 `.bas` 与 `.vbp` 两行，行数 1359）；
+- 全语料 828 行，**只有 6 条机器侧行移动**（b132、ctrlmscomm、GUISample×3、TeeChart），
+  以 CI 为准；其余逐字未动 —— 说明存量语料里"声明档查得到符号"的晚绑定读，本来就都是
+  同档读写，本刀只动到那些**跨档**的形状；
+- 九门 9/9 rc=0（`inputs=828 [.vbp=312 .bas=516]`）；
+- CI 22/22（run 45370730242，sha `ecee5fc9`）。
+
+### 七、在册（未修）
+
+- **声明为 String 的成员读进数值档**（`n = o.S`）：读口若服声明档，consumer 各站不折数
+  会报 6（第四节实测）；要 consumer 全线配合，另开一刀。当前读口仍按目标档发，S1 这种
+  "串是纯数字"的情形答案正确，但 `n = o.Note`（`"abc"`）会走 RTL 的宽松折数。
+- **本刀只服浮点档**：声明为 Integer/Byte/Boolean 的成员仍按目标档发码（同一族，尚未量到病）。
+- `Set c->f = o`（`o` 是 `As Variant` **形参**）仍走 `vb6_VariantFromValue` 浅拷贝。
+- `Set obj.Prop = Nothing`（控件伪对象那一档）未动。
+- `vb6_ReleaseObject` 对**裸类实例**是空转（§11.136 在册第一笔）。
+- `§11.110` 值侧打包、`.temp/k150/p4` 的 V2 记账照旧在册。
