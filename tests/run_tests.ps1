@@ -12389,10 +12389,11 @@ Test-Vbp 'b148_selfcls_return_x86' "$Tests\b148_selfcls_return\B148Res.vbp" $b14
 # 首读就 438（量具实测）。改后 `vb6_ComSetRef(vb6_ComGetObjectProp(o, L"Child"), L"Held", it)`。
 #   A1: 根对象自己的 Held 仍是空（没写到根上）
 #   A2/A3: 子对象上写的确实是 it 那一枚（改 h.Tag 后 it.Tag 跟着变）
-#   Z:  box 停在 1 = 在册的接收者临时引用（§11.131, 另一把尺）；item 跟着被它夹住
+#   Z:  box = 2（根 + 子都 Terminate）。本夹具里的嵌套读链 `Set h1 = o.Child.Held` 由 §11.132
+#       对平，所以这一行从 1 变 2；item 仍由写口打包那一枚夹着（§11.110）
 $b149Needles = @(
 "B149-A1-root-held=empty", "B149-A2-child-held=B149Item", "B149-A3-tag=9",
-"B149-C1-item-terms=0", "B149-Z-box-terms=1", "B149-Z-item-made=1",
+"B149-C1-item-terms=0", "B149-Z-box-terms=2", "B149-Z-item-made=1",
 "B149-Z-item-terms=0", "B149-DONE")
 Test-Vbp 'b149_chain_write' "$Tests\b149_chain_write\B149Res.vbp" $b149Needles
 Test-Vbp 'b149_chain_write_x86' "$Tests\b149_chain_write\B149Res.vbp" $b149Needles -Arch "x86"
@@ -12407,6 +12408,19 @@ $b150Needles = @(
 "B150-Z-item-made=1", "B150-Z-item-terms=0", "B150-DONE")
 Test-Vbp 'b150_chain_recv_ref' "$Tests\b150_chain_recv_ref\B150Res.vbp" $b150Needles
 Test-Vbp 'b150_chain_recv_ref_x86' "$Tests\b150_chain_recv_ref\B150Res.vbp" $b150Needles -Arch "x86"
+
+# 账 #305 §11.132（第一百五十一刀）：链读**接收者**那一枚临时引用。
+# 改前 `vb6_ComGetIntProp(vb6_ComGetObjectProp(p, L"Child"), L"Tag")` —— 接收者那枚没人放，
+# 每多一层链漏一枚（box-terms 1）；改后接收者落 _rrvN、语句末放（box-terms 3）。
+#   A2/B1: 嵌套对象读 / 嵌套标量读的值都对
+#   C1: 两层链 `p.Child.Child.Tag` 的值
+#   Z : 根 + 两级子对象都 Terminate = 3（改前 1）；Z-item 停在 0 = 写口打包那一枚（§11.110）
+$b151Needles = @(
+"B151-A2-held-tag=7", "B151-B1-child-tag=99", "B151-C1-two-level-tag=99",
+"B151-Y-box-made=3", "B151-Z-box-terms=3", "B151-Z-item-made=1",
+"B151-Z-item-terms=0", "B151-DONE")
+Test-Vbp 'b151_chain_read_ref' "$Tests\b151_chain_read_ref\B151Res.vbp" $b151Needles
+Test-Vbp 'b151_chain_read_ref_x86' "$Tests\b151_chain_read_ref\B151Res.vbp" $b151Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

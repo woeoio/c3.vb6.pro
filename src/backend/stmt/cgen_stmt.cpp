@@ -180,6 +180,9 @@ c_.emitLine("switch(vb6_gosub_stack[--vb6_gosub_sp]) {");
             if (ot.kind == 2) {
                 c_.emitLine("vb6_VariantClear(&" + ot.name +
                             ");  /* 账 #464 §B164: 语句末收回现造的那枚变体临时量 */");
+            } else if (ot.kind == 3) {
+                c_.emitLine("vb6_ReleaseObject((void**)&" + ot.name +
+                            ");  /* 账 #305 §11.132: 语句末收回链读接收者那一枚 */");
             } else {
                 c_.emitLine("vb6_BSTR_Free(" + ot.name +
                             ");  /* 账 #464 §B164: 语句末收回现造的那枚串临时量 */");

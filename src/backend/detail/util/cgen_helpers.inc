@@ -1410,6 +1410,15 @@
     std::string comGetterExpr(const ComSigView& sv, const std::string& objExpr,
                               const std::string& memberName) const;
 
+    // 账 #305 §11.132（第一百五十一刀）：链读**接收者**那一枚临时引用。
+    // `vb6_ComGetObjectProp(x, L"Child")` 交回的那一枚归调用方（§11.126），而被当接收者
+    // 再递一层时没人放 ⇒ 每多一层链漏一枚，中间那枚对象永不 Terminate。
+    // 这一段返回**可当接收者用**的表达式：是自有链读交回的那一枚 ⇒ 落成 `_rrvN` 并登记
+    // 语句末收回（档 3）；其余（命名变量 / 视图结构体 / 宿主伪对象 / 控件 HWND ...）原样交回。
+    // 判据与四道闸都写在定义上；**必须在所有 recognizer 都问过之后**才调 —— 提了名就把
+    // 文本里的 `L"Tabs"` / `vb6_hwnd_X` 这些线索带走了。
+    std::string hoistComRecvTemp(const std::string& objExpr);
+
     // 上面那一条的 switch 本体，**按返回类型**答（账 #305 #474: 站F 那位读者要问的就是这一问，
     // 第二处不许再抄一份档位表）。未知档 ⇒ 交回原生 VARIANT 那一发，与 comGetterExpr 同一答案。
     std::string comGetterExprForRetCType(const std::string& retCType, const std::string& objExpr,

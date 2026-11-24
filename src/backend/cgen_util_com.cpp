@@ -265,6 +265,25 @@ bool CCodeGen::tabStripChainReadExpr(const Expr* nodeExpr, std::string& out) {
     return false;
 }
 
+std::string CCodeGen::hoistComRecvTemp(const std::string& objExpr) {
+    // 只认「自有链读交回的那一枚」：这两族 RTL 出口把引用**转移**给调用方
+    //（§11.126: vb6_ComVarFree 只 free 结构体不碰内容），其余表达式都没有这层责任。
+    const bool owns = objExpr.compare(0, 21, "vb6_ComGetObjectProp(") == 0
+                   || objExpr.compare(0, 18, "vb6_ComCallObject(") == 0;
+    if (!owns) return objExpr;
+    // 闸 ①: 文件作用域没有「语句末」可以收回 ⇒ 不提名
+    if (!currentProc_) return objExpr;
+    // 闸 ②: 声明与收回必须同一层（块内条件那一发声明落在块里、收回落在块外 ⇒ 越界）
+    if (c_.indentLevel() != stmtLevel_) return objExpr;
+    if (blockCondDepth_ > 0) return objExpr;
+    // 闸 ③: 拼串左操作数那一段的子串判据会因提名而翻面 ⇒ 不动
+    if (concatLeftDepth_ > 0) return objExpr;
+    const std::string tmp = "_rrv" + std::to_string(++comRecvTempSeq_);
+    c_.addPending("void* " + tmp + " = " + objExpr + ";");
+    ownedTempsToFree_.push_back(OwnedTemp{tmp, c_.indentLevel(), 3});
+    return tmp;
+}
+
 std::string CCodeGen::resolveComValue(const std::string& unpackType) {
     // P24-07: 早期绑定 — 利用签名returnType选择正确的解包函数
     if (!isComMarker_) return lastExpr_;
@@ -563,6 +582,10 @@ std::string CCodeGen::resolveComValue(const std::string& unpackType) {
     }
     isEarlyBoundCom_ = false;
     isComMarker_ = false;
+
+    // 账 #305 §11.132: 接收者本身是「自有链读交回的那一枚」⇒ 先落成临时量，语句末收回。
+    // 位置在**所有 recognizer 之后**：提了名会把 `L"Tabs"` / `vb6_hwnd_X` 这些线索带走。
+    objExpr = hoistComRecvTemp(objExpr);
 
     std::string getPropArgs = objExpr + ", L\"" + memberName + "\"";
 

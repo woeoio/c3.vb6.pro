@@ -12,10 +12,9 @@ Option Explicit
 ' A 路: 根对象 o 的 Held 必须还是空（没写到根上）
 ' B 路: 子对象 o.Child 的 Held 里必须是 it 那一枚
 ' C 路: 同一枚的证人 —— 改 h1.Tag 后 it.Tag 跟着变
-' Z 路: 收尾。box 停在 1 而非 2 是**在册**的: 本夹具里 `Set h1 = o.Child.Held` 是一发
-'      **嵌套读链**，中间那枚 `o.Child` 交回的引用没人放（§11.132 那把尺）。
-'      链写那一站（`Set p.Child.Held = it`）的接收者已在 §11.131 对平 ——
-'      只留链写的形状见 tests/b150_chain_recv_ref（box-terms 1→2）。
+' Z 路: 收尾。box-terms = 2（根 + 子都 Terminate）。本夹具里 `Set h1 = o.Child.Held` 是一发
+'      **嵌套读链** —— 它的中间那一枚在 §11.132 才对平（tests/b151_chain_read_ref），
+'      所以这里由 1 变成 2，与本夹具自己的链写（§11.131）两笔账一起结清。
 
 Public gBoxTerms As Long
 Public gItemTerms As Long
