@@ -492,11 +492,41 @@ static WORD vb6_ComFlagsFor(IDispatch* pDisp, DISPID dispid, int32_t argc) {
 static void vb6_ComNarrowArgs(IDispatch* pDisp, DISPID dispid, VARIANT** args, int32_t argc) {
     if (!pDisp || !args || argc <= 0) return;
     int widen = 0;
-    for (int32_t i = 0; i < argc; i++)
-        if (args[i] && (args[i]->vt == VT_R8 || args[i]->vt == VT_R4)) { widen = 1; break; }
-    if (!widen) return;                       /* 没有浮点实参 ⇒ 这条路径零代价 */
+    int bstrRef = 0;   /* 账 #305 §11.143: 有没有 VT_BYREF|VT_BSTR 实参 */
+    for (int32_t i = 0; i < argc; i++) {
+        if (!args[i]) continue;
+        if (args[i]->vt == VT_R8 || args[i]->vt == VT_R4) widen = 1;
+        else if (args[i]->vt == (VT_BYREF | VT_BSTR)) bstrRef = 1;
+    }
+    if (!widen && !bstrRef) return;            /* 没有需要问签名的实参 ⇒ 这条路径零代价 */
     ITypeInfo* ti = vb6_ComTypeInfoOf(pDisp);
-    if (!ti) return;
+    /* 账 #305 §11.143 (第一百六十一刀): 字符串按引用发是 VB6 晚绑定的口径 —— 只有
+     * **我们自己的工程类服务端** (没有 ITypeInfo 的那一类, 换算/回写在 vb6comserver 与
+     * vb6_ByRefScalarWriteBack) 会把它当成回写槽。对端没有 ITypeInfo 又不是我们那族包装器时
+     * 一律降成值副 —— 与一百六十一刀之前同形: 外部 OCX 的 IDispatch 不一定给 GetTypeInfo
+     * (MSSTDFMT.PropertyBag 就是这一形), 递引用给它是 13/AV, 不是退回。
+     */
+    if (!ti) {
+        /* 「对端是不是我们自己的工程类服务端」两形都认: 客户端手里的包装器 (IsVb6Wrapper),
+         * 以及传到这里时已经被剥壳的裸类实例 (工程类的登记表, 只查表不解引用)。
+         * 后者是实测踩到的那一格 —— .temp/k162 的第一版只问包装器, 传进来的是裸实例 ⇒
+         * 把自己的服务端当成外部 OCX 降成值, S1 当场退回 "hi"。 */
+        int ownServer = vb6_ComObject_IsVb6Wrapper(pDisp);
+        if (!ownServer) {
+            extern const void* vb6_FindProjectClassDescRaw(const void* inst);
+            ownServer = (vb6_FindProjectClassDescRaw(pDisp) != NULL);
+        }
+        if (bstrRef && !ownServer) {
+            for (int32_t i = 0; i < argc; i++) {
+                VARIANT* a = args[i];
+                if (!a || a->vt != (VT_BYREF | VT_BSTR) || !a->pbstrVal) continue;
+                BSTR copy = SysAllocString(*a->pbstrVal);
+                a->vt = VT_BSTR;
+                a->bstrVal = copy;   /* 结构体是我们自己的，直接改成值形；收尾那圈会退它 */
+            }
+        }
+        return;
+    }
     TYPEATTR* ta = NULL;
     if (FAILED(ti->lpVtbl->GetTypeAttr(ti, &ta)) || !ta) return;
     for (UINT f = 0; f < ta->cFuncs; f++) {
@@ -514,7 +544,18 @@ static void vb6_ComNarrowArgs(IDispatch* pDisp, DISPID dispid, VARIANT** args, i
             int k = (int)(fd->cParams - argc + i);
             if (k < 0 || k >= (int)fd->cParams) continue;
             VARIANT* a = args[i];
-            if (!a || (a->vt != VT_R8 && a->vt != VT_R4)) continue;
+            if (!a) continue;
+            /* §11.143: 引用串 ⇄ 声明档 —— 问同一张形参表 (下标口径与上面那条相同)。 */
+            if (bstrRef && a->vt == (VT_BYREF | VT_BSTR)) {
+                const ELEMDESC* ed = &fd->lprgelemdescParam[k];
+                if ((ed->paramdesc.wParamFlags & PARAMFLAG_FOUT) == 0 && a->pbstrVal) {
+                    BSTR copy = SysAllocString(*a->pbstrVal);
+                    a->vt = VT_BSTR;
+                    a->bstrVal = copy;   /* 结构体是我们自己的，直接改成值形；收尾那圈会退它 */
+                }
+                continue;
+            }
+            if (!widen || (a->vt != VT_R8 && a->vt != VT_R4)) continue;
             int want = vb6_ComIntParamVt(ti, &fd->lprgelemdescParam[k].tdesc);
             if (!want) continue;
             VARIANT tmp;

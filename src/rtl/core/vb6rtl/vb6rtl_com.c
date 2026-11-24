@@ -1201,13 +1201,18 @@ HRESULT vb6_ComArgNormalize(const VARIANT *src, VARTYPE want, void *slot, VARIAN
     VariantInit(scratch);
     if (want == VB6_ARGVT_SKIP) return S_OK;   /* 这一格不问，也不许顺手清一下 */
     if (!src || src->vt == want) return S_OK;  /* 同档：借用就是答案 */
-    /* 账 #305 §11.143 (第一百六十一刀): 引用形的 pointee 已经等于声明档 ⇒ **不换算**。
-     * 入槽那一臂 (vb6_VariantBorrowIntoSlot) 已经把 pointee 的值搬成值形槽了，再换一趟
-     * VariantChangeType 会把槽里那份换成 scratch 的副本 —— 而 scratch 在收尾时必被
-     * VariantClear。对数值无害(没有所有权)，对字符串就是命：出站把槽里那枚的所有权交给了
-     * 对端，随后 VariantClear(scratch) 又把它 SysFreeString 掉 ⇒ 调用方手里是一枚已释放的串
-     * (.temp / tests\b162 实测 x64 打印出的是复用的堆内容、x86 侥幸对，经典 use-after-free)。 */
-    if ((src->vt & VT_BYREF) && (src->vt & VT_TYPEMASK) == (want & VT_TYPEMASK)) return S_OK;
+    /* 账 #305 §11.143 (第一百六十一刀): 引用形的 pointee 已经等于声明档 ⇒ **不换算**，
+     * 但这只限 vb6_VariantBorrowIntoSlot 真搬过的那七档 (它把 pointee 的值/副本写进槽)。
+     * 其余形 (典型 BYREF|VT_VARIANT) 入槽那臂不接 (槽留 Empty)，必须走换算才算得出值 —— 
+     * 把那几档也跳过就是把「引用变体」读成空。 */
+    if (src->vt & VT_BYREF) {
+        const VARTYPE base = (VARTYPE)(src->vt & VT_TYPEMASK);
+        const VARTYPE wantBase = (VARTYPE)(want & VT_TYPEMASK);
+        const int unwrapped = (base == VT_I4 || base == VT_I2 || base == VT_R8 ||
+                               base == VT_R4 || base == VT_BOOL || base == VT_UI1 ||
+                               base == VT_BSTR);
+        if (unwrapped && base == wantBase) return S_OK;
+    }
     /* 账 #305 §B224: 目的档是 BSTR 时口径归 VB 语言(布尔答 True/False)，见 vb6_ComChangeType。 */
     {
         const HRESULT hrConv = vb6_ComChangeType(scratch, src, want);
