@@ -35,7 +35,9 @@ Public Sub Main()
 
     b.Tm = DateSerial(2020, 1, 1)
     o.AddDay b.Tm, 2
-    Debug.Print "B166-P7=" & Format(b.Tm, "yyyy-mm-dd")
+    ' 用数值取值器打印 (Year/Month/Day)，不用 Format 的日期格式串 —— 后者会跟系统区域设置，
+    ' 换一台机器就换一种写法（CI 的 locale 门就是这么红的）。
+    Debug.Print "B166-P7=" & Year(b.Tm) & "," & Month(b.Tm) & "," & Day(b.Tm)
 
     b.Label2 = "ab"
     o.Append b.Label2, "cd"

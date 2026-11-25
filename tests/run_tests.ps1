@@ -12582,7 +12582,7 @@ Test-Vbp 'b165_byref_byte_cur_date_x86' "$Tests\b165_byref_byte_cur_date\B165Res
 # P8 是反面证人: String 属性暂不开 (临时量要管 BSTR 所有权)，仍按值 ⇒ "ab"。
 $b166Needles = @(
 "B166-P1=41", "B166-P2=42", "B166-P3=21", "B166-P4=31.5",
-"B166-P5=7", "B166-P6=True", "B166-P7=2020-01-03",
+"B166-P5=7", "B166-P6=True", "B166-P7=2020,1,3",
 "B166-P8=ab", "B166-P9=xyz", "B166-DONE")
 Test-Vbp 'b166_prop_byref' "$Tests\b166_prop_byref\B166Res.vbp" $b166Needles
 Test-Vbp 'b166_prop_byref_x86' "$Tests\b166_prop_byref\B166Res.vbp" $b166Needles -Arch "x86"
