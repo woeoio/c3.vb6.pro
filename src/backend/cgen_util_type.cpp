@@ -215,6 +215,10 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
             // Fix 175: Date 必须先于 Double 判 (Date 变量同时登记在 knownDoubleVars_
             // 里以复用既有 double 取值路径, 口径同 Fix 117c 的 Single)。
             if (knownDateVars_.count(lower)) return Vb6Type::Date;
+            // 账 #305 §11.162 (第一百七十九刀): 同理 Currency 也登记在 knownDoubleVars_
+            // 里 (C 侧同为 double), 必须**先于 Double** 判 —— 否则 `c * 1` 这类算术的
+            // promote 看不到 Currency 档。真机 P179: c*1 / c+0 / -c 都是 Currency(6)。
+            if (knownCurrencyVars_.count(lower)) return Vb6Type::Currency;
             if (knownDoubleVars_.count(lower)) return Vb6Type::Double;
             // ai/022 W1: 必须先于 knownLongVars_ 判 (口径同 Fix 175 的 Date) ——
             // As Boolean 的 C 型与 Integer 同串, 只按 C 类型登记就永远看不见布尔。
@@ -400,6 +404,24 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
                 // 有符号/无符号提升规则各写一遍 —— `2 \ u` 这类换边写法就会漂移。
                 if (bin.op == BinaryOp::IntDiv || bin.op == BinaryOp::Mod)
                     return intDivResultType(lt, rt);
+                // 账 #305 §11.162 (第一百七十九刀): `*` 的货币规则与 `+` `-` 不同。
+                // 真机 P179: c*1.5 (A8) / 1.5*c (A9) / c*d (B2) 都是 **Double(5)**
+                // 且不圈 (B2 打 102.48525225); 而 c*1 (A1) / c*2 (A6) / c*i (A7) /
+                // c*10000& (C1) 是 Currency(6)。+ - 则相反: c+0.5 (A10) / c+d (B1) /
+                // c+s (B3) 都回到 Currency 并圈到 4 位 (B3 真机 20.247, 改前我们打
+                // 20.2469998703003)。promote 的 Currency 档比 Double 高, 对 + - 正好
+                // 是想要的, 对 * 会把浮点乘法也算回币 —— 所以只在 * 这里拦一道。
+                // ⚠ 只拦「Currency × Single/Double」这一对。不能写成「有一侧是
+                // Single/Double 就答 Double」—— 那会把 Single*Single (VB6 仍是
+                // Single 4) 一并拉成 Double, 实测全语料 16 条发码漂移全是这个误伤。
+                if (bin.op == BinaryOp::Mul) {
+                    const bool lCur15 = (lt == Vb6Type::Currency);
+                    const bool rCur15 = (rt == Vb6Type::Currency);
+                    const bool lFloat15 = (lt == Vb6Type::Single || lt == Vb6Type::Double);
+                    const bool rFloat15 = (rt == Vb6Type::Single || rt == Vb6Type::Double);
+                    if ((lCur15 && rFloat15) || (rCur15 && lFloat15))
+                        return Vb6Type::Double;
+                }
                 return TypeSystem::promote(lt, rt);
             }
         }
@@ -2375,10 +2397,9 @@ std::string CCodeGen::currencyAssignWrap(Expr* target, const std::string& cValue
      * 在册: 表达式**中间**的 Currency 运算仍按 double 走 (VB6 每步都圈), 本刀只圈赋值站。 */
     if (inferExprType(*target) == Vb6Type::Currency)
         return "vb6_CCur(" + cValue + ")";
-    /* 裸名那一形 inferExprType 答不到: Currency 与 Date 同族 —— C 层都是 double,
-     * 按 C 类型串登记时 inferExprType 只会回 Double (§11.158 探针实测: `Dim c As Currency`
-     * 的 inferExprType 回 Double=5)。所以这里问跟 Date 同一形状的那张按名表
-     * (knownCurrencyVars_, 在五处声明站与 knownDoubleVars_ 并存登记)。
+    /* 裸名那一形在这里也问一遍按名表（它仍是裸名的权威，与装箱站共用）。
+     * 注: §11.158 时 Currency 变量的 inferExprType 还答 Double（与 Date 同族、C 层同为
+     * double），§11.162 起它先于 knownDoubleVars_ 答 Currency —— 两条口径不冲突，表仍是一份。
      * ⚠ 不查 symTab_: locals 在那里查不到 (探针实测 lookup/lookupLocal 均回 null)。
      * 成员/属性/UDT 字段不走这条: 上面 inferExprType 那一问已答 (§11.153 同一枚证据)。 */
     if (target->kind == ASTNodeKind::IdentifierExpr) {
@@ -2411,7 +2432,7 @@ std::string CCodeGen::currencyByValArgWrap(Expr* arg, const std::string& cValue,
      * 判据:
      *   - 只认 ByVal Currency 形参；ByRef 交地址，不折（H1 两边本来就相同）；
      *   - 实参已经是 Currency（inferExprType 答 Currency，或裸名在 knownCurrencyVars_
-     *     里 —— Currency 变量的 inferExprType 会答 Double）⇒ 已 4 位，不重复折；
+     *     里）⇒ 已 4 位，不重复折；
      *   - 整数档（Byte/Integer/Long/Boolean/LongLong…）交给 Currency 是精确的，不折；
      *   - 已带 vb6_CCur( 前缀（String→Currency 那一站）不重复折；
      *   - 地址/复合字面量（& 开头）不动。
@@ -2452,9 +2473,10 @@ std::string CCodeGen::currencyVariantBox(Expr* expr, const std::string& cExpr) c
      *   P13 v = m_c（模块级 Currency）   -> type=6
      *   P6/P7/P8 Double 变量/字面量     -> type=5（反向证人，必须仍 VT_R8）
      *   P9  v = 1（Integer 字面量）     -> type=2
-     * 改前 C3: P1 打 type=5 Double —— Currency 在 C 侧就是 double，inferExprType 与
-     * `_Generic` 都只能答 VT_R8。CCur()（P2）与返回 Currency 的函数（P3）本来就对，
-     * 因为那条路上的类型推断答 Currency。
+     * 改前 C3: P1 打 type=5 Double —— Currency 在 C 侧就是 double, 当时 inferExprType 与
+     * `_Generic` 都只能答 VT_R8（§11.162 起裸名的 inferExprType 已答 Currency, 本出口
+     * 仍保留为装箱站的唯一判据, 不依赖那一步）。CCur()（P2）与返回 Currency 的函数（P3）
+     * 本来就对，因为那条路上的类型推断答 Currency。
      *
      * 判据（只认**裸名**，只问赋值站/实参折数站共用的那张 knownCurrencyVars_）:
      *   - 成员/数组元素/运算结果各自另有一条腿，本刀不碰（探针 P4/P5/P10 在册）；

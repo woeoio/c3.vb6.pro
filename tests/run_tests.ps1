@@ -12740,6 +12740,24 @@ $b181Needles = @(
 "P14=6|Currency|5.4321|54321", "B181-DONE")
 Test-Vbp 'b181_currency_variant' "$Tests\b181_currency_variant\B181Res.vbp" $b181Needles
 Test-Vbp 'b181_currency_variant_x86' "$Tests\b181_currency_variant\B181Res.vbp" $b181Needles -Arch "x86"
+
+# 账 #305 §11.162 (第一百七十九刀): Currency 参与算术后的身份。
+# 真机 .temp/k179p 的读数是不对称的: + - 吸收一切数值 (Currency 6);
+# * 遇 Single/Double 就在浮点里算 (Double 5, 且不圈); / 恒 Double。
+# A8/B2/E2/E3 是浮点侧的值证人 (不许被顺手圈成 4 位)。
+$b182Needles = @(
+"A1=6|Currency|10.1235|101235", "A2=6|Currency|10.1235|101235",
+"A3=6|Currency|10.1235|101235", "A4=5|Double|10.1235|101235",
+"A5=6|Currency|-10.1235|-101235", "A6=6|Currency|20.247|202470",
+"A7=6|Currency|10.1235|101235", "A8=5|Double|15.18525|151852",
+"A9=5|Double|15.18525|151852", "A10=6|Currency|10.6235|106235",
+"B1=6|Currency|20.247|202470", "B2=5|Double|102.48525225|1024853",
+"B3=6|Currency|20.247|202470", "C1=6|Currency|101235|1012350000",
+"D1=6|Currency|10.1235|101235", "E1=5|Double|3.3745|33745",
+"E2=5|Double|10.12451235|101245", "E3=5|Double|20.2490247|202490",
+"V1=6|Currency", "V2=6|Currency", "B182-DONE")
+Test-Vbp 'b182_currency_arith' "$Tests\b182_currency_arith\B182Res.vbp" $b182Needles
+Test-Vbp 'b182_currency_arith_x86' "$Tests\b182_currency_arith\B182Res.vbp" $b182Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

@@ -367,11 +367,50 @@ else {
         $bad += 'R14 arithmetic results / array elements stay in the register: do not pin them here'
     }
 }
+$def15 = Read-File 'src/backend/cgen_util_type.cpp'
+if ($null -eq $def15) { $bad += 'R15 cgen_util_type.cpp not found' }
+else {
+    $iCur15 = $def15.IndexOf('if (knownCurrencyVars_.count(lower)) return Vb6Type::Currency;')
+    if ($iCur15 -lt 0) {
+        $bad += 'R15 inferExprType must answer Currency for a registered Currency name'
+    }
+    $iDbl15 = $def15.IndexOf('if (knownDoubleVars_.count(lower)) return Vb6Type::Double;')
+    if ($iCur15 -ge 0 -and $iDbl15 -ge 0 -and $iCur15 -gt $iDbl15) {
+        $bad += 'R15 Currency must be asked before Double (a Currency is registered in both tables)'
+    }
+    $iMul15 = $def15.IndexOf('bin.op == BinaryOp::Mul')
+    if ($iMul15 -lt 0) { $bad += 'R15 the * station is missing' }
+    else {
+        $win15 = $def15.Substring($iMul15, [Math]::Min(900, $def15.Length - $iMul15))
+        if ($win15 -notmatch 'lCur15' -or $win15 -notmatch 'lt == Vb6Type::Single' -or $win15 -notmatch 'return Vb6Type::Double;') {
+            $bad += 'R15 * with Single/Double must answer Double (probe A8/A9/B2), and only for a Currency x float pair'
+        }
+    }
+}
+foreach ($f in @('B182Main.bas', 'B182Res.vbp')) {
+    $p = Join-Path $repo ('tests/b182_currency_arith/' + $f)
+    if (-not (Test-Path -LiteralPath $p)) { $bad += ('R15 fixture file missing: ' + $f) }
+}
+if ($null -ne $run7) {
+    $n = ([regex]::Matches($run7, "Test-Vbp 'b182_currency_arith")).Count
+    if ($n -ne 2) { $bad += ('R15 b182 fixture cells = ' + $n + ', want 2 (x64 + x86)') }
+}
+$main15 = Read-File 'tests/b182_currency_arith/B182Main.bas'
+if ($null -eq $main15) { $bad += 'R15 B182Main.bas not found' }
+else {
+    foreach ($w in @('A8', 'B3', 'E2', 'E3')) {
+        if ($main15 -notmatch ('"' + $w + '"')) {
+            $bad += ('R15 witness cell ' + $w + ' missing (floating side must stay Double/unrounded)')
+        }
+    }
+    if ($main15 -notmatch 'B182-DONE') { $bad += 'R15 fixture sentinel B182-DONE missing' }
+}
 if ($bad.Count -gt 0) {
     Write-Host ('FAIL currency_round_station: ' + ($bad -join ' | '))
     exit 1
 }
 Write-Host '  R13 ByVal Currency call-site station (one owner, both arg paths, no ByRef fold) OK'
 Write-Host '  R14 Currency variable identity in Variant (VT_CY, both box stations) OK'
-Write-Host 'PASS currency_round_station (R1..R14)'
+Write-Host '  R15 Currency arithmetic identity (+ - absorb, * with float is Double, / is Double) OK'
+Write-Host 'PASS currency_round_station (R1..R15)'
 exit 0
