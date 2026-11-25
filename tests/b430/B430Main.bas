@@ -67,7 +67,11 @@ Sub Main()
     Debug.Print "B430-23=" & (Format(d1, "yyyy-mm-ddTHH:mm:ss") = "2026-01-05T14:30:45")
 
     ' 24..25: the numeric arm still prints numbers (unit text carried by 0/#, no date)
-    Debug.Print "B430-24=" & (Format(1234, "T0") = "1234") & "/" & (Format(1234, "0 Twip") = "1234")
+    ' 账 #305 §11.167 (第一百八十四刀): 这两格的**期望值**按真机改正 —— 探针 .temp/k184p/P199.bas
+    ' 实测 Format(1234, "T0") = "T1234"、Format(1234, "0 Twip") = "1234 Twip" (字面量本来就要打)。
+    ' 原先钉的是旧 C3 的 "1234"（字面量被丢掉那一版），钉的意图不变：数值臂不许被 T/w/i/p
+    ' 这些字母拖进日期臂 —— 日期臂会给出 "T14:30" 或序列号那类串，不会是这个「数字 + 原样尾巴」。
+    Debug.Print "B430-24=" & (Format(1234, "T0") = "T1234") & "/" & (Format(1234, "0 Twip") = "1234 Twip")
     Debug.Print "B430-25=" & (Format(1234, "#,##0") = "1,234") & "/" & (Format(1234, "0") = "1234")
 
     ' 26..27: the boxing tag of the two new locale arms (a BSTR, not the integer arm)
