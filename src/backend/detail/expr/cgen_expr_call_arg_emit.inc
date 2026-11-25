@@ -1957,7 +1957,7 @@
                                     Vb6Type pvt148 = Vb6Type::Unknown;
                                     std::string pvar148;
                                     if (comPropReadWriteArg(*node.positional[i], argVal,
-                                                            pvt148, pvar148)
+                                                            pvt148, pvar148, cType)
                                         && mapType(pvt148) == cType) {
                                         argVal = "&" + pvar148;
                                         propRW148 = true;

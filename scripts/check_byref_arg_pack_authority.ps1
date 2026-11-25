@@ -128,6 +128,13 @@ Expect 'R9 indexed prop recognized' (Count-Pattern $utilC 'ic\.callee->kind == A
 Expect 'R9 index args split'        (Count-Pattern $utilC 'if \(ch == '','' && depth == 0\)') 1 '顶层逗号切 base / 索引实参'
 Expect 'R9 index let order'        (Count-Pattern $utilC 'letFn \+ "\(" \+ baseOnly \+ idxArgs') 1 'Let 的取值形参在最后'
 Expect 'R9 indexed prop fixture'   ([regex]::Matches($h, "Test-Vbp 'b168_indexed_prop_byref")).Count 2 '两格: x64 + x86'
+# §11.151 (第一百六十九刀): ① With 块里的属性读 —— `.Tag` 是 WithMemberExpr，类名问
+# withObjectInfoStack_；② 早绑定型不一致不得「假登记」—— 调用点用不上那枚临时量就不许台账里
+# 多出两行 (wantCType 非空即调用点已定型参 C 型)。
+Expect 'R9 with-prop asks stack'   (Count-Pattern $utilC 'wi\.kind == WithObjKind::ClassInstance\) cls = wi\.className;') 1 'With 主体的类名'
+Expect 'R9 want-ctype gate'        (Count-Pattern $utilC 'if \(!wantCType\.empty\(\) && mapType\(propVt\) != wantCType\) return false;') 1 '先算型再登记'
+Expect 'R9 want-ctype from caller' (Count-Pattern $argEmit 'pvt148, pvar148, cType\)') 1 '早绑定把形参 C 型递进去'
+Expect 'R9 with-prop fixture'      ([regex]::Matches($h, "Test-Vbp 'b169_with_prop_byref")).Count 2 '两格: x64 + x86'
 # §11.148 (第一百六十六刀): 同一句问句给**两个**发射器用 —— 晚绑定实参那一族与早绑定
 # 复合字面量那一族。定义 1 + 声明 1 + 调用 2；登记只许住台账一处，收尾只在语句尾巴。
 Expect 'R9 prop-rw defined once'    (Count-Pattern $utilC '(?m)^bool CCodeGen::comPropReadWriteArg') 1 '定义只许一枚'

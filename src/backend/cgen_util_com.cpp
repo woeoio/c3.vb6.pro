@@ -1130,7 +1130,8 @@ std::string CCodeGen::comPackExpr(Expr& expr) {
 // String / Currency 两档暂不开: String 的临时量要管 BSTR 所有权 (get 给的那份谁释放 /
 // Let 收的是拷贝还是转移)，Currency 的 C 档是 double 而 Let 形参未必同宽 —— 两格在册。
 bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
-                                   Vb6Type& outVt, std::string& outVar) {
+                                   Vb6Type& outVt, std::string& outVar,
+                                   const std::string& wantCType) {
     outVt = Vb6Type::Unknown;
     outVar.clear();
     /* 只在语句位置那个窗口里登记: 其他上下文没有“调用之后”这个位置，
@@ -1140,15 +1141,41 @@ bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
      * 函数调用, `b.Slot(2)` 落的是 IndexOrCallExpr (callee = MemberAccessExpr(b, Slot))，
      * 所以成员名要从 callee 上取。判据其余各条不变。 */
     const MemberAccessExpr* ma = nullptr;
+    const std::string* memP = nullptr;
     if (expr.kind == ASTNodeKind::MemberAccessExpr) {
         ma = &static_cast<const MemberAccessExpr&>(expr);
+        memP = &ma->memberName;
     } else if (expr.kind == ASTNodeKind::IndexOrCallExpr) {
         auto& ic = static_cast<const IndexOrCallExpr&>(expr);
-        if (ic.callee && ic.callee->kind == ASTNodeKind::MemberAccessExpr)
+        if (ic.callee && ic.callee->kind == ASTNodeKind::MemberAccessExpr) {
             ma = &static_cast<const MemberAccessExpr&>(*ic.callee);
+            memP = &ma->memberName;
+        } else if (ic.callee && ic.callee->kind == ASTNodeKind::WithMemberExpr) {
+            /* With 块里的带索引属性: `.Slot(2)` —— callee 是 WithMemberExpr。 */
+            memP = &static_cast<const WithMemberExpr&>(*ic.callee).memberName;
+        }
+    } else if (expr.kind == ASTNodeKind::WithMemberExpr) {
+        /* 账 #305 §11.151 (第一百六十九刀): `With b` 里的 `.Tag` 是 WithMemberExpr ——
+         * 只有成员名，没有 object 可推型。型名下面从发码文本的名称里取。 */
+        memP = &static_cast<const WithMemberExpr&>(expr).memberName;
     }
-    if (!ma || !ma->object || ma->memberName.empty()) return false;
-    const std::string cls = inferClassTypeOfExpr(*ma->object);
+    if (!memP || memP->empty()) return false;
+    if (ma && !ma->object) return false;
+    std::string cls = (ma && ma->object) ? inferClassTypeOfExpr(*ma->object) : std::string();
+    if (cls.empty() && (expr.kind == ASTNodeKind::WithMemberExpr
+                        || (expr.kind == ASTNodeKind::IndexOrCallExpr && !ma))) {
+        if (!withObjectInfoStack_.empty()) {
+            const WithObjInfo& wi = withObjectInfoStack_.back();
+            if (wi.kind == WithObjKind::ClassInstance) cls = wi.className;
+        }
+    }
+    if (cls.empty()) {
+        /* 从发码文本里取类名: `vb6_<Cls>_prop_get_<M>`。名字是发射器自己写的，
+         * 型依旧问声明侧 —— 与 R8 那条口径一致。 */
+        const size_t pg0 = argText.find("_prop_get_");
+        if (argText.rfind("vb6_", 0) == 0 && pg0 != std::string::npos && pg0 > 4)
+            cls = argText.substr(4, pg0 - 4);
+    }
     if (cls.empty()) return false;
     const size_t pgPos = argText.find("_prop_get_");
     const size_t lpPos = argText.find('(');
@@ -1178,8 +1205,30 @@ bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
         segs.push_back(base.substr(start));
     }
     const std::string baseOnly = segs.front();
-    if (baseOnly.empty() || baseOnly.find('(') != std::string::npos
-        || baseOnly.find(')') != std::string::npos) return false;
+    /* 账 #305 §11.151 (第一百六十九刀): base 也接**带一层强转**那形。
+     * `With b` 里的 `.Tag` 发的是 `(void*)_vb6_with_0`，不是裸标识符 —— 那是同一只对象，
+     * Let 的首参照样能收。判据只放这一种: 一个括号包着的强转 + 后面紧跟不带括号的剩余文本。 */
+    {
+        std::string bs = baseOnly;
+        while (!bs.empty() && (bs.front() == ' ' || bs.front() == '\t')) bs.erase(bs.begin());
+        while (!bs.empty() && (bs.back() == ' ' || bs.back() == '\t')) bs.pop_back();
+        if (bs.empty()) return false;
+        if (bs.front() == '(') {
+            int d = 0;
+            size_t close = std::string::npos;
+            for (size_t i = 0; i < bs.size(); i++) {
+                if (bs[i] == '(') d++;
+                else if (bs[i] == ')') { d--; if (d == 0) { close = i; break; } }
+            }
+            if (close == std::string::npos) return false;
+            const std::string tail = bs.substr(close + 1);
+            if (tail.empty() || tail.find('(') != std::string::npos
+                || tail.find(')') != std::string::npos) return false;
+        } else if (bs.find('(') != std::string::npos
+                   || bs.find(')') != std::string::npos) {
+            return false;
+        }
+    }
     std::string idxArgs;  // 索引参数原样 (已含前导 ", ")
     for (size_t i = 1; i < segs.size(); i++) {
         size_t a = 0, b = segs[i].size();
@@ -1189,7 +1238,7 @@ bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
     }
     bool hasGet = false, hasLet = false;
     Vb6Type propVt = Vb6Type::Unknown;
-    const std::string memL = Symbol::toLower(ma->memberName);
+    const std::string memL = Symbol::toLower(*memP);
     const std::string clsL = Symbol::toLower(cls);
     if (!symTab_.moduleScope()) return false;
     for (const auto& [k, s] : symTab_.moduleScope()->symbols()) {
@@ -1207,12 +1256,19 @@ bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
         }
     }
     if (!hasGet || !hasLet) return false;
+    /* 账 #305 §11.151 (第一百六十九刀): **先算型再登记**。early-bound 调用点只在自己
+     * 用得上这枚临时量时才能让它登记 —— 否则台账里多出两行「白写一次」:
+     * `int32_t _pb1 = get(); <call 走复合字面量>; let(_pb1);` 把未动的值又写一遍，
+     * 属性若有副作用的 Let 就被白叫一次。wantCType 非空 = 调用点已经定了形参 C 型，
+     * 型不一致就当面交回 false (改前实测 .temp/k169/r0.c 的 L261-263)。
+     * 型不一致那一格本刀仍按值 —— 要开得先有「靠型参型造临时量 + 两向换算」的账。 */
     /* Currency 仍不开 (宽度: 标量 Currency 的 C 档是 double, 与数组元素那档 int64_t 不是一个
      * 表示 —— 与 §11.146 货币数组元素同一张欠项)。
      * String 从本刀起开 (§11.149), 但要多一行退: prop_get 交回的是新分配的 BSTR
      * (体里是 vb6_BSTR_Assign 拷一份), prop_let 也是拷一份进去 —— 两边都不接手
      * 所有权, 所以这一枚得调用方退, 不退回就是每次调用漏一条串。 */
     if (propVt == Vb6Type::Currency) return false;
+    if (!wantCType.empty() && mapType(propVt) != wantCType) return false;
     const std::string packFn = comByRefPackFnForVbType(propVt);
     if (packFn.empty()) return false;
     const std::string tmp = "_pb" + std::to_string(tempCounter_++);
@@ -1272,6 +1328,16 @@ std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText,
             if (!fnA.empty()) return fnA + "(&" + argText + ")";
             return "";
         }
+        /* 账 #305 §11.147..§11.151: 属性读当 ByRef 实参 —— 读-改-写。
+         * 这一问排在三形 (成员访问 / 带索引属性 / With 成员) 之前 —— 形由主人自己认。 */
+        {
+            Vb6Type propVtP = Vb6Type::Unknown;
+            std::string propVarP;
+            if (comPropReadWriteArg(expr, argText, propVtP, propVarP)) {
+                const std::string fnP = comByRefPackFnForVbType(propVtP);
+                if (!fnP.empty()) return fnP + "(&" + propVarP + ")";
+            }
+        }
         std::string clsField;  // 非空 = 宿主类名 (成员那两问之一已命中)
         Vb6Type fieldVt = Vb6Type::Unknown;
         /* 账 #305 §11.150 (第一百六十八刀): `b.Slot(2)` 落的是 IndexOrCallExpr
@@ -1288,21 +1354,7 @@ std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText,
         if (maP) {
             const MemberAccessExpr& ma = *maP;
             const std::string cls = ma.object ? inferClassTypeOfExpr(*ma.object) : std::string();
-            /* 账 #305 §11.147 (第一百六十五刀): **属性读**当 ByRef 实参 —— 读-改-写。
-             * 改前 `o.Inc box.Tag` 落到下面属性那一格交回空串 ⇒ 按值打包，体里的
-             * 写回落空。真 VB6 不递属性本身 (属性没有地址)，而是「拷进临时量 → 递它的
-             * 地址 → 调用回来经 Let 写回」。
-             * 账 §11.148 (第一百六十六刀): 这一问提成**一位主人** —— 早绑定实参那一族
-             * (`b.Inc b.Tag`，被调方是 vb6_<类>_Inc，走复合字面量那一路) 问同一句，
-             * 两路共用同一张台账 (c_.addPending / addPostLine)。 */
-            {
-                Vb6Type propVtP = Vb6Type::Unknown;
-                std::string propVarP;
-                if (comPropReadWriteArg(expr, argText, propVtP, propVarP)) {
-                    const std::string fnP = comByRefPackFnForVbType(propVtP);
-                    if (!fnP.empty()) return fnP + "(&" + propVarP + ")";
-                }
-            }
+            /* 账 §11.147..§11.151: 属性那一问已提到上面统一问（主人自己认形）。 */
             if (!cls.empty() && !ma.memberName.empty()
                 && resolveClassMemberCall(cls, ma.memberName).empty()) {
                 const Vb6Type ft = classFieldKind(cls, ma.memberName);
