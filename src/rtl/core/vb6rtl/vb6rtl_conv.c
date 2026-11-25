@@ -136,10 +136,14 @@ vb6_VARIANT vb6_AbsV(vb6_VARIANT v) {
 //   2. check_builtin_slot_returns 与 owned-temp 表都从 RTL 头派生，原型在头里就够了。
 vb6_VARIANT vb6_IntV(vb6_VARIANT v) {
     if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    // §11.166 (第一百八十三刀): Currency 进 ⇒ Currency 出（真机 P191 M11: 6|Currency|10）。
+    // 与 §11.19 的 vb6_AbsV / vb6_VarNegV 同一口径：先按本子类型算，再装回同一子类型。
+    if (v.vt == vb6_vtCurrency) return vb6_VariantCur(vb6_Int((double)v.cyVal / 10000.0));
     return vb6_VariantDouble(vb6_Int(vb6_VariantConvNum(v)));
 }
 vb6_VARIANT vb6_FixV(vb6_VARIANT v) {
     if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    if (v.vt == vb6_vtCurrency) return vb6_VariantCur(vb6_Fix((double)v.cyVal / 10000.0));
     return vb6_VariantDouble(vb6_Fix(vb6_VariantConvNum(v)));
 }
 vb6_VARIANT vb6_HexV(vb6_VARIANT v) {

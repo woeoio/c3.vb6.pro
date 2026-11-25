@@ -12792,6 +12792,22 @@ $b185Needles = @(
 "B185-DONE")
 Test-Vbp 'b185_currency_overflow' "$Tests\b185_currency_overflow\B185Res.vbp" $b185Needles
 Test-Vbp 'b185_currency_overflow_x86' "$Tests\b185_currency_overflow\B185Res.vbp" $b185Needles -Arch "x86"
+
+# 账 #305 §11.166 (第一百八十三刀): Currency 经 Abs/Int/Fix/Round 保持 Currency。
+# 真机 .temp/k183p (P192.bas) 逐格; M5/M13/M14 是 Sgn/整除/Mod 的反向证人 (Integer/Long),
+# M15 (^) 仍 Double —— 三枚钉住「不把*所有*数值结果都当 Currency」。
+$b191Needles = @(
+"M1=6|Currency|10.1235|101235", "M2=6|Currency|10|100000",
+"M3=6|Currency|10|100000", "M4=6|Currency|10.12|101200",
+"M5=2|Integer|1|10000", "M8=6|Currency|-10.1235|-101235",
+"M6=6|Currency|10.1235|101235", "M7=6|Currency|-11|-110000",
+"M9=6|Currency|-10|-100000", "M10=6|Currency|-10.12|-101200",
+"M11=6|Currency|10|100000", "M12=6|Currency|10.1235|101235",
+"M13=3|Long|5|50000", "M14=3|Long|1|10000",
+"M15=5|Double|102.48525225|1024853",
+"B191-DONE")
+Test-Vbp 'b191_currency_math' "$Tests\b191_currency_math\B191Res.vbp" $b191Needles
+Test-Vbp 'b191_currency_math_x86' "$Tests\b191_currency_math\B191Res.vbp" $b191Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

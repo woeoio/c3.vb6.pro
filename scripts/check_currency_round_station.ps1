@@ -524,6 +524,51 @@ else {
         }
     }
 }
+$ty19 = Read-File 'src/backend/cgen_util_type.cpp'
+if ($null -eq $ty19) { $bad += 'R19 cgen_util_type.cpp not found' }
+else {
+    $i19 = $ty19.IndexOf('§11.166')
+    if ($i19 -lt 0) { $bad += 'R19 the Abs/Int/Fix/Round Currency branch is missing' }
+    else {
+        $w19 = $ty19.Substring($i19, [Math]::Min(1400, $ty19.Length - $i19))
+        foreach ($nm in @('"abs"', '"int"', '"fix"', '"round"', 'Vb6Type::Currency')) {
+            if ($w19 -notmatch [regex]::Escape($nm)) {
+                $bad += ('R19 the branch must name ' + $nm)
+            }
+        }
+    }
+}
+$conv19 = Read-File 'src/rtl/core/vb6rtl/vb6rtl_conv.c'
+if ($null -eq $conv19) { $bad += 'R19 vb6rtl_conv.c not found' }
+else {
+    foreach ($fn in @('vb6_IntV', 'vb6_FixV')) {
+        $j19 = $conv19.IndexOf('vb6_VARIANT ' + $fn + '(vb6_VARIANT v)')
+        if ($j19 -lt 0) { $bad += ('R19 ' + $fn + ' not found') }
+        else {
+            $b19 = $conv19.Substring($j19, [Math]::Min(700, $conv19.Length - $j19))
+            if ($b19 -notmatch 'vb6_vtCurrency') {
+                $bad += ('R19 ' + $fn + ' must keep the Currency subtype')
+            }
+        }
+    }
+}
+foreach ($f in @('B191Main.bas', 'B191Res.vbp')) {
+    $p = Join-Path $repo ('tests/b191_currency_math/' + $f)
+    if (-not (Test-Path -LiteralPath $p)) { $bad += ('R19 fixture file missing: ' + $f) }
+}
+if ($null -ne $run7) {
+    $n19 = ([regex]::Matches($run7, "Test-Vbp 'b191_currency_math")).Count
+    if ($n19 -ne 2) { $bad += ('R19 b191 fixture cells = ' + $n19 + ', want 2 (x64 + x86)') }
+}
+$main19 = Read-File 'tests/b191_currency_math/B191Main.bas'
+if ($null -eq $main19) { $bad += 'R19 B191Main.bas not found' }
+else {
+    foreach ($w in @('M11', 'M15')) {
+        if ($main19 -notmatch ('"' + $w + '"')) {
+            $bad += ('R19 witness cell ' + $w + ' missing (Variant carrier / ^ stays Double)')
+        }
+    }
+}
 if ($bad.Count -gt 0) {
     Write-Host ('FAIL currency_round_station: ' + ($bad -join ' | '))
     exit 1
@@ -534,5 +579,6 @@ Write-Host '  R15 Currency arithmetic identity (+ - absorb, * with float is Doub
 Write-Host '  R16 Currency intermediate rounds at every step (single fold exit) OK'
 Write-Host '  R17 Currency array elements are doubles with the same identity (store/read/ByRef) OK'
 Write-Host '  R18 Currency range gate raises Error 6 on overflow (no UB wrap) OK'
-Write-Host 'PASS currency_round_station (R1..R18)'
+Write-Host '  R19 Abs/Int/Fix/Round keep the Currency identity (typed + Variant carrier) OK'
+Write-Host 'PASS currency_round_station (R1..R19)'
 exit 0

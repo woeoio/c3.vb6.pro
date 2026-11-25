@@ -525,6 +525,20 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
                 // `Debug.Print UCase(nv)` ⇒ vb6_DebugWriteBSTR(VARIANT), `If Trim(nv) = "a"`
                 // ⇒ vb6_StrCmp(VARIANT, BSTR) —— 三形都是 C2440。
                 if (!nullFamilyVExitCName(call).empty()) return Vb6Type::Variant;
+                // 账 #305 §11.166 (第一百八十三刀): Abs/Int/Fix/Round 在 **Currency 实参**上
+                // 保持 Currency（真机 P191: M1..M4/M6/M7/M9/M10 全部 6|Currency）。
+                // 以前这四枚落到 sym->type (Double) ⇒ 装箱答 VT_R8 (5)、TypeName 答 Double；
+                // 值本身已经是对的 (§11.159 的圈法/整数截取)，缺的只是**身份**。
+                // 语料里没有人重定义这四个名字 (门 R19 钉着)，所以这一问不看符号种类。
+                {
+                    std::string lb183 = Symbol::toLower(id.name);
+                    if ((lb183 == "abs" || lb183 == "int" || lb183 == "fix" || lb183 == "round")
+                        && !call.positional.empty() && call.positional[0]
+                        && call.positional.size() <= 2
+                        && inferExprType(*call.positional[0]) == Vb6Type::Currency) {
+                        return Vb6Type::Currency;
+                    }
+                }
                 if (sym) return sym->type;
                 // 语义层 builtin_funcs.inc 没登记、但 cgen 发射表里有名字的那一族
                 // (LenB / InStrB / LeftB / TypeOf / LoadRes* …)。没有这一问时它们一律
