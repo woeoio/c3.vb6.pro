@@ -489,16 +489,38 @@ static WORD vb6_ComFlagsFor(IDispatch* pDisp, DISPID dispid, int32_t argc) {
     return fl ? fl : dflt;
 }
 
+/* 账 #305 §11.146 (第一百六十四刀): Byte / Currency / Date 三档的**降值**。
+ * 与 BSTR 那一臂同一条口径: 引用形只对我们自己的服务端有意义 (那里的
+ * vb6_VariantBorrowIntoSlot / vb6_ByRefScalarWriteBack 会给回写)，外部对端要的是值。
+ * 实测踩到的那一格: tests/dict_native 的 `Dict.Exists key` 收到 VT_DATE|BYREF 后
+ * 判等变成 false (oracle 那侧是 VT_DATE 值，答 true) —— 不是本刀想要的形状。
+ * 只降这三档: I4/I2/R4/R8/BOOL 的引用形是 §B224 之后的老路径，不在这里动。 */
+static int vb6_ComDemoteNewRef(VARIANT* a) {
+    if (!a) return 0;
+    switch (a->vt & ~VT_BYREF) {
+        case VT_UI1:  if (a->vt != (VT_BYREF | VT_UI1) || !a->pbVal) return 0;
+                      { BYTE v = *a->pbVal; a->vt = VT_UI1; a->bVal = v; } return 1;
+        case VT_CY:   if (a->vt != (VT_BYREF | VT_CY) || !a->pcyVal) return 0;
+                      { CY v = *a->pcyVal; a->vt = VT_CY; a->cyVal = v; } return 1;
+        case VT_DATE: if (a->vt != (VT_BYREF | VT_DATE) || !a->pdate) return 0;
+                      { DATE v = *a->pdate; a->vt = VT_DATE; a->date = v; } return 1;
+        default: return 0;
+    }
+}
+
 static void vb6_ComNarrowArgs(IDispatch* pDisp, DISPID dispid, VARIANT** args, int32_t argc) {
     if (!pDisp || !args || argc <= 0) return;
     int widen = 0;
     int bstrRef = 0;   /* 账 #305 §11.143: 有没有 VT_BYREF|VT_BSTR 实参 */
+    int newRef = 0;    /* 账 #305 §11.146: 有没有 VT_BYREF|VT_UI1 / VT_CY / VT_DATE 实参 */
     for (int32_t i = 0; i < argc; i++) {
         if (!args[i]) continue;
         if (args[i]->vt == VT_R8 || args[i]->vt == VT_R4) widen = 1;
         else if (args[i]->vt == (VT_BYREF | VT_BSTR)) bstrRef = 1;
+        else if (args[i]->vt == (VT_BYREF | VT_UI1) || args[i]->vt == (VT_BYREF | VT_CY)
+                 || args[i]->vt == (VT_BYREF | VT_DATE)) newRef = 1;
     }
-    if (!widen && !bstrRef) return;            /* 没有需要问签名的实参 ⇒ 这条路径零代价 */
+    if (!widen && !bstrRef && !newRef) return; /* 没有需要问签名的实参 ⇒ 这条路径零代价 */
     ITypeInfo* ti = vb6_ComTypeInfoOf(pDisp);
     /* 账 #305 §11.143 (第一百六十一刀): 字符串按引用发是 VB6 晚绑定的口径 —— 只有
      * **我们自己的工程类服务端** (没有 ITypeInfo 的那一类, 换算/回写在 vb6comserver 与
@@ -524,6 +546,10 @@ static void vb6_ComNarrowArgs(IDispatch* pDisp, DISPID dispid, VARIANT** args, i
                 a->vt = VT_BSTR;
                 a->bstrVal = copy;   /* 结构体是我们自己的，直接改成值形；收尾那圈会退它 */
             }
+        }
+        /* §11.146: Byte / Currency / Date 同理 —— 不是我们自己的服务端就不许递引用。 */
+        if (newRef && !ownServer) {
+            for (int32_t i = 0; i < argc; i++) vb6_ComDemoteNewRef(args[i]);
         }
         return;
     }
@@ -553,6 +579,13 @@ static void vb6_ComNarrowArgs(IDispatch* pDisp, DISPID dispid, VARIANT** args, i
                     a->vt = VT_BSTR;
                     a->bstrVal = copy;   /* 结构体是我们自己的，直接改成值形；收尾那圈会退它 */
                 }
+                continue;
+            }
+            /* §11.146: Byte / Currency / Date —— 同一格: 声明了 FOUT 才保留引用。 */
+            if (newRef && (a->vt == (VT_BYREF | VT_UI1) || a->vt == (VT_BYREF | VT_CY)
+                           || a->vt == (VT_BYREF | VT_DATE))) {
+                const ELEMDESC* ed = &fd->lprgelemdescParam[k];
+                if ((ed->paramdesc.wParamFlags & PARAMFLAG_FOUT) == 0) vb6_ComDemoteNewRef(a);
                 continue;
             }
             if (!widen || (a->vt != VT_R8 && a->vt != VT_R4)) continue;
