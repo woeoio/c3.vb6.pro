@@ -9159,3 +9159,93 @@ B164-DONE
 - 属性读当 ByRef 实参仍按值（VB6 经 Let 写回）—— 要一条「读-改-写」的双程发射。
 - Boolean 数组元素拼串折出来是 `-1` 而不是 `True`（读路径，与本刀的回写无关）。
 - ByRef Boolean 未归一、无 typelib 的外部 VB6 ActiveX DLL 收 ByRef String 仍按值。
+
+## §11.146（第一百六十四刀）引用形补上 Byte / Currency / Date
+
+### 一、缺口
+
+§11.145 之后「按引用的打包器」只有六枚：`VT_BYREF|` I4 / I2 / R4 / R8 / BOOL / BSTR。
+Byte、Currency、Date 三型当 ByRef 实参仍按值发，体里的写回落空 —— 这一族在 RTL 侧
+本来就没有对应的 `*Ref` 打包器，也没有入槽/写回那两臂，是**真缺口**，不是判据问题。
+
+### 二、RTL 侧（三处）
+
+1. 打包器（`vb6com_pack.c` / `vb6com.h`）：
+   `vb6_ComPackByteRef(uint8_t*)` / `vb6_ComPackCurRef(int64_t*)` /
+   `vb6_ComPackDateRef(double*)`，分别递 `VT_BYREF|VT_UI1` / `VT_CY` / `VT_DATE`，
+   指针直指调用方那枚槽。
+2. `vb6_VariantBorrowIntoSlot`：加 `case VT_CY`（搬 `pcyVal->int64`）、
+   `case VT_DATE`（搬 `*pdate`）两臂 —— 本仓 Currency 住 `cyVal`（int64）、
+   Date 住 `dblVal`（与「序列号在 dblVal」的既有约定一致）。
+3. `vb6_ByRefScalarWriteBack`：加同名的两臂，出站写回对端 pointee。
+   `vb6_ComArgNormalize` 的 `unwrapped` 名单随之加 CY / DATE（入槽已搬过，不再换算）。
+
+### 三、发码侧
+
+`kComPackRefTiers` 六档 → 九档，数组元素与类字段两个消费点自动跟着走。
+入站读臂改成**按声明档自己的那一格**取址：Long→`&lVal`、Integer→`&iVal`、
+Byte→`&bVal`、Currency→`&cyVal`、Date→`&dblVal`。以前 Long/Integer/Byte 一律 `&lVal`
+—— union 同偏移，靠「写入总在偏移 0」侥幸成立，形参型别对不上（C4133）。
+
+### 四、刻意不开的一格：货币数组元素
+
+`o.IncC ca(1)` 仍按值。不是漏档，是两边表示不一致：标量 Currency 的 C 档是 `double`
+（Fix 126 值语义，放大整数只存在于 VT_CY 变体里），而数组元素档是 `int64_t`
+（`mapSaElemCType`）。按 CurRef 递过去，服务端按值语义写回一枚 double 到 int64 槽，
+读出来是位模式垃圾（实测 `4608308318706860032`）。在册欠项：要把 `vb6_sa_currency`
+的存法与元素档一起改，不在这一刀偷开一档。
+
+### 五、读数
+
+夹具 `tests/b165_byref_byte_cur_date`（x64 = x86 同形）：
+
+```
+B165-Y1=7        Byte 数组元素
+B165-Y2=7        Byte 类字段
+B165-Y3=7        Byte 模块级裸变量（基线）
+B165-C1=10       Currency 数组元素（仍按值，在册）
+B165-C2=21       Currency 类字段
+B165-C3=31       Currency 模块级裸变量
+B165-T1=ok       Date 数组元素（按日期比较判，避开格式化差异）
+B165-T2=ok       Date 类字段
+B165-T3=ok       Date 模块级裸变量
+B165-Y4=7        同一 Byte 元素连发两次
+B165-DONE
+```
+
+b164 的 N12 由 `1` 变 `7` —— Byte 那一格本就是本刀的目标，针随之更新。
+
+### 六、第一次 CI 红：外部对端不收引用形
+
+```
+[TEXT] dict_native ... FAIL
+  ocx: d101|date_key: same=True asnum=True asstr=False
+  c3 : d101|date_key: same=True asnum=False asstr=False
+```
+
+根因在出站：`vb6_ComNarrowArgs` 的「降值」只认 R8/R4（收窄）和 `BYREF|BSTR`（§11.143），
+新开的三档它一概不认识 ⇒ 原样递给 `Scripting.Dictionary`，`Dict.Exists key` 收到引用形
+日期，判等变成 false（oracle 那侧是 VT_DATE 值，答 true）。
+
+按 §11.143 同一条口径补齐 —— 引用形只对**我们自己的服务端**有意义：
+
+- 新增 `vb6_ComDemoteNewRef`：把 `BYREF|{UI1,CY,DATE}` 就地改成值形（拷 pointee）。
+- 没有 ITypeInfo：对端既不是包装器也不是工程类实例 ⇒ 逐枚降值。
+- 有 ITypeInfo：按该形参的 `PARAMFLAG_FOUT` 决定，声明了出参才保留引用。
+- 只降这三档；I4/I2/R4/R8/BOOL 的引用形是 §B224 之后的老路径，这一刀不碰。
+
+### 七、账与门
+
+- manifest：corpus 838 → 840（b165 两枚），行数 1369 → 1371。
+  存量行真动到的：`b433`（两枚）、`dict_native`（两枚）—— 都是这三型新按引用发的地方。
+- 门 `check_byref_arg_pack_authority.ps1`：R1 六枚 → 九枚；新增 R3 五条
+  （三档映射、货币数组元素不开、表里正好九档）。
+- 九门 9/9；`tests/dict_native/run_compare.ps1` = PASS（70 行逐字一致）。
+  CI 22/22（run 45523956970）。
+
+### 八、这一刀之后仍在册的相邻欠项
+
+- 货币数组元素与标量不一个表示（上节）。
+- 属性读当 ByRef 实参仍按值（VB6 经 Let 写回）—— 要一条「读-改-写」的双程发射。
+- Boolean 数组元素拼串折出来是 `-1` 而不是 `True`（读路径）。
+- ByRef Boolean 未归一、无 typelib 的外部 VB6 ActiveX DLL 收 ByRef String 仍按值。
