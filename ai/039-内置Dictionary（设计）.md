@@ -10317,6 +10317,81 @@ x64 与 x86 实跑，逐字等于真 VB6 的读数。
 5. **`VarType(c)` 的窄档**：本刀让它经装箱站答 6；若将来发现某条路绕过了装箱站，
    要单开一格。
 
+## §11.162（第一百七十九刀）Currency 参与算术后的身份
+
+真机探针 `.temp/k179p`（P179.bas / P182.bas，编译后写文件）量出 VB6 的规则**不对称**:
+
+```
+A1 c*1        -> 6 Currency     A8  c*1.5     -> 5 Double 15.18525（不圈）
+A2 c+0        -> 6 Currency     A9  1.5*c     -> 5 Double
+A3 c-0        -> 6 Currency     A10 c+0.5     -> 6 Currency
+A4 c/1        -> 5 Double       B1  c+d       -> 6 Currency
+A5 -c         -> 6 Currency     B2  c*d       -> 5 Double 102.48525225
+A6 c*2        -> 6 Currency     B3  c+s       -> 6 Currency 20.247（Single 尾巴被圈掉）
+A7 c*i        -> 6 Currency     C1  c*10000&  -> 6 Currency
+D1 (c*1)*1    -> 6 Currency     E1/E2/E3      -> 5 Double（值证人）
+V1 VarType(c*1)=6 / V2 VarType(-c)=6
+```
+
+### 病征
+
+Currency 变量登记在 `knownDoubleVars_` 里（C 侧同为 double），而 `inferExprType`
+的 Identifier 分支只查 `knownDoubleVars_` ⇒ `c*1` 的 `promote` 看不到 Currency 档，
+一律答 Double。改前 20 格里有 13 格打 `5|Double`，B3 还打 `20.2469998703003`
+（真机 20.247）。
+
+### 改法
+
+1. `inferExprType` 的 Identifier 分支把 `knownCurrencyVars_` 放在 `knownDoubleVars_`
+   **之前**（口径同 Fix 175 的 Date）；
+2. `*` 单开一道**狭窄**规则：只有 `Currency × Single/Double` 这一对答 Double，其余
+   走 `promote`（Currency×Integer/Long/Currency 仍是 Currency）；
+3. `+ -` 不改：`promote` 的 Currency 档比 Double 高，正好是 VB6 的行为；`/` 本来
+   就答 Double（A4 证实）。
+
+### 一次误伤与收窄（值得记）
+
+第一版把 `*` 写成「任一侧 Single/Double 就答 Double」，全语料 **16 条**发码漂移：
+`Single * Single`（VB6 仍是 Single）被一并拉成 Double。收窄成「Currency × 浮点」后
+只剩 **2 条**，且逐条归因（HEAD 旧二进制 `--emit-c` 与新版本逐字 diff）:
+
+```
+tests/ucTreeView/Proyecto1.vbp    1 行
+  - vb6_Format(vb6_VariantDouble(Bytes), ...)
+  + vb6_Format(vb6_VariantCur(Bytes), ...)        ← Bytes As Currency（§11.161 的身份）
+
+tests/VBFlexGridDemo/VBFlexGridDemo.vbp  56 行
+  - vb6_Dbl_AssignFromVariant(&Int64, vb6_VarDivV(...))
+  + Int64 = vb6_CCur(vb6_VariantToDouble(vb6_VarDivV(...)))   ← §11.158 的折数站
+```
+
+结论：一条 oracle 规则写宽一格，就会把「不相干但同形」的表达式也拉进来 —— 判据要
+钉在**真正相关的那一对类型**上。
+
+### 夹具 `tests/b182_currency_arith`
+
+20 格 × 4 列（`VarType | TypeName | CStr | CStr(CLng(x*10000))`）：18 个运算格 + V1/V2
+直问。x64 与 x86 均与真 VB6 输出**逐字相同**。A8/A9/B2/E1/E2/E3 是浮点侧的值证人
+（不许被顺手圈成 4 位）。
+
+### 门
+
+`check_currency_round_station.ps1` 扩到 **R1..R15**：Currency 先于 Double 问、`*` 的
+狭窄规则（`lCur15` / 只对 Currency×浮点）、夹具四枚浮点证人、runner 两格。十门 10/10。
+
+### 清单
+
+866 行（+2 = 新夹具两份输入；存量 2 行已归因）。6 份机器侧差照旧不动。
+
+### 在册
+
+1. **中间运算每步都圈**：`c*2*1.0001` 这类链式，VB6 每步圈到 4 位，我们仍在末尾
+   由装箱站圈一次；E3 的值证人只是碰巧相等，多步链要单独量;
+2. **Currency 数组元素**：未放大 `int64_t` 槽（在册②）;
+3. **成员 / UDT 字段 / 晚绑定 COM 站**的 Currency 身份;
+4. **Decimal 组合**：`Decimal × Currency` 等未上真机量过，不猜。
+
+
 
 
 
