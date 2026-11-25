@@ -1790,6 +1790,30 @@
                                 // 临时量的引用由调用点自己的语句管；被调方要留就 VariantCopy/Set 自己加。
                                 // 因此不登记 boxTempsToClear_ —— 那条道的 authority 钉死"两站"
                                 // (knife 121 + 第一百七十二刀站E)，第三站会红 check_box_temp_reclaim。
+                                // 晚绑定调用的结果静态类型是 **Variant**, 不是对象 ——
+                                // `coll(idx)` 的声明类型只能告诉你「这个成员是个对象」
+                                // (Collection), 交回来的却是堆上 VARIANT* (BSTR/数值/对象都
+                                // 有可能)。按 Object 装成 {vt=VT_DISPATCH, pdispVal=<VARIANT*>}
+                                // 等于把 VARIANT 结构体地址当 IDispatch: Charts 2020 ucTreeMaps 的
+                                // `DrawText(..., Labels(j), ...)` 里 StrPtr(text) 读到 vt/保留字段
+                                // ⇒ 每个色块的项名一个都不出 (该控件自己的诊断一直只是在等值)。
+                                // 与 boxToVariant / Fix 113l 同一条口径: 所有权交给
+                                // vb6_VariantFromComResult, 整枚 Variant 值原样递下去。
+                                {
+                                    size_t csO = 0;
+                                    while (csO < argVal.size()
+                                           && (argVal[csO] == '(' || argVal[csO] == ' '
+                                               || argVal[csO] == '\t' || argVal[csO] == '\n'
+                                               || argVal[csO] == '\r')) csO++;
+                                    const size_t restO = argVal.size() - csO;
+                                    if ((restO >= 12 && argVal.compare(csO, 12, "vb6_ComCall(") == 0)
+                                        || (restO >= 20 && argVal.compare(csO, 20, "vb6_ComCallByDispid(") == 0)
+                                        || (restO >= 15 && argVal.compare(csO, 15, "vb6_ComGetProp(") == 0)) {
+                                        argVal = "&((vb6_VARIANT[]){vb6_VariantFromComResult("
+                                               + argVal + ")})[0]";
+                                        break;
+                                    }
+                                }
                                 const std::string argClsObj =
                                     inferClassTypeOfExpr(*node.positional[i]);
                                 const std::string boxedObj = argClsObj.empty()
@@ -1918,11 +1942,34 @@
                             //   原样落副本 = 递出去的是元素当前值的拷贝, 被调方 `BSTR_Assign(&(*p),…)`
                             //   退掉的是元素自己那枚串 (实测靶工程 BSTR 档 48 处, 判据见 cgen_util_type.cpp)。
                             {
-                                const std::string addr253 = byRefElementAddressExpr(argVal, cType);
-                                if (addr253.empty()) {
-                                    argVal = "(&(" + cType + "){" + argVal + "})";
-                                } else {
-                                    argVal = addr253;
+                                /* 账 #305 §11.148 (第一百六十六刀): 属性读当 ByRef 实参 ——
+                                 * **早绑定这一族**也走读-改-写。改前这里发的是
+                                 * `(&(int32_t){vb6_X_prop_get_Tag(b)})`：拷进去了没有拷回来，
+                                 * 被调方的写回落在复合字面量上就没了 (实测 b.Inc b.Tag ⇒ 40)。
+                                 * 问句与晚绑定那一族同一处 (comPropReadWriteArg)，登记也进
+                                 * 同一张账，两行由 visit(CallStmt) 那条尾巴发。
+                                 * 账 #305 §11.152 (第一百七十刀): 型不一致那一格也接了 ——
+                                 * wantCType 传形参 C 型，陌生自己在内部按「形参型临时量 +
+                                 * 两向换算」发 (真 VB6 对这一格就是拷临时量再换算)，
+                                 * 所以这里不再自己比 mapType。 */
+                                bool propRW148 = false;
+                                if (i < node.positional.size() && node.positional[i]
+                                    && !isClassSlot092r) {
+                                    Vb6Type pvt148 = Vb6Type::Unknown;
+                                    std::string pvar148;
+                                    if (comPropReadWriteArg(*node.positional[i], argVal,
+                                                            pvt148, pvar148, cType)) {
+                                        argVal = "&" + pvar148;
+                                        propRW148 = true;
+                                    }
+                                }
+                                if (!propRW148) {
+                                    const std::string addr253 = byRefElementAddressExpr(argVal, cType);
+                                    if (addr253.empty()) {
+                                        argVal = "(&(" + cType + "){" + argVal + "})";
+                                    } else {
+                                        argVal = addr253;
+                                    }
                                 }
                             }
                         }

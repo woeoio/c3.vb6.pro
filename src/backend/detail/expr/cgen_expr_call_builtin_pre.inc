@@ -205,6 +205,66 @@
         }
     }
 
+    // C30-11 第九十四刀: TypeName(<定长串>) —— 真机答 "String"。
+    //
+    // 读数 (.temp/k93/vb6probe/RealMachineProbe.bas 真机输出):
+    //   A11 TypeName(module String*5)     = [String] err=0
+    //   A12 TypeName(UDT field String*5)  = [String] err=0
+    // 改前本仓 A11/A12 都答 "Object": 定长串在 C 侧是内联 `char[N]`，装进 Variant 的是
+    // 数组退化的那枚 `char*` —— vb6_VariantFromValue 只认 BSTR 槽，指针按对象包 ⇒ TypeName 答 Object。
+    // 定长串的 TypeName 在真机上是**不变的常量**（声明档决定，与装着几个字符无关；
+    // A14/A16 越界赋值后仍是 String），所以与上面 TypeName(Me)/TypeName(类变量) 同一形：
+    // 编译期折成字面量，不绕运行期那一问。
+    if (node.callee && node.callee->kind == ASTNodeKind::IdentifierExpr
+        && node.named.empty() && node.positional.size() == 1 && node.positional[0]) {
+        auto& tnIdent94 = static_cast<IdentifierExpr&>(*node.callee);
+        std::string tnLow94 = tnIdent94.name;
+        std::transform(tnLow94.begin(), tnLow94.end(), tnLow94.begin(), ::tolower);
+        if (tnLow94 == "typename" && !fixedStrLenOfExpr(*node.positional[0]).empty()) {
+            lastExpr_ = "vb6_BSTR_FromStr(L\"String\")";
+            return;
+        }
+    }
+
+    // C30-11 第九十五刀: 整型目标上的 Int/Fix/Abs(<整只 Variant 槽>) —— 真机 Null 进 ⇒ 94 + 目标不动。
+    //
+    // 读数 (.temp/k93/vb6probe/RealMachineProbe.bas 真机输出):
+    //   C3 Int(v=Null) into Long = [-1] err=94
+    //   C4 Abs(v=Null) into Long = [-1] err=94
+    // 改前本仓这两格都是 [0] err=0：发的是 vb6_Int(vb6_VariantToDouble(v))，而
+    // vb6_VariantToDouble **宽松**（Null → 0.0、不报错），于是「标记 + 临时量」那套守卫白设。
+    //
+    // 这一问必须由赋值站先标（只有它知道目标是整型标量，见 nullFamIntTarget_ 的说明）；
+    // 本站只负责改道，与 Len/LenB 那一形同构：`vb6_VariantToLong(vb6_IntV(x))` ——
+    // IntV 把 Null 原样带出来，VariantToLong 那一站报 94，外层 ChkLong/FltToLng 原样不动。
+    if ((nullFamIntTarget_ || nullFamDblTarget_) && node.callee && node.callee->kind == ASTNodeKind::IdentifierExpr
+        && node.named.empty() && node.positional.size() == 1 && node.positional[0]) {
+        auto& ni95 = static_cast<IdentifierExpr&>(*node.callee);
+        std::string fn95 = ni95.name;
+        std::transform(fn95.begin(), fn95.end(), fn95.begin(), ::tolower);
+        const char* vName95 = fn95 == "abs" ? "vb6_AbsV("
+                            : fn95 == "fix" ? "vb6_FixV("
+                            : fn95 == "int" ? "vb6_IntV(" : nullptr;
+        if (vName95) {
+            // 只改道一次 —— 右值顶层那一枚。
+            const bool dbl97 = nullFamDblTarget_ && !nullFamIntTarget_;
+            nullFamIntTarget_ = false;
+            nullFamDblTarget_ = false;
+            emitExpr(*node.positional[0]);
+            if (dbl97) {
+                // 第九十七刀 (§11.75): Double 目标 —— 先严格转 double（Null ⇒ 94、文本非数字 ⇒ 13），
+                // 再交回 vb6_Int/Fix/Abs 本身（不能走 IntV：Abs(-1.5) 会被弄成 2）。
+                // 目标不动由赋值站的守卫 + 临时量兜（序号变了就不写）。
+                const char* fnD97 = fn95 == "abs" ? "vb6_Abs("
+                                  : fn95 == "fix" ? "vb6_Fix(" : "vb6_Int(";
+                lastExpr_ = std::string(fnD97) + "vb6_DblStrict(" + lastExpr_ + "))";
+            } else {
+                lastExpr_ = std::string("vb6_VariantToLong(") + vName95 + lastExpr_ + "))";
+            }
+            return;
+        }
+    }
+
     // Fix 092t: TypeName(Me) — Me 在 C 侧是类指针 (vb6_cls_pvSubClass*), 而
     // vb6_TypeName 形参是 vb6_VARIANT → C2440 (pvSubClass 543/544,
     // clsSubClass.cls 497/498: App.LogEvent TypeName(Me) & ...).
@@ -625,6 +685,13 @@
             }
             std::string udtCType = inferUdtTypeOfExpr(*node.positional[0]);
             if (!udtCType.empty()) {
+                // 第九十六刀: 有声明布局就按真机口径折（Len = Σ成员 Len；真机 A7/A9 = 5/9），
+                // 折叠时**不发实参**（避开副作用）。认不出的 UDT 仍走下面的 sizeof。
+                int64_t lLen96 = 0, lLenB96 = 0;
+                if (udtLayoutSum(udtCType, lLen96, lLenB96)) {
+                    lastExpr_ = "((int32_t)" + std::to_string(lLen96) + ")";
+                    return;
+                }
                 emitExpr(*node.positional[0]);
                 lastExpr_ = "((int32_t)sizeof(" + lastExpr_ + "))";
                 return;

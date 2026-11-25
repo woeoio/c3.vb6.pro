@@ -13,6 +13,7 @@
         CCodeGen dllCgen(*diag_, lastAnalyzer->symbolTable(), lastAnalyzer->typeSystem(),
                          &classVoidFieldMap, &classTypedFieldMap, &variantReturnFuncs, options.verbose);
         dllCgen.setFormModuleNames(formModuleNames);  // Fix 086
+    dllCgen.setControlModuleNames(controlModuleNames);  // §B217: 装箱行不能收 .ctl（C 值是 HWND）
         dllCgen.setModulePublicConsts(&modulePublicConsts);  // Fix 086
         dllCgen.setDesignerFiles(&frmFiles_);  // Fix 112
         dllCgen.setStaticModuleVarNames(&dupModuleVarNames);  // Fix 093b: 撞名模块级变量转 static

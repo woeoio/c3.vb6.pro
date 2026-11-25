@@ -1427,6 +1427,31 @@ bool CCodeGen::udtFieldIsBstrInCTarget(const std::string& target) const {
 
 // ---- 账 #118: 定长串 (String * N) 的长度查询 ----
 // 见 cgen_helpers.inc 的声明注释。返回非空 = 是定长串, 值即长度表达式。
+//
+// C30-11 第九十六刀: Len/LenB(<整枚 UDT>) 的声明布局求和。
+//
+// 真机读数 (.temp/k93/vb6probe/RealMachineProbe.bas):
+//   A7  Len({String*5})       = 5    A8  LenB = 10
+//   A9  Len({String*5, Long}) = 9    A10 LenB = 16
+// 规则: Len = Σ成员 Len（定长串按 N 字符、数值按字节）；
+//       LenB = Σ成员 LenB（定长串按 2N）、成员之间按 align（上限 4）对齐、**尾部不补齐**
+//       ⇒ {String*5}: 10（不是 12）；{String*5, Long}: 10 →对齐 12 + 4 = 16。
+// 认不出的成员在 visit(TypeDecl&) 里就把整枚挡在表外 ⇒ 这里返回 false，调用方退回 sizeof。
+bool CCodeGen::udtLayoutSum(const std::string& ctype,
+                             int64_t& lenOut, int64_t& lenBOut) const {
+    auto it = udtLayout_.find(ctype);
+    if (it == udtLayout_.end()) return false;
+    int64_t len = 0, off = 0;
+    for (const auto& m : it->second) {
+        len += m.len;
+        if (m.align > 1) off = ((off + m.align - 1) / m.align) * m.align;
+        off += m.lenB;
+    }
+    lenOut = len;
+    lenBOut = off;
+    return true;
+}
+
 std::string CCodeGen::fixedStrLenOfExpr(const ASTNode& expr,
                                         const std::string& altCName) const {
     // ① 裸标识符: 模块级变量 / 局部 / 形参 / 返回值槽
@@ -1493,7 +1518,27 @@ std::string CCodeGen::appendUdtObjFieldMarker(const std::string& objExpr,
 
 
 // Fix 084o: 需要 int32_t 上下文中的 Variant 表达式 → vb6_VariantToLong 包装
+//
+// 账 #305 §11.139 (第一百五十七刀): “读口已经交回标量”的那三档只在这里定义一次。
+bool CCodeGen::isScalarComReadText(const std::string& cExpr) {
+    return cExpr.compare(0, 18, "vb6_ComGetIntProp(") == 0
+        || cExpr.compare(0, 21, "vb6_ComGetDoubleProp(") == 0
+        || cExpr.compare(0, 23, "vb6_ComGetLongPtrProp(") == 0;
+}
+
 std::string CCodeGen::toLongIfVariant(const std::string& cExpr, const Expr* astExpr) {
+    // 账 #305 §11.139 (第一百五十七刀): **读口已经交回标量** 时不再套 VariantToLong。
+    //
+    // 撞见的形态 (`.temp/k158/p1`, 工程类 `Property Get V() As Variant`):
+    //     n = o.V   →   vb6_ChkLong(vb6_VariantToLong(vb6_ComGetIntProp(o, L"V")))
+    //     → **C2440**: int32_t 转不成 vb6_VARIANT（整份工程编不过）。
+    // 两站各说一套: 读口按目标档发出的是 `int32_t` 那一发（它内部已经做过
+    // VariantChangeType + VarClear），而这一问按 AST 的**声明档**（Variant）
+    // 又套了一层拆箱 —— 那一层要的入参是 vb6_VARIANT。
+    // 判据只看**已经发出来的那一段文本**（与 §11.137 同一条纪律：信发生过的事，
+    // 不信对它的描述），因此对今天能编译的表达式零影响：能走到这里的
+    // `vb6_ComGetIntProp(` 以前一律是 C2440。
+    if (isScalarComReadText(cExpr)) return cExpr;
     // 无类型 COM 属性读 (vb6_ComGetProp) 的静态 C 类型是 void* (指向 VARIANT)，
     // 参与算术/整除前必须先按 VB6 语义取值 (与 unwrapBareComCall108 同口径)。
     if (cExpr.compare(0, 15, "vb6_ComGetProp(") == 0)

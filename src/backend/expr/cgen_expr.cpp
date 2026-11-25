@@ -564,6 +564,22 @@ void CCodeGen::visit(TypeOfExpr& node) {
             obj = "vb6_VariantToObjectVal(" + obj + ")";
         }
     }
+    // 账 #305 §11.103 (第一百二十一... 刀): 项目类 + 声明类**推不出**那一格。
+    // 走到这里 = 目标是项目类, 但左侧是 Object / Variant 槽 (或 ByVal Object 形参),
+    // `inferClassTypeOfExpr` 无从答声明类 ⇒ 以前落下面 `vb6_TypeOf` 的恒假桩。
+    // 实测 (尺 .temp/k121/typeprobe): `Set o = <TofC 实例>` 之后 `TypeOf o Is TofC`
+    // 答 False, 而 VB6 答 True; 同一枚对象的 `TypeName(o)` 却已经答 "TofC" ——
+    // 身份不是没有, 只是没人去问。改问**同一位主人**: vb6_TypeOfProject 只按
+    // 包装器自报类名 (vb6_ComObject_ClassNameA) 与工程类反查表 (vb6_FindProjectClassDesc)
+    // 正面命中, 其余一律 0 ⇒ 非包装器 / 外部 IDispatch 的读数与改前一字不差。
+    // 残留边界 (与 Fix 193 同向的假阴性): 真实类型是派生类、目标写基类名时仍答 False。
+    if (node.object) {
+        const Symbol* tofSymRt = lookupTypeSymbol(node.typeName);
+        if (tofSymRt && tofSymRt->kind == SymbolKind::Class) {
+            lastExpr_ = "vb6_TypeOfProject(" + obj + ", L\"" + tofSymRt->name + "\")";
+            return;
+        }
+    }
     lastExpr_ = "vb6_TypeOf(" + obj + ", L\"" + node.typeName + "\")";
 }
 

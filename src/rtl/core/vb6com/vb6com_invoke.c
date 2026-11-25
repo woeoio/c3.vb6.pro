@@ -252,6 +252,39 @@ static void vb6_ComDropPackedArgs(VARIANT** a, int32_t argc) {
     }
 }
 
+/* 账 #305 §11.110 (第一百二十八刀): 单枚打包实参的**唯一**放手口。
+ * 与上面那把同源: 内容问 VariantClear, 结构体才 free。修前这里是裸 free
+ * (宿主分岔 / 早退 / 属性 put 三族), 打包那一枚引用与 BSTR 就跟着结构体一起丢了。 */
+static void vb6_ComDropPackedOne(void* pv) {
+    VARIANT* v = (VARIANT*)pv;
+    if (!v) return;
+    if (!(v->vt & VT_BYREF)) VariantClear(v);
+    free(v);
+}
+
+/* 账 #305 §11.110 (第一百二十八刀补): 宿主分岔那一族**不能**清内容。
+ * 宿主模型 (uc_collection 的 vb6_coll_push 等) 存的是「借来的那枚指针」——
+ * 只有 VB6 工程类包装器 (vb6_ComObject_IsVb6Wrapper) 会 vb6_ComAddRefDispatch,
+ * 宿主包装器 (Vb6HostWrap, vb6_ComPackObject 里 vb6_UC_WrapHostObject 现造的那一枚)
+ * 一格引用都不加。修前这里裸 free 结构体, 包装器本人留着 ⇒ 集合读回还能用;
+ * 第一版把这一岔也接上 VariantClear, 集合手里那枚当场 free, gc 夹具 GC18/GC19
+ * (With collC(iC) : .Width = 1234) 12 发 notdispatchable (disp 是已释放的包装器)。
+ * 口径: 宿主包装器这一档只 free 结构体, 内容留在原处 —— 与 uc_collection 那条
+ * 「集合自己持有一份引用」尚未补上 AddRef/Release 相对; 那一格在册 (§11.110 边界)。 */
+static void vb6_ComDropPackedHostArgs(VARIANT** a, int32_t argc) {
+    extern int32_t vb6_UC_IsHostWrap(void* obj);
+    if (!a) return;
+    for (int32_t i = 0; i < argc; i++) {
+        VARIANT* v = a[i];
+        if (!v) continue;
+        if (v->vt == VT_DISPATCH && v->pdispVal && vb6_UC_IsHostWrap((void*)v->pdispVal)) {
+            free(v);
+            continue;
+        }
+        vb6_ComDropPackedOne(v);
+    }
+}
+
 static DISPID vb6_getDispid(IDispatch* pDisp, const wchar_t* name) {
     // NULL 名字是「默认成员」的写法（见 vb6_ComSetPropArgRcv 的默认成员分支）。
     // 这里必须当场挡掉：下面的缓存遍历用 wcscmp(..., name)，NULL 会读 0x0（曾经就是这样 AV 的）。
@@ -456,14 +489,70 @@ static WORD vb6_ComFlagsFor(IDispatch* pDisp, DISPID dispid, int32_t argc) {
     return fl ? fl : dflt;
 }
 
+/* 账 #305 §11.146 (第一百六十四刀): Byte / Currency / Date 三档的**降值**。
+ * 与 BSTR 那一臂同一条口径: 引用形只对我们自己的服务端有意义 (那里的
+ * vb6_VariantBorrowIntoSlot / vb6_ByRefScalarWriteBack 会给回写)，外部对端要的是值。
+ * 实测踩到的那一格: tests/dict_native 的 `Dict.Exists key` 收到 VT_DATE|BYREF 后
+ * 判等变成 false (oracle 那侧是 VT_DATE 值，答 true) —— 不是本刀想要的形状。
+ * 只降这三档: I4/I2/R4/R8/BOOL 的引用形是 §B224 之后的老路径，不在这里动。 */
+static int vb6_ComDemoteNewRef(VARIANT* a) {
+    if (!a) return 0;
+    switch (a->vt & ~VT_BYREF) {
+        case VT_UI1:  if (a->vt != (VT_BYREF | VT_UI1) || !a->pbVal) return 0;
+                      { BYTE v = *a->pbVal; a->vt = VT_UI1; a->bVal = v; } return 1;
+        case VT_CY:   if (a->vt != (VT_BYREF | VT_CY) || !a->pcyVal) return 0;
+                      { CY v = *a->pcyVal; a->vt = VT_CY; a->cyVal = v; } return 1;
+        case VT_DATE: if (a->vt != (VT_BYREF | VT_DATE) || !a->pdate) return 0;
+                      { DATE v = *a->pdate; a->vt = VT_DATE; a->date = v; } return 1;
+        default: return 0;
+    }
+}
+
 static void vb6_ComNarrowArgs(IDispatch* pDisp, DISPID dispid, VARIANT** args, int32_t argc) {
     if (!pDisp || !args || argc <= 0) return;
     int widen = 0;
-    for (int32_t i = 0; i < argc; i++)
-        if (args[i] && (args[i]->vt == VT_R8 || args[i]->vt == VT_R4)) { widen = 1; break; }
-    if (!widen) return;                       /* 没有浮点实参 ⇒ 这条路径零代价 */
+    int bstrRef = 0;   /* 账 #305 §11.143: 有没有 VT_BYREF|VT_BSTR 实参 */
+    int newRef = 0;    /* 账 #305 §11.146: 有没有 VT_BYREF|VT_UI1 / VT_CY / VT_DATE 实参 */
+    for (int32_t i = 0; i < argc; i++) {
+        if (!args[i]) continue;
+        if (args[i]->vt == VT_R8 || args[i]->vt == VT_R4) widen = 1;
+        else if (args[i]->vt == (VT_BYREF | VT_BSTR)) bstrRef = 1;
+        else if (args[i]->vt == (VT_BYREF | VT_UI1) || args[i]->vt == (VT_BYREF | VT_CY)
+                 || args[i]->vt == (VT_BYREF | VT_DATE)) newRef = 1;
+    }
+    if (!widen && !bstrRef && !newRef) return; /* 没有需要问签名的实参 ⇒ 这条路径零代价 */
     ITypeInfo* ti = vb6_ComTypeInfoOf(pDisp);
-    if (!ti) return;
+    /* 账 #305 §11.143 (第一百六十一刀): 字符串按引用发是 VB6 晚绑定的口径 —— 只有
+     * **我们自己的工程类服务端** (没有 ITypeInfo 的那一类, 换算/回写在 vb6comserver 与
+     * vb6_ByRefScalarWriteBack) 会把它当成回写槽。对端没有 ITypeInfo 又不是我们那族包装器时
+     * 一律降成值副 —— 与一百六十一刀之前同形: 外部 OCX 的 IDispatch 不一定给 GetTypeInfo
+     * (MSSTDFMT.PropertyBag 就是这一形), 递引用给它是 13/AV, 不是退回。
+     */
+    if (!ti) {
+        /* 「对端是不是我们自己的工程类服务端」两形都认: 客户端手里的包装器 (IsVb6Wrapper),
+         * 以及传到这里时已经被剥壳的裸类实例 (工程类的登记表, 只查表不解引用)。
+         * 后者是实测踩到的那一格 —— .temp/k162 的第一版只问包装器, 传进来的是裸实例 ⇒
+         * 把自己的服务端当成外部 OCX 降成值, S1 当场退回 "hi"。 */
+        int ownServer = vb6_ComObject_IsVb6Wrapper(pDisp);
+        if (!ownServer) {
+            extern const void* vb6_FindProjectClassDescRaw(const void* inst);
+            ownServer = (vb6_FindProjectClassDescRaw(pDisp) != NULL);
+        }
+        if (bstrRef && !ownServer) {
+            for (int32_t i = 0; i < argc; i++) {
+                VARIANT* a = args[i];
+                if (!a || a->vt != (VT_BYREF | VT_BSTR) || !a->pbstrVal) continue;
+                BSTR copy = SysAllocString(*a->pbstrVal);
+                a->vt = VT_BSTR;
+                a->bstrVal = copy;   /* 结构体是我们自己的，直接改成值形；收尾那圈会退它 */
+            }
+        }
+        /* §11.146: Byte / Currency / Date 同理 —— 不是我们自己的服务端就不许递引用。 */
+        if (newRef && !ownServer) {
+            for (int32_t i = 0; i < argc; i++) vb6_ComDemoteNewRef(args[i]);
+        }
+        return;
+    }
     TYPEATTR* ta = NULL;
     if (FAILED(ti->lpVtbl->GetTypeAttr(ti, &ta)) || !ta) return;
     for (UINT f = 0; f < ta->cFuncs; f++) {
@@ -481,7 +570,25 @@ static void vb6_ComNarrowArgs(IDispatch* pDisp, DISPID dispid, VARIANT** args, i
             int k = (int)(fd->cParams - argc + i);
             if (k < 0 || k >= (int)fd->cParams) continue;
             VARIANT* a = args[i];
-            if (!a || (a->vt != VT_R8 && a->vt != VT_R4)) continue;
+            if (!a) continue;
+            /* §11.143: 引用串 ⇄ 声明档 —— 问同一张形参表 (下标口径与上面那条相同)。 */
+            if (bstrRef && a->vt == (VT_BYREF | VT_BSTR)) {
+                const ELEMDESC* ed = &fd->lprgelemdescParam[k];
+                if ((ed->paramdesc.wParamFlags & PARAMFLAG_FOUT) == 0 && a->pbstrVal) {
+                    BSTR copy = SysAllocString(*a->pbstrVal);
+                    a->vt = VT_BSTR;
+                    a->bstrVal = copy;   /* 结构体是我们自己的，直接改成值形；收尾那圈会退它 */
+                }
+                continue;
+            }
+            /* §11.146: Byte / Currency / Date —— 同一格: 声明了 FOUT 才保留引用。 */
+            if (newRef && (a->vt == (VT_BYREF | VT_UI1) || a->vt == (VT_BYREF | VT_CY)
+                           || a->vt == (VT_BYREF | VT_DATE))) {
+                const ELEMDESC* ed = &fd->lprgelemdescParam[k];
+                if ((ed->paramdesc.wParamFlags & PARAMFLAG_FOUT) == 0) vb6_ComDemoteNewRef(a);
+                continue;
+            }
+            if (!widen || (a->vt != VT_R8 && a->vt != VT_R4)) continue;
             int want = vb6_ComIntParamVt(ti, &fd->lprgelemdescParam[k].tdesc);
             if (!want) continue;
             VARIANT tmp;
@@ -515,9 +622,7 @@ static void* vb6_ComCallRcv(void* disp, const wchar_t* methodName,
     if (vb6_Host_IsHostObject(disp)) {
         char hout[64];   /* vb6_VARIANT (vb6com 单元用 Windows VARIANT, 不见 vb6_VARIANT 类型) */
         int32_t hhandled = vb6_Host_Call(disp, methodName, argc, args_void, hout);
-        if (args) {
-            for (int32_t hi = 0; hi < argc; hi++) { if (args[hi]) free(args[hi]); }
-        }
+        vb6_ComDropPackedHostArgs(args, argc);
         /* 账 (438 语义刀): -1 = 宿主模型没有这个成员 (uc_hostmodel_call.inc 末尾)。
            `v = Me.rtfText` 这类读在 cgen 里发的是 **Call** 站 (不是 GetProp),
            以前这里无条件答 Empty ⇒ 夹具里 Err.Number 读到 0、反向用例走不到错误分支。
@@ -606,9 +711,7 @@ static void* vb6_ComCallRcv(void* disp, const wchar_t* methodName,
         LONG n191 = isAddRef191 ? (LONG)pUnk191->lpVtbl->AddRef(pUnk191)
                                : (LONG)pUnk191->lpVtbl->Release(pUnk191);
         VARIANT** uargs191 = (VARIANT**)args_void;
-        if (uargs191) {
-            for (int32_t ui = 0; ui < argc; ui++) { if (uargs191[ui]) free(uargs191[ui]); }
-        }
+        vb6_ComDropPackedArgs(uargs191, argc);
         VARIANT* ures191 = (VARIANT*)calloc(1, sizeof(VARIANT));
         VariantInit(ures191);
         ures191->vt = VT_I4;
@@ -1097,6 +1200,14 @@ static void* vb6_ComGetPropRcv(void* disp, const wchar_t* propName) {
     DISPID dispid = vb6_getDispid(pDisp, propName);
     if (dispid == DISPID_UNKNOWN) {
         fwprintf(stderr, L"vb6_ComGetProp: property \"%ls\" not found\n", propName);
+        /* C30-11 第九十八刀 (a): 真 IDispatch 上没有这名成员 —— VB 引擎 Err.Number = **438**
+           （真机读数 .temp/k93/vb6probe F3 `n = o.NoSuchProperty` ⇒ -1/438）。以前这里只打
+           一行 stderr 就 NULL 回去，Err.Number 读到 0。与第八刀（vb6_ComCall 的 miss）同口径：
+           抛 438、交空值让 Resume Next 继续，并立起「刚抛过 438」的标记吸收链尾那一次 miss。 */
+        if (vb6_ComIsDispatchable(disp)) {   /* 第九十八刀: 只对真 IDispatch 报 438 */
+            g_com_438_dangling = 1;
+            vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+        }
         return NULL;
     }
 
@@ -1149,6 +1260,11 @@ static void* vb6_ComGetPropArgRcv(void* disp, const wchar_t* propName,
     if (dispid == DISPID_UNKNOWN) {
         vb6_ComDropPackedArgs(args, argc);   /* 账 #305 第二百八十九刀 */
         fwprintf(stderr, L"vb6_ComGetPropArg: property \"%ls\" not found\n", propName);
+        /* C30-11 第九十八刀 (a): 同 vb6_ComGetProp —— 438，不是静默 NULL。 */
+        if (vb6_ComIsDispatchable(disp)) {   /* 第九十八刀: 只对真 IDispatch 报 438 */
+            g_com_438_dangling = 1;
+            vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+        }
         return NULL;
     }
 
@@ -1237,6 +1353,10 @@ static void vb6_ComSetPropRcv(void* disp, const wchar_t* propName, void* value_v
                 case 5: break;
                 default: *(int32_t*)fp = (int32_t)vb6_VariantToDouble(v); break;
             }
+            /* 第一百一十七刀 (§11.99): 写进代理不算完 —— 有主人就交回控件字体的那六位
+               setter（WM_SETFONT 落盘 + 存字），否则 `.Font.Size = x` 只改了一枚孤儿。
+               hFont 是派生只读量（case 5 不写），不提交。 */
+            if (kind != 5) vb6_UC_FontCommit(disp, propName);
         }
         free(value_void);
         return;
@@ -1297,6 +1417,13 @@ static void vb6_ComSetPropRcv(void* disp, const wchar_t* propName, void* value_v
     if (dispid == DISPID_UNKNOWN) {
         free(value_void);
         fwprintf(stderr, L"vb6_ComSetProp: property \"%ls\" not found\n", propName);
+        /* C30-11 第九十八刀 (a): 真机 F5 `o.NoSuchProperty = 5` ⇒ err=438（以前静默吞掉）。
+           只对**真 IDispatch** 报：Object 槽里装的不是 IDispatch（账 #412 那档）时
+            VB6 那边本来有对象，C3 报 438 会把能跑的工程打崩（CI: b190_object_formal_scope）。 */
+        if (vb6_ComIsDispatchable(disp)) {
+            g_com_438_dangling = 1;
+            vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+        }
         return;
     }
 
@@ -1337,7 +1464,7 @@ static void vb6_ComSetPropArgRcv(void* disp, const wchar_t* propName, void** arg
     if (vb6_ComLateBindIsMiss(disp)) {
         vb6_ComLateBindMiss(L"ComSetPropArg", propName, disp);
     }
-    if (!disp) { free(value_void); return; }
+    if (!disp) { vb6_ComDropPackedOne(value_void); return; }
     IDispatch* pDisp = (IDispatch*)disp;
 
     // Fix <default-put-null>: 参数化默认成员赋值 `d("k") = v` 的代码生成把成员名发成 NULL
@@ -1347,9 +1474,14 @@ static void vb6_ComSetPropArgRcv(void* disp, const wchar_t* propName, void** arg
     // 实测（.temp/dict/MinPut.bas）：修前 S2 处 AV，修后 err=0 且 count/get 都对得上 cscript。
     DISPID dispid = (!propName || !propName[0]) ? DISPID_VALUE : vb6_getDispid(pDisp, propName);
     if (dispid == DISPID_UNKNOWN) {
-        free(value_void);
+        vb6_ComDropPackedOne(value_void);
         fwprintf(stderr, L"vb6_ComSetPropArg: property \"%ls\" not found\n",
                  propName ? propName : L"(default)");
+        /* C30-11 第九十八刀 (a): 同 vb6_ComSetProp —— 438，不是静默丢（仅真 IDispatch）。 */
+        if (vb6_ComIsDispatchable(disp)) {
+            g_com_438_dangling = 1;
+            vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+        }
         return;
     }
 
@@ -1376,9 +1508,15 @@ static void vb6_ComSetPropArgRcv(void* disp, const wchar_t* propName, void** arg
 
     HRESULT hr = vb6_ComInvoke(pDisp, dispid, DISPATCH_PROPERTYPUT, &dp, NULL, &excep, &argErr);
 
-    /* 清理: 释放索引参数的堆VARIANT和索引数组, 以及value */
-    for (int32_t i = 0; i < argc; i++) free(args[i]);
+    /* 清理: 值那一枚的内容在 rgvarg[0] (浅拷贝), 索引在 rgvarg[1..] ——
+       内容一概问 VariantClear, 结构体才 free (账 #305 §11.110 第一百二十八刀: 修前这里
+       只 free 结构体, 每一次 `d.Item(k) = 对象` 都漏一枚引用与一枚 BSTR)。 */
+    for (int32_t i = 0; i < totalArgs; i++) {
+        if (rgvarg[i].vt & VT_BYREF) continue;
+        VariantClear(&rgvarg[i]);
+    }
     free(rgvarg);
+    vb6_ComDropPackedArgs((VARIANT**)args, argc);
     free(value_void);
 
     if (FAILED(hr)) {
@@ -1422,6 +1560,11 @@ static void vb6_ComSetRefRcv(void* disp, const wchar_t* propName, void* objRef) 
     DISPID dispid = (!propName || !propName[0]) ? DISPID_VALUE : vb6_getDispid(pDisp, dispName);
     if (dispid == DISPID_UNKNOWN) {
         fwprintf(stderr, L"vb6_ComSetRef: property \"%ls\" not found\n", dispName);
+        /* C30-11 第九十八刀 (a): Set 形同 Let —— 438，不是静默丢（仅真 IDispatch）。 */
+        if (vb6_ComIsDispatchable(disp)) {
+            g_com_438_dangling = 1;
+            vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+        }
         return;
     }
 

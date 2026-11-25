@@ -9,11 +9,48 @@ extern int32_t vb6_ComObject_IsVb6Wrapper(void* v);   /* vb6comserver_obj.c */
 
 void* vb6_Collection_New(void) {
     vb6_CollRec* c = (vb6_CollRec*)calloc(1, sizeof(vb6_CollRec));
-    if (c) c->tag = VB6_UC_COLL_TAG;
+    if (c) { c->tag = VB6_UC_COLL_TAG; c->refs = 1; }
     return c;
 }
 
 int32_t vb6_Collection_IsCollection(void* p) { return vb6_uc_isColl(p); }
+
+/* 账 #305 §11.111 (第一百二十九刀): 内建 Collection 的**载体寿命**。
+ * 缺口: 载体是 calloc 的一枚指针, 各槽存的直接是它, 而 Set 那对出口
+ * (vb6_ComAddRefDispatch / vb6_ReleaseObject) 都先问 vb6_ComIsDispatchable —— 宿主对象
+ * 一律不可分派 ⇒ 两个出口双双空跑。于是 `Set c = New Collection` 之后再怎么 Set Nothing /
+ * 重新赋值, 载体既不拆、元素也不出厂 (实测 .temp/k129: A1/A2/A3 三条 terms 全 0)。
+ * 本刀只把「已计数」这一档补上: New 时 refs=1, * 本刀只把「已计数」这一档补上: New 时 refs=1, 与 Set 那对出口成对; 到 0 时
+ * 元素按 Remove 的口径逐枚放手, 再拆载体。 */
+void vb6_Collection_AddRef(void* p) {
+    vb6_CollRec* c = (vb6_CollRec*)p;
+    if (vb6_uc_isColl(c)) c->refs++;
+}
+
+/* 返 1 = 这一发把载体拆了 (调用方据此知道里面那些对象已经出厂)。 */
+int32_t vb6_Collection_Release(void* p) {
+    vb6_CollRec* c = (vb6_CollRec*)p;
+    if (!vb6_uc_isColl(c)) return 0;
+    if (c->refs > 1) { c->refs--; return 0; }
+    /* 最后一枚引用: 元素先出厂 (与 coll_push / Item 那两处 AddRef 配对), 再拆载体。
+       逐枚的口径与 vb6_Collection_Remove 一字不差 —— 两处必须是同一条路。 */
+    vb6_VARIANT* items = (vb6_VARIANT*)c->items;
+    for (int32_t i = 0; items && i < c->count; i++) {
+        vb6_VARIANT* v = &items[i];
+        vb6_VariantValueFree(v);
+        if (v->vt == vb6_vtDispatch && v->pdispVal && vb6_ComObject_IsVb6Wrapper(v->pdispVal)) {
+            vb6_ReleaseObject(&v->pdispVal);
+            v->pdispVal = NULL;
+        }
+        if (c->keys && c->keys[i]) { SysFreeString(c->keys[i]); c->keys[i] = NULL; }
+    }
+    free(c->items);
+    free(c->keys);
+    c->items = NULL; c->keys = NULL; c->count = 0; c->cap = 0;
+    c->tag = 0;   /* 先撕标再 free: 第二发 Release 不再认它 */
+    free(c);
+    return 1;
+}
 
 static void vb6_coll_push(void* coll, const vb6_VARIANT* v, const wchar_t* key) {
     vb6_CollRec* c = (vb6_CollRec*)coll;

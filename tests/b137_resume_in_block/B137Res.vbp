@@ -1,0 +1,6 @@
+Type=Exe
+Name="B137App"
+Module=B137Main; B137Main.bas
+Class=B137Item; B137Item.cls
+Startup="Sub Main"
+ExeName32="B137.exe"

@@ -42,6 +42,7 @@
     entry.emitLine("HRESULT firstFail = S_OK;");
     entry.emitLine("for (int i = 0; i < g_vb6_coclassCount; i++) {");
     entry.indent();
+    entry.emitLine("if (!g_vb6_coclasses[i].progId || !g_vb6_coclasses[i].progId[0]) continue;  /* §B217: 装箱行不注册 */");
     entry.emitLine("hr = vb6_RegisterCoClass(&g_vb6_coclasses[i], dllPath);");
     entry.emitLine("if (FAILED(hr)) { if (failed == 0) firstFail = hr; failed++; }");
     entry.dedent();
@@ -59,6 +60,7 @@
     entry.emitLine("vb6_GetDllPath(dllPath, MAX_PATH);");
     entry.emitLine("for (int i = 0; i < g_vb6_coclassCount; i++) {");
     entry.indent();
+    entry.emitLine("if (!g_vb6_coclasses[i].progId || !g_vb6_coclasses[i].progId[0]) continue;  /* §B217 */");
     entry.emitLine("vb6_UnregisterCoClass(&g_vb6_coclasses[i]);");
     entry.dedent();
     entry.emitLine("}");

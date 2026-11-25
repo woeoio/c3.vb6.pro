@@ -16,7 +16,20 @@
     }
     if (vb6_uc_isColl(obj)) {   // Fix 112c: RTL Collection
         if (_wcsicmp(name, L"Count") == 0) { vb6_ho_setVariantLong(out, vb6_Collection_Count(obj)); return 1; }
-        return 1;
+        /* 第一百一十三刀 (§11.95): 真机 probe112「P3 `Set v = col.NoSuchProperty`」= `v=[111] err=438`，
+           本机这一格本该回 **-1**（= 成员不存在，由 vb6_ComGetPropRcv 的 `hgot < 0` 那条收口抛 438）。
+           实测切不动：改成 -1 之后 Charts2020 的 GUI 格当场红（exit=438）。根因不在这一格，而在
+           生成码：`With <UDT>: .Prop.Add …`（`Prop As Collection`）当前发成
+              vb6_ComCall(vb6_ComGetObjectProp(_vb6_with_N->Prop, L"Prop"), L"Add", …)
+           —— 多出来的一层 `ComGetObjectProp(……, L"Prop")` 拿 Collection 问它自己叫不叫 Prop。
+           以前这一层被这里的宽容吞掉（接收者变 NULL，那一串 Add 全是空转），§11.95 让它报 438 之后
+           就变成进程级错误。即：**这一格是那处发错误的勒索对象**（冤）—— 先把发错误修好
+           （第一百一十四刀，复现器 `.temp/k113/wuc2.bas`，五行），再把这里改回 -1。 */
+        /* 第一百一十四刀已把发错误修好（With-UDT 对象字段不再多解一层; `.Prop.Add args` 走
+           晚绑定 ComCall; `.Prop(args)` 名字交空走默认成员）。本格照真机回 **-1**。
+           谁要是再看到 Charts2020 这类 GUI 格冒 438, 先查发码侧是不是又拼出了
+           `vb6_ComGetObjectProp(<字段>, L"<字段名>")` 这种「拿对象问它自己叫不叫自己」。 */
+        return -1;
     }
     if (vb6_uc_isFont(obj)) {
         /* 账 #305 第二百七十六刀: 认得就答、认不出**先报数** —— 第二百七十三刀给方法
@@ -306,8 +319,28 @@
         size_t ln = wcslen(name);
         if (_wcsicmp(name, L"Font") == 0 ||
             (ln > 4 && _wcsicmp(name + ln - 4, L"Font") == 0)) {
-            vb6_UCFontRec* fr = (vb6_UCFontRec*)vb6_UC_NewFont();
-            vb6_ho_setVariantDispatch(out, fr); return 1;
+            /* 第一百一十六刀 (§11.98): 这一格以前走 vb6_ho_setVariantDispatch ⇒ 恒 Empty
+               (那个出口的契约是「交 Empty 走 Nothing 分支」, 防 VariantClear 对伪对象调
+               Release)。于是 `CallByName(oCtrl, "Font", VbGet).Size` 的接收者是 NULL。
+               字体代理与 Controls.Item 那族一样是**宿主伪对象**: 交 VT_DISPATCH 裸指针是
+               安全的 —— vb6_ReleaseObject / vb6_ComAddRefDispatch 只用
+               vb6_ComIsDispatchable 判据, 首字段是 BSTR 的伪对象一律跳过。
+               第一百一十七刀 (§11.99): 不再现造一枚默认档孤儿 —— 每个宿主对象只发一枚
+               (存在登记记录的 fontProxy), owner 交给 vb6_Get/SetControlFont* 那六位主人:
+               读回控件设计期字号, 写回落盘到窗口。
+               见 uc_controls.c 的 vb6_UC_NewFontForWindow / FontSyncFromOwner / FontCommit。 */
+            if (h) {
+                if (!h->fontProxy) {
+                    void* win = IsWindow((HWND)obj) ? obj : h->hwnd;
+                    h->fontProxy = win ? vb6_UC_NewFontForWindow(win) : vb6_UC_NewFont();
+                }
+                if (h->fontProxy) { vb6_ho_setVariantObject(out, h->fontProxy); return 1; }
+            }
+            {   /* 没有登记记录的裸窗口：照旧答一枚（没有挂载点就不缓存） */
+                void* win = IsWindow((HWND)obj) ? obj : NULL;
+                void* fp = win ? vb6_UC_NewFontForWindow(win) : vb6_UC_NewFont();
+                if (fp) { vb6_ho_setVariantObject(out, fp); return 1; }
+            }
         }
     }
     // Fix <vbeclipse> rev18: 内建成员都没命中 → 试**本 UserControl 的自有 Property**

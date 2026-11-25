@@ -578,5 +578,45 @@ if ($r15Bad.Count -gt 0) {
 }
 Write-Host ('  R15 narrow-store single authority OK (names 3/1 file, table asked at ' + $tblTotal +
             ' sites, assigned at ' + $ncaTotal + ', veto-ordered class-field ask, With leg wrapped)')
-Write-Host 'PASS implicit_cstr_station (R1..R15)'
+
+# ---- R16 ----
+# 账 #305 §11.153 (第一百七十一刀): Currency 是 double 承载, 拼串格式化必须与 Double 共一臂。
+# 病: Currency 的**属性读**经 memberReturnTypes 答 Currency (cgen_util_type.cpp:652), 而
+# wrapToBSTR 的分档 switch 没有 Currency 臂 ⇒ 落 default 的 vb6_CStrLong((int64_t)double):
+# 10.5 打 "10"、10.5+1 打 "11" (tests/b171_currency_prop_str)。变量那一形以前就对，因为
+# 它的符号档走 Double —— 同一只值两条路两个答案，就是这一条要钉的。
+$r16Bad = @()
+$fmtFiles = @($srcCodeByFile.Keys | Where-Object { (Split-Path -Leaf $_) -eq 'cgen_expr_binary_util.cpp' })
+if ($fmtFiles.Count -ne 1) {
+    $r16Bad += ('R16 cgen_expr_binary_util.cpp appeared ' + $fmtFiles.Count + ' time(s) in the census')
+} else {
+    $fmt = $srcCodeByFile[$fmtFiles[0]]
+    $curArm = ([regex]::Matches($fmt, [regex]::Escape('case Vb6Type::Currency: return "vb6_CStrDbl('))).Count
+    if ($curArm -ne 1) {
+        $r16Bad += ('R16 Currency format arm = ' + $curArm + ', want 1 (VB6 Currency rides double here)')
+    }
+    if ($fmt -match 'case Vb6Type::Currency:\s*return "vb6_CStrLong') {
+        $r16Bad += 'R16 Currency is formatted through vb6_CStrLong again - that is the truncation bug'
+    }
+    $arms = ([regex]::Matches($fmt, 'case Vb6Type::\w+:')).Count
+    if ($arms -lt 16) {
+        $r16Bad += ('R16 formatter arms = ' + $arms + ', want >= 16 (a dropped arm falls through to CStrLong)')
+    }
+}
+$run171 = Join-Path $Root 'tests\run_tests.ps1'
+if (-not (Test-Path -LiteralPath $run171)) {
+    $r16Bad += 'R16 tests/run_tests.ps1 not found - cannot census the fixture'
+} else {
+    $runner = [IO.File]::ReadAllText($run171)
+    $fx = ([regex]::Matches($runner, "Test-Vbp 'b171_currency_prop_str")).Count
+    if ($fx -ne 2) {
+        $r16Bad += ('R16 b171 fixture cells = ' + $fx + ', want 2 (x64 + x86)')
+    }
+}
+if ($r16Bad.Count -gt 0) {
+    Write-Host ('FAIL implicit_cstr_station R16 (Currency formats through the double arm): ' + ($r16Bad -join ' | '))
+    exit 1
+}
+Write-Host ('  R16 Currency<=>Double format arm OK (1 arm, ' + $arms + ' arms total, fixture x64+x86)')
+Write-Host 'PASS implicit_cstr_station (R1..R16)'
 exit 0

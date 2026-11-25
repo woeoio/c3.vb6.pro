@@ -1140,6 +1140,31 @@ void CCodeGen::dropClassSlotRelease(const std::string& expr) {
     }
 }
 
+// 账 #305 §11.109 (第一百二十七刀): 腿④ 的第四档 —— 局部 `As Object` (C 侧 void*)。
+// 登记只在声明口那一条臂里做 (与工程类 / 接口那两档同处), 出口那一发由 emitIvrefScopeRelease 发。
+void CCodeGen::trackLateObjSlotForRelease(const std::string& cName) {
+    if (cName.empty()) return;
+    if (!currentReturnVar_.empty() && cName == currentReturnVar_) return;
+    for (const SlotRelease& s : slotsToRelease_) {
+        if (s.expr == cName) return;
+    }
+    SlotRelease rec;
+    rec.expr = cName;
+    rec.isView = false;
+    rec.isLateObj = true;
+    slotsToRelease_.push_back(rec);
+}
+
+// 只撤泛对象那一档 (工程类 / 接口 / 载体三档的登记面不动) —— 两个成因:
+//  - For Each 的循环变量: 每一轮由循环自己写, 元素那一枚归容器/迭代器, 出口放手 = 无对价的退;
+//  - 这一格的地址交给了外部 Declare (写它的那一站在计数系统外面)。
+void CCodeGen::dropLateObjSlotRelease(const std::string& expr) {
+    for (auto it = slotsToRelease_.begin(); it != slotsToRelease_.end();) {
+        if (it->isLateObj && it->expr == expr) it = slotsToRelease_.erase(it);
+        else ++it;
+    }
+}
+
 // 账 #305 §B221: `x->vt-><slot>(x, args)` 这一发射形状只许有一位作者 —— com_bind 的
 // ivref 臂与「接收者是视图值的调用」那一站 (形②) 都调它。槽解析不出来 = 这个成员不在
 // 这张面上，返回空串让调用点继续往下落 (契约检查另有诊断)。
@@ -1293,6 +1318,15 @@ void CCodeGen::emitIvrefScopeRelease() {
                 c_.emitLine(kill +
                             "  /* 账 #305 (甲) 腿⑤: 作用域出口销毁载体 (本过程内它从没整体用掉) */");
             }
+            continue;
+        }
+        // 账 #305 §11.109 (第一百二十七刀): 第四档 —— 局部泛对象槽 (`As Object`, C 侧 void*)。
+        // 修前这一格压根不在表里 (只有接口 / 工程类 / 载体三档): 一层包装器漏一只、
+        // 而且包装器自身握着的那枚类引用没人交回 ⇒ Class_Terminate 永远走不到 (实测: 循环三次
+        // 现造现丢, 一枚 Terminate 都不打)。
+        if (s.isLateObj) {
+            c_.emitLine("vb6_ReleaseObject((void**)&" + s.expr +
+                        ");  /* 账 #305 (甲) 腿④ 泛对象档: scope-exit release (Fix 191 那道判据拦下裸实例/HWND) */");
             continue;
         }
         if (s.isView) {

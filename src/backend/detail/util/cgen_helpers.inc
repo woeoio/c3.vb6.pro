@@ -384,6 +384,12 @@
     void trackIvrefLocalForRelease(const std::string& cName);  // B05: 登记局部接口变量
     // 账 #305 §B218 (甲) 腿④: 工程类那一档的登记入口 + 两档共用的那条夹
     void trackClassSlotForRelease(const std::string& cName, const std::string& clsName);
+    // 账 #305 §11.109 (第一百二十七刀): 腿④ 的第四档 —— 局部 `As Object` (C 侧 void*)。
+    // 出口那一发是 vb6_ReleaseObject((void**)&x): 包装器/真 IDispatch 退一轮, 裸工程实例
+    // 与 HWND 由 Fix 191 那道判据拦下 (只清槽)。循环变量 (For Each) 与地址交出去过的那
+    // 两格由 dropLateObjSlotRelease 撤登 (无对价的退)。
+    void trackLateObjSlotForRelease(const std::string& cName);
+    void dropLateObjSlotRelease(const std::string& expr);
     // 账 #305 §B218 (甲) 腿④ 第二道夹: 这一格的地址交给了外部 Declare ⇒ 出口不放手 (只撤类档)。
     void dropClassSlotRelease(const std::string& expr);
     // 第一百五十二刀: arrayName 非空 = 第三档「数组载体」(clsName 那一格空着不用)。
@@ -918,6 +924,21 @@
     //   逐字沿用); 其余原样交回。
     std::string conditionTruthExpr(const std::string& cExpr, Expr* cond) const;
 
+    // 第一百零一刀 (§11.79): 「这一枚节点本身是不是晚绑定成员读/调用」—— 判据与第九十八/
+    //   九十九/一百刀同一枚：接收者按**链根**判（晚绑定 Object 变量），排除控件数组 /
+    //   伪宿主 / Me / 同工程函数名。条件位那一族（If / ElseIf / Do While / While Wend）问它。
+    bool lateBoundComReadExpr(Expr* e) const;
+    // 同一判据的**树**版：这棵表达式里有没有任何一枚晚绑定成员读。
+    bool exprHasLateBoundComRead(Expr* e) const;
+    // 第一百零一刀 (§11.79): 条件位收口 —— 条件里含晚绑定读时，先发一行序号捕获，
+    // 再把条件表达式折成 vb6_CondIfErr(<序号>, (<cond>))：求完序号变了就按真。
+    // 真机 H1–H5: 单行 If / 多行 If 块 / ElseIf / Do While 的条件报 438 之后那一支都执行。
+    // 不含晚绑定读的条件**逐字节不变**（直接交回 cExpr）。
+    std::string guardCondLateRead(const std::string& cExpr, Expr* cond);
+    // 第一百零三刀 (§11.81): 取反站 / 后测站的条件守卫 —— 报错 ⇒ 条件按假
+    // （真机 J 族：前测不进退出、后测两站出循环）。
+    std::string guardCondLateReadNoErr(const std::string& cExpr, Expr* cond);
+
     // 账 #305 §B171 (第六十二刀): 「这一枚 C 文本是不是**类字段里那枚 Variant 槽的读**」——
     // cExprIsVariant 的一条来源, 单独成一枚是因为它是**唯一可寻址**的那一档: 装箱站对
     // 「槽的函数结果」只能复制, 对「槽字段本身」可以直传 &(...)。判据 = 尾注里那个
@@ -1175,6 +1196,11 @@
     bool hasOnErrorInStmts(StmtList& stmts) const;
     // P14.1.2: 检测语句列表中是否包含Resume/Resume Next
     bool hasResumeInStmts(StmtList& stmts) const;
+    // 账 #305 §11.119 (第一百三十九刀): 活载体名册的槽数上界 (= 过程体里 With 语句条数, 递归)。
+    int countWithStmts(StmtList& stmts) const;
+    // §11.116 五 (第一百四十一刀): 标签 → With 层深 (见 cgen_util_scan.cpp 里的实现)。
+    void collectLabelWithDepth(StmtList& stmts, int depth,
+                               std::unordered_map<std::string, int>& out);
     // Bug #1 fix (082h): 预扫描语句中的UBound/LBound(arr,N>1)收集ND数组名
     void scanNDArraysInStmts(StmtList& stmts);
     void scanNDArraysInExpr(Expr& expr);
@@ -1249,8 +1275,20 @@
     // 口径见实现处注释: 简单 lvalue + 数值/布尔五档, 按 C 存储宽度选 VT_BYREF|<型>。
     // allowVariantRef: 富贵竹 FIX-011 (账 #610 第341刀) —— 只在早绑定已知签名且
     // 该形参非 ByVal 的调用点开启; 晚绑定无签名一路保持按值 (保守, 不把入参变可写)。
+    // packFn: 账 #305 §11.144 (第一百六十二刀) —— 调用点已经把这块实参的打包器算出来了，
+    // 成员访问那一形只能靠它说话（发射文本里只有字段名、没有型）。
     std::string comByRefArgExpr(Expr& expr, const std::string& argText,
                                 bool allowVariantRef = false);
+    // 账 #305 §11.147/§11.148: 「属性读当 ByRef 实参」的读-改-写 —— 唯一一位主人。
+    // 成立就往两条登记道里写 (addPending = 调用前拷临时量 / addPostLine = 调用后经 Let 写回)，
+    // 交回临时量名与属性型；不成立交回 false，调用点维持原形。
+    // 晚绑定实参 (comByRefArgExpr) 与早绑定实参 (复合字面量那一族) 问同一句。
+    bool comPropReadWriteArg(Expr& expr, const std::string& argText,
+                             Vb6Type& outVt, std::string& outVar,
+                             const std::string& wantCType = std::string());
+    // 账 #305 §11.145 (第一百六十三刀): 「这枚 VB 型该按哪个 *Ref 打包器发」(空 = 没有那档，按值)。
+    // 裸标识符 / 数组元素 / 类字段 三处共用它 —— 配对表只住 cgen_util_com.cpp 一处。
+    std::string comByRefPackFnForVbType(Vb6Type vt) const;
 
     // 账 #256: 「这枚裸控件名会不会被折成默认属性读数、折出来是什么 VB 型」只此一处回答。
     // 两个消费点共用它：标识符发码那条路拿 readFn/prop/ctrlType 去发 `readFn(句柄)`，
@@ -1383,6 +1421,15 @@
     // 保留自己的晚绑定路；类型未知 ⇒ 交回原生 VARIANT，绝不按上下文猜一档。
     std::string comGetterExpr(const ComSigView& sv, const std::string& objExpr,
                               const std::string& memberName) const;
+
+    // 账 #305 §11.132（第一百五十一刀）：链读**接收者**那一枚临时引用。
+    // `vb6_ComGetObjectProp(x, L"Child")` 交回的那一枚归调用方（§11.126），而被当接收者
+    // 再递一层时没人放 ⇒ 每多一层链漏一枚，中间那枚对象永不 Terminate。
+    // 这一段返回**可当接收者用**的表达式：是自有链读交回的那一枚 ⇒ 落成 `_rrvN` 并登记
+    // 语句末收回（档 3）；其余（命名变量 / 视图结构体 / 宿主伪对象 / 控件 HWND ...）原样交回。
+    // 判据与四道闸都写在定义上；**必须在所有 recognizer 都问过之后**才调 —— 提了名就把
+    // 文本里的 `L"Tabs"` / `vb6_hwnd_X` 这些线索带走了。
+    std::string hoistComRecvTemp(const std::string& objExpr);
 
     // 上面那一条的 switch 本体，**按返回类型**答（账 #305 #474: 站F 那位读者要问的就是这一问，
     // 第二处不许再抄一份档位表）。未知档 ⇒ 交回原生 VARIANT 那一发，与 comGetterExpr 同一答案。
@@ -1863,6 +1910,16 @@
     // <vbeclipse> <VBFlexGridDemo>: UDT 左值字段的**声明类型名** (`mi.typeRefName`),
     // 空 = 真 Variant 槽, 非空 = 声明过具体类型 (Object/接口/类/UDT)。
     std::string udtFieldTypeRefNameOfTarget(const ASTNode* target) const;
+
+    // 账 #305 §11.139 (第一百五十七刀): 这段 C 文本是不是**已经交回标量**的晚绑定读?
+    //
+    // 晚绑定读口是按**目标档**发码的 (`o.V` 进 Long 目标 ⇒ vb6_ComGetIntProp，RTL 内已做
+    // VariantChangeType + VarClear，C 类型就是 int32_t)。而各种 consumer 站按**声明档**
+    // (属性声明是 Variant) 再套一层拆箱 —— 那一层的入参要的是 vb6_VARIANT ⇒ C2440。
+    // 判据只认**已经发出来的那一段文本** (与 §11.137 同一条纪律: 信发生过的事，
+    // 不信对它的描述)，且只列数值三档: 能命中这里的以前一律是 C2440，
+    // 故对今天能编译的表达式零影响。
+    static bool isScalarComReadText(const std::string& cExpr);
 
     // Fix 084o: 若 C 表达式为 Variant (字符串级检测或已知 Variant 变量), 返回
     // vb6_VariantToLong(...) 包装, 否则原样返回. 用于需要 int32_t 的上下文:

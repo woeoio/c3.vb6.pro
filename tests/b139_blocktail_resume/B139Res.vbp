@@ -1,0 +1,6 @@
+Type=Exe
+Name="B139App"
+Module=B139Main; B139Main.bas
+Class=B139Item; B139Item.cls
+Startup="Sub Main"
+ExeName32="B139.exe"

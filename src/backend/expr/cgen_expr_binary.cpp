@@ -191,6 +191,13 @@ void CCodeGen::visit(BinaryExpr& node) {
                             || isBstrCExpr113g(left));
         bool rightStr113g = (inferExprType(*node.right) == Vb6Type::String
                              || isBstrCExpr113g(right));
+        // 账 #305 §11.140 (第一百五十八刀): 这一侧**已经交回裸标量**时不是串。
+        // 撞见的形态 (`.temp/k159/p1`, `Property Get S() As String` = "101"):
+        //     n = o.S + 1  →  vb6_CStrDbl(vb6_Val(vb6_ComGetIntProp(o, L"S")) + 1)
+        // → `vb6_Val` 收 BSTR，拿到的是 int32 被当指针解 ⇒ **运行期 0xC0000005**。
+        // 读口按目标档已经把 S 折成数了，这里再把它当串读一遍就是把同一件事做两遍。
+        if (leftStr113g && isScalarComReadText(left)) leftStr113g = false;
+        if (rightStr113g && isScalarComReadText(right)) rightStr113g = false;
         bool leftNum113g = isNumericType113g(inferExprType(*node.left));
         bool rightNum113g = isNumericType113g(inferExprType(*node.right));
         bool mixStrNum113g =
@@ -374,6 +381,10 @@ void CCodeGen::visit(BinaryExpr& node) {
     // 超集 ⇒「oracle 答 Variant」必然蕴含「改道接走了、交出的是整只槽」，§B147 那一族
     // (oracle 说是槽、发码给裸标量 ⇒ 消费点既不提取也不取整) 就此按构造消失。
     auto routeOperand86 = [&](const std::string& cExpr, const Expr* astExpr) -> bool {
+        // 账 #305 §11.139: 读口已经交回裸标量 (ComGetInt/Double/LongPtrProp) ⇒ 不进
+        // Variant 算术改道。改前这里按 AST 的声明档 (Variant) 改道，却用
+        // `vb6_VariantFromValue(<int32_t>)` 装箱 ⇒ C2440（整份工程编不过）。
+        if (isScalarComReadText(cExpr)) return false;
         return isVariantOperand86(cExpr, astExpr) || isVariantType(astExpr);
     };
 

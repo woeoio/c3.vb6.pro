@@ -1,0 +1,9 @@
+Option Explicit
+
+' ??????? (?11.109) ??????: ??????, ????
+Public Seed As Long
+
+Private Sub Class_Terminate()
+    B127Main.gTerms = B127Main.gTerms + 1
+    Debug.Print "  [B127.Terminate seed=" & CStr(Seed) & "]"
+End Sub

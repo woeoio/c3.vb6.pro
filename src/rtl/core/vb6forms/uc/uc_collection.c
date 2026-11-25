@@ -22,6 +22,7 @@ extern "C" {
 
 typedef struct vb6_CollRec {
     int32_t tag;          // 0xC01C01C0
+    int32_t refs;         // 载体引用计数 (第一百二十九刀): New 时为 1, Set/槽进出各一问
     void*   items;        // vb6_VARIANT[] (RTL 简化布局)
     wchar_t** keys;       // BSTR[] 与 items 平行; 可为 NULL (无键集合)
     int32_t count;

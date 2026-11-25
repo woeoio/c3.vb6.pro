@@ -42,6 +42,13 @@ namespace vb6c3 {
 #include "backend/detail/expr/cgen_expr_ident_builtin_table.inc"
 
 void CCodeGen::visit(IndexOrCallExpr& node) {
+    // 第一百零五刀 (§11.83): 嵌套调用的实参不参与**外层语句**的实参位守卫。
+    // 例子: `SetWindowSubclass(h, thunk, ObjPtr(CurrControl), 0)` —— 外层语句设了
+    // stmtCallArgSerial_，而内层 `ObjPtr(...)` 的实参也被当成“要提升的实参”
+    // ⇒ `vb6_VARIANT _ag = CurrControl` C2440 + `vb6_ObjPtr(_ag)` C2172
+    // （实测 FlexGridX86 的 VisualStyles.c(162)/(195)/(197)）。
+    struct ArgDepth105 { int& d; ArgDepth105(int& v) : d(v) { d++; } ~ArgDepth105() { d--; } };
+    ArgDepth105 argDepth105_{argNestDepth_};
     // Delegate 直调 (tB 扩展): op(a,b) → ((vb6_del_t_op)(op))(a,b), 独立短路径
     if (node.isDelegateCall) { emitDelegateCall(node); return; }
     // 重载变体 (O2): callee 是标识符且语义层选定非 head 变体时, 把符号键后缀

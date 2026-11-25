@@ -53,6 +53,9 @@ inline const OwnedTempException* ownedTempExceptions() {
         { "vb6_Bool_AssignFromVariant", 1, '1', "store" },
         { "vb6_BSTR_AssignFromVariant", 1, '1', "store" },
         { "vb6_BSTR_AssignMove",  1, '1', "write" },
+        // C30-11 第九十九刀 (§11.77): 晚绑定成员读交回的 BSTR —— 序号变了就放掉交回的串
+        //（目标不写），没变就转手写进目标。两条路都把 source 收下 ⇒ 与 AssignMove 同档。
+        { "vb6_BSTR_AssignMoveIfOk", 1, '1', "store" },
         { "vb6_CDec",             0, '1', "ret" },
         { "vb6_DecimalAsVariant", 0, '1', "write" },
         { "vb6_DecimalToBSTR",    0, '1', "store" },
@@ -141,6 +144,9 @@ struct OwnedTempConsumes {
 inline const OwnedTempConsumes* ownedTempConsumes() {
     static const OwnedTempConsumes kConsumes[] = {
         { "vb6_BSTR_ConcatFree", 0, '0' },
+        // 第九十九刀: 成功路把 source 交给 AssignMove（keeps=1）；中止路自己放掉。
+        // 消费轴要这一格，否则调用方会再放一次（双放）。
+        { "vb6_BSTR_AssignMoveIfOk", 1, '0' },
         { "vb6_BSTR_Free",       0, '0' },
         { "vb6_FixedStrAssignFree", 2, '0' },
         { "vb6_IIfBSTR",         1, '1' },
@@ -259,6 +265,9 @@ inline const char* const* ownedTempOwnedReturnExits() {
         // C30-11 第七十一刀: Len 的变体位交回一枚新造的 VARIANT(Long)。
         // （Trim 一族不在此名单: 它们推导为 '1'/'store', 走 ownedTempExceptions。）
         "vb6_LenV",
+        // C30-11 第九十一刀: LenB 的变体位 —— 与 vb6_LenV 同一形（Null 进 Null 出，
+        // 其余交回一枚新造的 VARIANT(Long)），VARIANT 子表那一侧同名。
+        "vb6_LenBV",
         "vb6_VCmpNullV",
         "vb6_VarLogicNullV",
         "vb6_CurDir",
@@ -381,6 +390,7 @@ inline const char* const* ownedTempOwnedVariantExits() {
         "vb6_FixV",
         "vb6_IntV",
         "vb6_LenV",          // C30-11 第七十一刀: Len(Variant) 交出一枚新造的 VARIANT
+        "vb6_LenBV",         // C30-11 第九十一刀: LenB(Variant) 同档（新造的 VARIANT(Long)）
         "vb6_VCmpNullV",
         "vb6_VarLogicNullV",
         "vb6_LoadResString",

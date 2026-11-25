@@ -538,7 +538,35 @@ void vb6_Dbl_AssignFromVariant(double* target, vb6_VARIANT src) {
                      vb6_BSTR_FromStr(L"Invalid use of Null"));
         return;   /* 目标一字不动 */
     }
+    // C30-11 第九十七刀 (§11.75): 文本档 —— 真机 E9 `d = v (abc)` ⇒ 13 + 目标不动；
+    // 改前这里落到宽松的 vb6_VariantToDouble（"abc" ⇒ 0.0、不报错），目标被写成 0。
+    // 与上面 vb6_Dbl_AssignFromBSTR 是同一口径（严格折数、非数字 ⇒ 13），直接复用它。
+    if (src.vt == (vb6_vartype)vb6_vtBSTR) {
+        vb6_Dbl_AssignFromBSTR(target, src.bstrVal);
+        return;
+    }
     *target = vb6_VariantToDouble(src);
+}
+
+// C30-11 第九十七刀 (§11.75): 「Double 目标 + Int/Fix/Abs(<整只 Variant 槽>)」的严格入参。
+// 真机 (.temp/k93/vb6probe) E1 Int(v=Null)/E2 Abs(v=Null)/E3 Fix(v=Null) 落 Double ⇒
+// 都是 [-1] err=94（目标不动）；E9 `d = v (abc)` ⇒ [-1] err=13。改前本仓 E1–E3 是
+// 0/err0：发码 `vb6_Int(vb6_VariantToDouble(v))`，而 VariantToDouble **必须**保持宽松
+// (Val 那一族靠它，见 check_conv_strict_parse.ps1 的 val-still-lenient) ⇒ 在这里加一枚
+// 严格入口，发码站套在 vb6_Int/Fix/Abs 的实参位上：`vb6_Int(vb6_DblStrict(v))`。
+// 它只负责 raise；「目标不动」由赋值站的守卫/临时量兜（序号变了就不写）。
+double vb6_DblStrict(vb6_VARIANT v) {
+    if (v.vt == (vb6_vartype)vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        return 0.0;
+    }
+    if (v.vt == (vb6_vartype)vb6_vtBSTR) {
+        double out = 0.0;
+        vb6_Dbl_AssignFromBSTR(&out, v.bstrVal);   // 非数字 ⇒ 13，out 不动
+        return out;
+    }
+    return vb6_VariantToDouble(v);
 }
 
 // M22: typed CStr overloads (C has no overloading, use suffix)
@@ -916,6 +944,35 @@ int32_t vb6_TypeOf(void* obj, const wchar_t* typeName) {
     /* 其余类型名 (VB 控件类 / C3 类模块 / StdFont …) 仍答 False: 没有安全的正向判据,
      * 宁可维持旧行为也不猜 —— 猜错就是把「不是」说成「是」, 比漏判更难查。 */
     return 0;
+}
+
+/* 账 #305 §11.103: 项目类实例跨 void* 槽之后的 `TypeOf x Is <项目类>`。
+ * 改前这一格落到上面那个恒假桩: 实测 `Set o = <TofC 实例>` (Object 槽) /
+ * `v = <实例>` (Variant 槽) / ByVal Object 形参 三形都答 False (VB6 答 True),
+ * 而同一枚对象的 TypeName 已经答对了类名 —— 判据不是缺, 是没人问。
+ * 两位主人 (都已在, 不新开表):
+ *   ① 包装器: vb6_ComObject_ClassNameA 自带三闸 (IsBoxed), 非包装器交 NULL;
+ *   ② 裸实例指针落进 void* 槽: vb6_FindProjectClassDesc 的 512 格反查表。
+ * 只答**正面命中**: 表外 / 外部 IDispatch / 控件 HWND 一律 0, 与改前同向
+ * (假阴性不会把原本对的翻成错的)。派生类按基类名问仍答 False —— 与 Fix 193 那条
+ * 静态档同一个残留边界, 要真链条就得给每个类加运行时类型字段, 不在这一刀。 */
+int32_t vb6_TypeOfProject(void* obj, const wchar_t* typeName) {
+    /* 身份只问一位主人: 包装器自报类名 / 裸实例反查表 (两档同在 comserver_obj 里)。
+     * 本文件不引 comserver 头 (那是服务端模块的地盘), 照本文件既有写法 extern 这一句。 */
+    extern const char* vb6_ComObject_ClassNameOfAny(void* v);
+    const char* nm;
+    size_t i;
+    if (!obj || !typeName) return 0;   /* Nothing 不匹配任何类型 */
+    nm = vb6_ComObject_ClassNameOfAny(obj);
+    if (!nm) return 0;                 /* 表外 / 外部 IDispatch / 控件 HWND ⇒ 与改前同向 */
+    for (i = 0; nm[i] && typeName[i]; ++i) {
+        wchar_t a = (wchar_t)(unsigned char)nm[i];
+        wchar_t b = typeName[i];
+        if (a >= L'a' && a <= L'z') a = (wchar_t)(a - 32);
+        if (b >= L'a' && b <= L'z') b = (wchar_t)(b - 32);
+        if (a != b) return 0;
+    }
+    return (nm[i] == 0 && typeName[i] == L'\0') ? -1 : 0;   /* VB6 True = -1 */
 }
 
 void* vb6_DictAccess(void* obj, const wchar_t* key) {

@@ -7,6 +7,18 @@
 
 namespace vb6c3 {
 
+// 账 #305 §11.133: 字段声明的类型名就是 `Object` 那把字面量? (`As <工程接口>` 也落在
+// `void*`那一形里, 但它们不是本刀的靶 —— 接口视图那一枚从来没 AddRef 过, 出厂 Release
+// 就是越权, k175 的 `m_lv` 正是那一格, 也正是不动它的理由。)
+static bool isObjectTypeName(const std::string& n) {
+    static const char k[] = "object";
+    if (n.size() != 6) return false;
+    for (size_t i = 0; i < 6; ++i) {
+        if (std::tolower((unsigned char)n[i]) != k[i]) return false;
+    }
+    return true;
+}
+
 // target 文本可能自带 `/* ... */` 类字段注记 (如 cNode->Parent 后面那一段尾部注记);
 // 把它整段嵌进本文件的块注释 ⇒ C 注释不可嵌套, 内层 `*/` 提前闭合外层, 后续代码裸露成
 // 语法错误 (ucTreeView Node.c:460 / Form4.c:384/395/404 实证)。注释文本里只保留纯表达式。
@@ -320,8 +332,28 @@ void CCodeGen::emitClassFactory(Module& module) {
                     c_.emitLine("if (me->" + cIdent(var.name) + ") " + fieldStruct +
                                 "_Release(me->" + cIdent(var.name) +
                                 ");  /* 账 #305 (甲) 腿⑤: 字段那一枚引用出厂放手 */");
-                }
-            }
+                } else if (var.asType->kind == ASTNodeKind::SimpleTypeRef &&
+                           isObjectTypeName(static_cast<SimpleTypeRef*>(var.asType.get())->name)) {
+                    // 账 #305 §11.133 (第一百五十二刀): `As Object` 字段。腿②(覆写)与腿③(置空)
+                    // 从第一刀起就是 `vb6_ReleaseObject(&字段)` (见下面 Set 访问体那一格), 只有
+                    // 出厂这一站缺着 —— 字段里那一枚没人退, 被它持有的实例永不走
+                    // `Class_Terminate` (漏, 不是崩)。
+                    // 闸只那一把字面量 `Object`: `As <工程接口>` / `As Collection` 也落在同一个
+                    // C 形 `void*` 里, 但它们不是本刀的靶 —— 接口视图那一枚从来没 AddRef 过,
+                    // 出厂 Release 就是越权 (k175 的 `m_lv` 正是那一格)。裸实例那一路由
+                    // `vb6_ReleaseObject` 自己的 Fix 191 判据拦下 (非可分派只清指针)。
+                    c_.emitLine("vb6_ReleaseObject((void**)&me->" + cIdent(var.name) +
+                                ");  /* 账 #305 §11.133: As Object 字段出厂放手 */");
+                } else if (varType == Vb6Type::Variant) {
+                    // 账 #305 §11.134 (第一百五十三刀): `Private mV As Variant` 那一档。
+                    // 槽里那一枚 (VT_DISPATCH 的实例引用 / BSTR / 数组) 归槽自己握 (写口
+                    // 走 `vb6_VariantAssign` = Clear + 深拷贝, 已在同一条路上取过引用),
+                    // 出厂这一站以前整支不出现 ⇒ 槽里那一枚没人退 (漏), 且持有者拆掉之后
+                    // 槽的内存随 `vb6_Free(me)` 一起消失, 那一枚就彻底丢了。
+                    // `vb6_VariantClear` 就是与写口成对的那一半: 对空槽是空转。
+                    c_.emitLine("vb6_VariantClear(&me->" + cIdent(var.name) +
+                                ");  /* 账 #305 §11.134: Variant 字段出厂清槽 */");
+                }            }
         }
     }
 
@@ -824,7 +856,8 @@ void CCodeGen::emitClassFieldAccessors(Module& module) {
             // 装箱腿那份名单同一把尺子) —— 这里发的正是
             // vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc(...))，类不在表里
             // 就会装箱出 NULL 包装器 (= Nothing)。
-            const bool nIsCoclass = nSym && nSym->isCoClassTableEntry();
+            const bool nIsCoclass = nSym && nSym->isLateBindClass()
+                && !knownControlModuleNames_.count(Symbol::toLower(nSym->name));
             if (nIsCoclass) {
                 const std::string tId = cIdent(nSym->name);
                 fe.getLines.push_back("if (!me->" + fld + ") me->" + fld + " = (void*)vb6_cls_"

@@ -453,6 +453,19 @@ struct Symbol {
                 || instancing == VBInstancing::SingleUse);
     }
 
+    // 账 #305 §B217 (第一百一十八刀): 「这枚类能不能被**装箱成 IDispatch**」——
+    // 与 isCoClassTableEntry（能不能对外 CoCreate）是**两条**判据，不能共用。
+    // VB6 里私有工程类（缺省 Instancing）同样是 COM 对象：`As Object` 形参收得下、
+    // 晚绑定读得动成员，只是不对外注册。实现上描述表多一行（progId/clsid 交空
+    // ⇒ 注册循环与 ClassFactory 跳过），但装箱腿（boxIntoLateSlot）必须先问这里，
+    // 否则 B190 那一族（`ShadowParam(a)` / `Set mOA = a`）把裸 `vb6_cls_*` 交给
+    // void* 槽，vb6_ComIsDispatchable 判否 ⇒ kind=notdispatchable 的全链静默 miss。
+    // 现状读数：tests 下 423 份 .cls 里 405 带 MultiUse/SingleUse、18 份缺省
+    // （b168..b190 那族），真语料按 §B187 的普查全部带 Instancing。
+    bool isLateBindClass() const {
+        return kind == SymbolKind::Class && !isInterface;
+    }
+
     // 存储键: Property Get/Let/Set加后缀区分同名共存, Event也加后缀, 其他用lowerName
     std::string storageKey() const {
         if (isPropertyKind(kind)) {

@@ -1,0 +1,7 @@
+Type=Exe
+Name="B146App"
+Module=B146Main; B146Main.bas
+Class=B146Box; B146Box.cls
+Class=B146Item; B146Item.cls
+Startup="Sub Main"
+ExeName32="B146.exe"

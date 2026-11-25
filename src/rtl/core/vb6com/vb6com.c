@@ -268,6 +268,13 @@ static int32_t vb6_HresultToErrNum(long hr) {
     case 0x8002000EUL: return 450;  // DISP_E_BADPARAMCOUNT  → 参数个数错误
     case 0x8002000FUL: return 449;  // DISP_E_PARAMNOTOPTIONAL → 参数不是可选的
     case 0x8002000BUL: return 451;  // DISP_E_BADINDEX       → 对象不是集合
+    /* 账 #305 §11.142 (第一百六十刀): 入站实参收窄换算越界。
+     * 撞见的形态 (`.temp/k161/p1`): `Property Let I(ByVal x As Integer)`，`o.I = 40000`。
+     * 真 VB6 报 **错误 6 Overflow** 且目标不变；之前那一格根本走不到这里
+     * （Boolean/Integer/Byte 都借 VT_I4 就地透传，40000 被静默存成 -25536），
+     * 本刀把 Integer/Byte 的入站归一化改回 VT_I2/VT_UI1，于是 oleaut32 答
+     * DISP_E_OVERFLOW —— 这里把它折成 VB 6（而不是交给 default 原样交负 hr）。 */
+    case 0x8002000AUL: return 6;    // DISP_E_OVERFLOW      → 溢出
     /* C30-11 后记（遗留问题①的第二个不一致）: E_INVALIDARG(0x80070057) 的低 16 位是 87，
      * 旧口径直接截低字 → 报出 87「参数错误」。真 VB 引擎读数（VBScript 晚绑定 scrrun）:
      *   files.Item(1) -> Err.Number = 5「无效的过程调用或参数」
@@ -1469,6 +1476,20 @@ int32_t vb6_IsNothing(void* obj) {
 void vb6_ReleaseObject(void** objPtr) {
     if (!objPtr || !*objPtr) return;
 
+    /* 账 #305 §11.111 (第一百二十九刀): 内建 Collection 的载体先问一句。
+     * 它不是可分派对象 (首字段是 tag), 下面那条 IsDispatchable 一概空跑 ——
+     * 于是 Set Nothing / 重新赋值从来没拆过载体。载体自己的计数由
+     * vb6_Collection_AddRef/Release 一对维护, 到 0 时元素逐枚出厂。 */
+    {
+        extern int32_t vb6_uc_isColl(const void* p);
+        extern int32_t vb6_Collection_Release(void* p);
+        if (vb6_uc_isColl(*objPtr)) {
+            vb6_Collection_Release(*objPtr);
+            *objPtr = NULL;
+            return;
+        }
+    }
+
     /* Fix 191: 只有真是 COM 对象才谈得上 Release。VB6 里 `Set .OriginalIOleIPAO = Me`
      * 存的是接口的 COM 身份, 而生成码把类实例 `me` 直接塞进了接口字段, 于是
      * `Set ... = Nothing` 走到这里就是对 `me` 解引用 lpVtbl (VBFlexGridDemo 左键
@@ -1501,6 +1522,12 @@ void vb6_ReleaseObject(void** objPtr) {
  * 前向声明在 vb6rtl_variant.h (避免头文件反向依赖 vb6com.h)。 */
 void vb6_ComAddRefDispatch(void* p) {
     if (!p) return;
+    /* 与 vb6_ReleaseObject 那条 Collection 分支成对 (同一个判据, 同一枚出口)。 */
+    {
+        extern int32_t vb6_uc_isColl(const void* p2);
+        extern void vb6_Collection_AddRef(void* p2);
+        if (vb6_uc_isColl(p)) { vb6_Collection_AddRef(p); return; }
+    }
     if (!vb6_ComIsDispatchable(p)) return;
     IUnknown* pUnk = (IUnknown*)p;
     pUnk->lpVtbl->AddRef(pUnk);

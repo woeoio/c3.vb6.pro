@@ -575,7 +575,18 @@
                             return false;
                         };
                         if (!exprTopIsBstr(argVal)) {
-                            argVal = "vb6_VariantToString(" + argVal + ")";
+                            // C30-11 第九十一刀: LenB 没有走上面那个 `paramBase == String` 的改道口
+                            // （它在**运行时 C 签名表**里的那一格写的是 BSTR 宏的第一臂，而不是
+                            // 内置函数的形参档），于是整只 VARIANT 槽到这一站才被折。同一句问一遍：
+                            // 这枚调用的实参是整只槽、且它有无出变体口 ⇒ 改名 + 原样交槽。
+                            // 不改名的话 `n = LenB(v)`（v=Null）发成 vb6_LenB(VariantToString(v))
+                            // = 静默 0 / Err 0，真机与 Len 同一条 = 94 且目标不动。
+                            const std::string vexit91 = nullFamilyVExitCName(node);
+                            if (!vexit91.empty()) {
+                                callee = vexit91;
+                            } else {
+                                argVal = "vb6_VariantToString(" + argVal + ")";
+                            }
                         }
                     } else if (rtParamType == "void*") {
                         // 账 (Outlook2013): `Unload <外部窗体名>` 的实参站在 call_arg_emit
@@ -741,6 +752,64 @@
                解引用空指针 (实测 av read 0)。交 &(void*){0} 时 (*Ctrl) == NULL ⇒
                ObjPtr 答 0 ⇒ Invoke 的 `If pInterface <> 0&` 整段跳过。 */
             argVal = isByRef ? "&(void*){0}" : "(void*)0";
+        }
+        // 第一百零二刀 (§11.80): 首枚命中之前的实参（含命中那枚）逐枚提升成临时量，
+        // 每枚求值前比一次序号 —— 真机 I1（gN=0）/ I2（gN=1）量的就是这个顺序。
+        // 地址实参 (&x) 求值无副作用也不会报错，直接留在调用里。
+        if (!stmtCallArgSerial_.empty() && (int)i <= stmtCallArgFirstLate_
+            && argNestDepth_ == 1
+            && !(argVal.size() > 1 && argVal[0] == '&')) {
+            std::string gtyp102 = "int32_t";
+            if (i < calleeParams.size()) {
+                gtyp102 = mapType(calleeParams[i].type);
+            } else if (i < node.positional.size() && node.positional[i]) {
+                gtyp102 = mapType(inferExprType(*node.positional[i]));
+            }
+            // 落不到标量/串/对象类型的（Variant / UDT）不提升，留着当登记缺口。
+            if (gtyp102 != "vb6_VARIANT") {
+                if (!stmtCallArgEmitted_) {
+                    c_.emitLine("const int32_t " + stmtCallArgSerial_ + " = vb6_ErrSerial();");
+                    stmtCallArgEmitted_ = true;
+                }
+                std::string gtmp102 = "_ag" + std::to_string(tempCounter_++);
+                c_.emitLine(gtyp102 + " " + gtmp102 + " = 0;");
+                c_.emitLine("if (" + stmtCallArgSerial_ + " == vb6_ErrSerial()) { "
+                            + gtmp102 + " = " + argVal + "; }");
+                argVal = gtmp102;
+            } else if (i < node.positional.size() && node.positional[i]
+                       && mapType(inferExprType(*node.positional[i])) == "vb6_VARIANT") {
+                // 判据用**实参自身**的 C 类型，不是形参声明的类型：内建调用的形参表会答
+                // Variant（如 `ObjPtr(CurrControl)` 那一槽），而实参本身是 `void*` /
+                // `vb6_cls_X*` —— 拿它初始化 vb6_VARIANT 就是 C2440，被调方要的也不是
+                // Variant（实测 FlexGridX86: VisualStyles.c(162)/(195)/(197) C2440 +
+                // 随之 C2172）。非 Variant 的实参照旧不提升。
+                // 第一百零五刀 (§11.83): 聚合体（Variant）槽。真机 K 族量到与 Long 槽同一条
+                // 规则（K1 gHit=0 / K2 gN=1 gHit=0 / K5 gHit=0）：「命中即整句中止」。
+                // 聚合体不能 `= 0` 起手，但**可以声明**：vb6_VariantEmpty() 起手，
+                // 深拷贝 vb6_VariantCopy 拿自己那一份所有权，调用结束后 vb6_VariantClear 归还。
+                // ByRef 那一形交的是 `(&(vb6_VARIANT){...})` 临时量，提升后改交 `&_agN`。
+                if (!stmtCallArgEmitted_) {
+                    c_.emitLine("const int32_t " + stmtCallArgSerial_ + " = vb6_ErrSerial();");
+                    stmtCallArgEmitted_ = true;
+                }
+                std::string gtmp102 = "_ag" + std::to_string(tempCounter_++);
+                c_.emitLine("vb6_VARIANT " + gtmp102 + " = vb6_VariantEmpty();");
+                if (isByRef) {
+                    // ByRef 那一形交的本来就是 `(&(vb6_VARIANT){...})` 临时量（指针）。
+                    c_.emitLine("if (" + stmtCallArgSerial_ + " == vb6_ErrSerial()) { vb6_VariantCopy(&"
+                                + gtmp102 + ", " + argVal + "); }");
+                } else {
+                    // ByVal 那一形的 argVal **本身就是 vb6_VARIANT 值**，不能当复合字面量的首成员
+                    // 初始化器（那是 vt/uint16_t）。先接进一枚局部量再深拷贝；这枚局部量同时
+                    // 把「求值发生在守卫内」钉住（真机 K2 gN=1 / K3 gN=0）。
+                    const std::string stmp102 = "_as" + std::to_string(tempCounter_++);
+                    c_.emitLine("if (" + stmtCallArgSerial_ + " == vb6_ErrSerial()) { vb6_VARIANT "
+                                + stmp102 + " = " + argVal + "; vb6_VariantCopy(&" + gtmp102
+                                + ", &" + stmp102 + "); }");
+                }
+                stmtCallArgVarTemps_.push_back(gtmp102);
+                argVal = isByRef ? ("&" + gtmp102) : gtmp102;
+            }
         }
         args.push_back(std::move(argVal));
     }

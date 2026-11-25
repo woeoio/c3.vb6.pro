@@ -602,7 +602,11 @@ jobs:
               if (-not $m.Success) { $m = $rx2.Match($_) }
               if (-not $m.Success) { return }
               $tail = $m.Groups[3].Value.Trim()
-              if ($tail -match "^(PASS|SKIP)") { return }
+              # GUI 用例的前缀是用 -NoNewline 写的, 真正先落地的是像素夹具那一行
+              # (`pixels: PASS tc_px chart=401x257 ...`), 最后才是 `PASS (window=...)`。
+              # 旧判据只认「尾巴以 PASS/SKIP 开头」, 于是**过的** GUI 用例被写成 ::error::
+              # (2026-11-25 那一轮四条假红就是它们)。像素结论同样是判定, 一并认。
+              if ($tail -match "^(pixels:\s*)?(PASS|SKIP)\b") { return }
               if ($tail -eq "") { $tail = "(no verdict token)" }
               "[" + $m.Groups[1].Value.Trim() + "] " + $m.Groups[2].Value.Trim() + " ... " + $tail
             })

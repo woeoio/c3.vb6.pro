@@ -181,6 +181,17 @@ static ULONG STDMETHODCALLTYPE ComObj_Release(vb6_ComObject* self) {
                     vb6_err_resume_next = 0;
                     if (self->desc && self->desc->instanceClaimRelease && self->vb6Instance) {
                         self->desc->instanceClaimRelease(self->vb6Instance);
+                    } else if (self->desc && self->desc->classRelease && self->vb6Instance) {
+                        /* 账 #305 §11.126 (第一百四十五刀): 拥有型包装器拆解也要问**实例自己的**引用计数。
+                         * 改前这一档直接 `destroyFunc(instance)` —— 对 `New` 出来的那一枚没错, 但
+                         * Property Get 交回**共用实例**时 (实测 `Property Get SameObj() As B144Item:
+                         * Set SameObj = gKeep`) 也照拆: gKeep 那一枚引用还在 (实例的引用计数是 2),
+                         * 包装器这一枚走完就 Class_Terminate ⇒ 调用方手里留一根悬空指针。
+                         * 口径与下面借用型那一档一字相同 (先摘 `__comObj` 回填再退), 差别只在于
+                         * 拥有型带走的是 New/FromInstance 移交的那枚“底座引用”。 */
+                        void* inst145 = self->vb6Instance;
+                        *(void**)inst145 = NULL;
+                        self->desc->classRelease(inst145);
                     } else if (self->desc && self->desc->destroyFunc && self->vb6Instance) {
                         self->desc->destroyFunc(self->vb6Instance);
                     }
@@ -194,7 +205,13 @@ static ULONG STDMETHODCALLTYPE ComObj_Release(vb6_ComObject* self) {
                 fflush(stderr);
             }
         } else if (self->vb6Instance) {
-            *(void**)self->vb6Instance = NULL;
+            /* 账 #305 §11.105 (第一百二十三刀): 借用型包装器拆解 = 清回填 + **退掉自己那一枚类引用**。
+             * 顺序是硬口径: 先摘 `__comObj` 再退 —— 生成类的 Release 拿着 `__comObj != NULL`
+             * 当作「wrapper owns teardown」的信号, 不先摘就会把最后一次退场又挡回去。
+             * 这一退可能是实例的最后一枚 (typed 变量已经走了), 于是当场 Class_Terminate。 */
+            void* inst = self->vb6Instance;
+            *(void**)inst = NULL;
+            if (self->desc && self->desc->classRelease) self->desc->classRelease(inst);
         }
         self->vb6Instance = NULL;
         // Release PCI
@@ -275,18 +292,33 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
     
     // Find method matching dispid AND invkind (same dispid may have Get/Let variants)
     const vb6_DispMethodDesc* method = NULL;
+    const vb6_DispMethodDesc* putFallback = NULL;
+    /* 账 #305 §11.128 (第一百四十七刀): put 两个方向各认自己的档。
+     * 改前这里只有一条 `(ik == 4 || ik == 8) && (wFlags & DISPATCH_PROPERTYPUT)`:
+     * 客户端递 DISPATCH_PROPERTYPUTREF(8) 时 `wFlags & 4` 为假 ⇒ 按档一位都对不上 ⇒ 落到
+     * 下面那个「同 dispid 第一条」的兜底, 而那一条是同名 Property Get (Get/Let/Set 共 dispid,
+     * 且描述符按声明序把 Get 排在前面) ⇒ 服务端拿一个读臂吃掉这发写, 返回 S_OK、参数整个丢掉。
+     * 实测 (.temp/k147/probe, C3_OCX_TRACE): `Set o.Held = it` 打出
+     *   `INVOKE mem=Held argc=1` + `SetRef 'Held' hr=0x00000000` ⇒ 什么都没存, 对象当场收回 0。
+     * 口径: put 方向先按**自己的**档认 (PUTREF→ik8 / PUT→ik4), 再退到另一档 put (VB6 的
+     * `Set x.Prop = o` 遇到只有 Property Let 的类时是运行期错误, 但真 OCX 有把两档混发的),
+     * 最后才走下面那条兜底; 兜底不再让 put 落到读臂。 */
     for (int i = 0; i < self->desc->methodCount; i++) {
-        if (self->desc->methods[i].dispid == dispIdMember) {
-            int ik = self->desc->methods[i].invkind;
-            int ok = 0;
-            if (ik == 1 && (wFlags & DISPATCH_METHOD)) ok = 1;
-            else if (ik == 2 && (wFlags & DISPATCH_PROPERTYGET)) ok = 1;
-            else if ((ik == 4 || ik == 8) && (wFlags & DISPATCH_PROPERTYPUT)) ok = 1;
-            if (ok) { method = &self->desc->methods[i]; break; }
+        if (self->desc->methods[i].dispid != dispIdMember) continue;
+        int ik = self->desc->methods[i].invkind;
+        if (ik == 1 && (wFlags & DISPATCH_METHOD)) { method = &self->desc->methods[i]; break; }
+        if (ik == 2 && (wFlags & DISPATCH_PROPERTYGET)) { method = &self->desc->methods[i]; break; }
+        if (wFlags & DISPATCH_PROPERTYPUTREF) {
+            if (ik == 8) { method = &self->desc->methods[i]; break; }
+            if (ik == 4 && !putFallback) putFallback = &self->desc->methods[i];
+        } else if (wFlags & DISPATCH_PROPERTYPUT) {
+            if (ik == 4) { method = &self->desc->methods[i]; break; }
+            if (ik == 8 && !putFallback) putFallback = &self->desc->methods[i];
         }
     }
-    // Fallback: if no invkind match, try first dispid match
-    if (!method) {
+    if (!method && putFallback) method = putFallback;
+    // Fallback: if no invkind match, try first dispid match (put 方向不再借用读臂)
+    if (!method && !(wFlags & (DISPATCH_PROPERTYPUT | DISPATCH_PROPERTYPUTREF))) {
         for (int i = 0; i < self->desc->methodCount; i++) {
             if (self->desc->methods[i].dispid == dispIdMember) {
                 method = &self->desc->methods[i];
@@ -311,6 +343,7 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
     void* coercedArgs = NULL;   /* 槽阵列, 每槽 vb6_VarSlot */
     VARIANT* scratch = NULL;    /* 账 #305 §B219: 换算产物住这里, 服务端在收尾那一臂回收 */
     int argErrSlot = -1;        /* 账 #305 §B219: 换算不动的那一枚(声明序下标), -1 = 没有 */
+    HRESULT argErrHr = DISP_E_TYPEMISMATCH;   /* §11.142: 那一枚换不动的原因 (越界 ⇒ DISP_E_OVERFLOW) */
 
     if (argc > 0) {
         args = (void**)CoTaskMemAlloc(argc * sizeof(void*));
@@ -356,6 +389,10 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
                 VARIANT* src = &pDispParams->rgvarg[argc - 1 - i];
                 vb6_VarSlot* slot = &((vb6_VarSlot*)coercedArgs)[i];
                 if (FAILED(vb6_ComArgNormalize(src, method->paramVts[i], slot, &scratch[i]))) {
+                    /* 账 #305 §11.142 (第一百六十刀): 失败那一问不再一律报 DISP_E_TYPEMISMATCH ——
+                     * 换不动的**原因**归换算函数答：收窄越界是 DISP_E_OVERFLOW（真 VB6 报 6 Overflow，
+                     * `.temp/k161/p1` 实测 `o.I = 40000`），其余仍是 TYPEMISMATCH（13）。 */
+                    argErrHr = vb6_ComArgNormLastHr();
                     argErrSlot = i;
                     break;
                 }
@@ -395,6 +432,12 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
             /* 账 #305 §B144: 同上 —— 出站也改问唯一出口(Decimal 那一档不再错位的
              * 同时，返回的串/对象现在带权交出去，对端 VariantClear 不会释放我们的引用)。 */
             vb6_VariantPackCopyInto(&tmpRet, pVarResult);
+        /* 账 #305 §11.126 (第一百四十五刀): 上面那一句是**带权副本** (串深拷贝、对象 AddRef),
+         * 副本归对端了，tmpRet 自己那一枚必须在本趟收尾时退掉 —— 否则每一发类成员读数都在
+         * 服务端漏一枚 (实测 C3_COM_RC_TRACE: 一次 `o.Fresh` 读数交出 cnt=3, 调用方只该拿 1)。
+         * 放在这里而不放到函数尾: tmpRet 只活在上面那个 `if` 的作用域里；错误那一支
+         * (longjmp 回来) tmpRet 保持 memset 后的空值, 清它是空跑。 */
+        vb6_VariantClear((vb6_VARIANT*)&tmpRet);
     }
 
     /* 账 #305 §B162 (第五十刀): 数组那一臂是个例外 —— 递进来的真 SAFEARRAY 被换成了**我们自己**
@@ -428,7 +471,7 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
     /* 账 #305 §B219: 换算不动那一枚 —— pArgErr 交的是 **rgvarg 的下标**(逆序那一头), 不是声明序。 */
     if (argErrSlot >= 0) {
         if (puArgErr) *puArgErr = (UINT)(argc - 1 - argErrSlot);
-        return DISP_E_TYPEMISMATCH;
+        return argErrHr;
     }
     /* 账 #305 §B185: 收尾(上面那批回收)之后才交回错误 —— 顺序是硬要求。 */
     if (srvErrNum != 0)
@@ -590,6 +633,7 @@ vb6_ComObject* vb6_ComObject_FromBorrowedInstance(const vb6_CoClassDesc* desc, v
     existing = (vb6_ComObject*)*ppComObj;
     if (existing) {
         existing->vtable->AddRef(existing);
+        P189("[189] FROM-BORROW-REUSE W=%p inst=%p\n", (void*)existing, (void*)instance);
         return existing;
     }
 
@@ -601,6 +645,13 @@ vb6_ComObject* vb6_ComObject_FromBorrowedInstance(const vb6_CoClassDesc* desc, v
     obj->desc = desc;
     obj->vb6Instance = instance;
     obj->ownsInstance = 0;
+    /* 账 #305 §11.105 (第一百二十三刀): 借用型包装器取一枚**类引用**。
+     * 不取的话它就是一张没人在账上的视图: 实例被 typed 变量退到 0 时, `vb6_cls_X_Release`
+     * 见 `__comObj != NULL` 就按「wrapper owns teardown」返回 ⇒ 谁也不拆 (实测 FProbe6:
+     * 装箱后 `D2 term=0`, seed=51 永不 Terminate)。取了这一枚, 类引用计数里就有它的位置,
+     * 拆解那一头 (ComObj_Release 的 owns=0 分支) 再退掉 —— 两头成对。
+     * NULL (旧 desc / 未生成的类) = 不取, 行为与改前一致。 */
+    if (desc->classAddRef) desc->classAddRef(instance);
     P189("[189] FROM-BORROW W=%p inst=%p cls=%s\n", (void*)obj, (void*)instance,
          desc->classVariable ? desc->classVariable : "?");
     obj->cpc = NULL;
@@ -828,6 +879,20 @@ const char* vb6_ComObject_ClassNameA(void* v) {
     obj = (const vb6_ComObject*)v;
     s = obj->desc ? obj->desc->classVariable : NULL;
     return (s && s[0]) ? s : NULL;
+}
+
+/* 账 #305 §11.103: `TypeOf x Is <项目类>` 的身份问句 (一号口径)。
+ * ① 包装器 (Object/Variant 槽里的那一位) → 问上面那位兄弟;
+ * ② 裸实例指针落进 void* 槽 (工程内过程交回来的那一枚) → 问 512 格反查表。
+ * 反查表只按指针比对, 不解引用 ⇒ 对任意 void* 安全; 表外答 NULL。 */
+const char* vb6_ComObject_ClassNameOfAny(void* v) {
+    const char* s;
+    const vb6_CoClassDesc* d;
+    if (!v) return NULL;
+    s = vb6_ComObject_ClassNameA(v);
+    if (s) return s;
+    d = vb6_FindProjectClassDesc(v);
+    return (d && d->classVariable && d->classVariable[0]) ? d->classVariable : NULL;
 }
 
 // ============================================================

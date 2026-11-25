@@ -40,13 +40,14 @@
     if (!st->moduleScope()) continue;
     for (auto& [key, sym] : st->moduleScope()->symbols()) {
         if (sym->kind == SymbolKind::Class) {
-            // 账 #305 §B187 第二腿: 「哪些档的类在表里占一行」这条判据搬进了
-            // Symbol::isCoClassTableEntry() —— 发码侧的装箱腿 (cgen_setlet_set_rhs.inc)
-            // 要先问"这类有没有 desc"，两边必须是同一把尺子，否则表里有而发码以为没有
-            // (或反之) 就又是一条静默漏档 (rev17 的 play78 缺 View/PopupMenu 那一族)。
-            // 原 BUG-4 口径: PublicNotCreatable(2) 可见但对外不可创建, 只有 MultiUse(5)/
-            // SingleUse(3) 应该有 ClassFactory 项; 接口宿主块没有实例。
-            if (sym->isCoClassTableEntry()) {
+            // 账 #305 §B187 第二腿 / §B217: 判据搬进了 Symbol::isLateBindClass() ——
+            // 「装箱腿能不能找到 desc」与「占不占可创建登记行」是两条（见符号表那头）。
+            if (sym->isLateBindClass()) {
+                /* §B217: UserControl (.ctl) 必须留在闸门外 —— 它在 C 侧的值是
+                   **HWND**（vb6_hwnd_<名>），不是 vb6_cls_*；给它发一行 desc 会让
+                   com_entry.c 去引 .ctl 里不存在的符号（ucSlider_2022 实测 LNK2019:
+                   vb6_LabelPlus_tmrMOUSEOVER_Timer）—— 与装箱腿那道守卫同一条理由。 */
+                if (knownControlModuleNames_.count(Symbol::toLower(sym->name))) continue;
                 std::string lowerName = Symbol::toLower(sym->name);
                 if (seenCoClassNames.count(lowerName)) continue;  // 已处理, 跳过
                 seenCoClassNames.insert(lowerName);
@@ -78,6 +79,9 @@
                 info.moduleName = sym->name;
                 info.clsidStr = authCls.comClsidStr.empty() ? generateClsid(progId + "." + sym->name) : authCls.comClsidStr;  // P6.8: 优先使用VBP指定的CLSID
                 info.progId = progId + "." + sym->name;
+                /* §B217: 能否对外 CoCreate 只定注册行；不能的也要一行 desc（装箱用），
+                   行里 progId/clsid 发空 — 登记循环与 ClassFactory 见空即跳。 */
+                info.registerable = sym->isCoClassTableEntry();
 
                 // ai/022 B13b: 身份从唯一出口 coclassIds_ 取（026 三节"不可让步" + D47"不许
                 // 第二条通道"；D56-3 实测：登记表在后端一个消费者都没有，产品注册的从来不是
@@ -278,6 +282,10 @@
         std::string clsStruct = "vb6_cls_" + clsId;
         entry.emitLine("extern struct " + clsStruct + "* vb6_cls_" + clsId + "_New(void);");
         entry.emitLine("extern void vb6_cls_" + clsId + "_Destroy(struct " + clsStruct + "*);");
+        // 账 #305 §11.105 (第一百二十三刀): 借用型包装器的类引用归属要这两枚符号
+        // (desc 表里 classAddRef / classRelease 两格指着它们)。
+        entry.emitLine("extern unsigned long vb6_cls_" + clsId + "_AddRef(void* instance);");
+        entry.emitLine("extern unsigned long vb6_cls_" + clsId + "_Release(void* instance);");
         // ai/022 B16: 新式接口那一面（薄指针出入口）由类模块自己的 TU 提供，见
         // cgen_iface_vtbl.cpp 的 emitIfaceImplTables 末尾. 只在真的发了这两个符号的
         // 类上声明（判据同上），否则整行都不出现 —— 无新式接口的工程逐字节不变.
@@ -402,21 +410,37 @@
                     // "Variant 槽"整份 VARIANT 结构透传, 而定义侧形参是 vb6_cls_X* ⇒
                     // C2440 (实测 com_entry.c 的 vb6_DemoHolder_Wire)。这里剥出实例指针
                     // 再交出去, 与**调用点**那条直传路径同一个口径。
+                    //
+                    // 账 #305 §11.135 (第一百五十四刀): 剥壳那一问的**另一个口径**。
+                    // 上面这两个站点过去一律问 vb6_ComObject_GetInstance —— 它只认我们自己的
+                    // 包装器 (其余答 NULL)。而**同一工程里**的调用点递进来的是一枚裸实例
+                    // (`vb6_ComSetRef(o, L"Item", it)`, it 是 vb6_cls_X*), 不是包装器 ⇒ 剥壳
+                    // 答 NULL ⇒ 服务端形参收到 Nothing, 属性写**静默丢掉整枚对象**:
+                    // 实测 .temp/k154/p1 (Set o.Item = it 之后 box.Held 读回 -1 = Nothing)。
+                    // 口径归 vb6_ComObject_UnboxVb6Instance: 包装器还原成裸实例, **非包装器
+                    // 原样交回** (与 cgen_com.cpp 那些调用点、For Each 项目类那一路同一个函数)。
                     const std::string cpCls = cParamClassPtrType(prm);
                     if (!cpCls.empty() && cpCls.compare(0, 8, "vb6_cls_") == 0) {
-                        provided = "(" + cpCls + ")vb6_ComObject_GetInstance("
+                        provided = "(" + cpCls + ")vb6_ComObject_UnboxVb6Instance("
                                    "((VARIANT*)args[" + idx + "])->pdispVal)";
                         missing = "NULL";
-                    } else if (pType == Vb6Type::Long || pType == Vb6Type::Integer ||
-                        pType == Vb6Type::Byte) {
+                    } else if (pType == Vb6Type::Integer) {
+                        // 账 #305 §11.142 (第一百六十刀): 槽是 **VT_I2**，读 `iVal`。
+                        // 仍读 `lVal` 会把 short 之外的三个字节一起读进来（高位垃圾）。
+                        provided = "((VARIANT*)args[" + idx + "])->iVal";
+                        missing = "0";
+                    } else if (pType == Vb6Type::Byte) {
+                        // 同上：槽是 **VT_UI1**，读 `bVal` (无符号单字节)。
+                        provided = "((VARIANT*)args[" + idx + "])->bVal";
+                        missing = "0";
+                    } else if (pType == Vb6Type::Long) {
                         provided = "((VARIANT*)args[" + idx + "])->lVal";
                         missing = "0";
                     } else if (pType == Vb6Type::Boolean) {
-                        // 账 #305 §B219: 这一臂原来自己问了一次 `vt == VT_BOOL`(唯一一处看标签
-                        // 的读臂)，与上面服务端那一趟的换算答的是同一问。现在标签那一问只住
-                        // vb6_ComArgNormalize + cDispatchArgVt(Boolean ⇒ VT_I4)，走到这里的槽
-                        // 已经是 VT_I4 的 -1/0 ⇒ 与 Long 那一臂同形，读臂一律不看标签。
-                        provided = "((VARIANT*)args[" + idx + "])->lVal";
+                        // 账 #305 §11.141 (第一百五十九刀): 槽是 **VT_BOOL**，读 `boolVal` 并折成
+                        // 本仓的 -1/0。改前借 VT_I4 就地透传（读 `lVal`），于是 `o.B = 7` 真的存成 7，
+                        // 而真 VB6 是 CBool(7) = True = **-1** (`.temp/k160/p1` W5/W6)。
+                        provided = "(((VARIANT*)args[" + idx + "])->boolVal ? -1 : 0)";
                         missing = "0";
                     } else if (pType == Vb6Type::Double || pType == Vb6Type::Single) {
                         provided = "((VARIANT*)args[" + idx + "])->dblVal";
@@ -440,14 +464,27 @@
                     }
                 } else {
                     // ByRef: 传递VARIANT中的值指针
-                    if (pType == Vb6Type::Long || pType == Vb6Type::Integer ||
-                        pType == Vb6Type::Byte) {
+                    // 账 #305 §11.146 (第一百六十四刀): 按**声明档自己的那一格**取址。
+                    // 以前 Long/Integer/Byte 三档一律 `&lVal` —— union 同偏移所以测试过得去，但
+                    // Integer/Byte 形参收到的是 LONG* (C4133)，靠“写入总在偏移 0”侥幸成立。
+                    // 这里让每一档取自己的那一格，并补上 Currency / Date 两档。
+                    if (pType == Vb6Type::Long) {
                         provided = "&((VARIANT*)args[" + idx + "])->lVal";
                         missing = "&(int32_t){0}";
+                    } else if (pType == Vb6Type::Integer) {
+                        provided = "&((VARIANT*)args[" + idx + "])->iVal";
+                        missing = "&(int16_t){0}";
+                    } else if (pType == Vb6Type::Byte) {
+                        provided = "&((VARIANT*)args[" + idx + "])->bVal";
+                        missing = "&(uint8_t){0}";
+                    } else if (pType == Vb6Type::Currency) {
+                        provided = "&((VARIANT*)args[" + idx + "])->cyVal";
+                        missing = "&(int64_t){0}";
                     } else if (pType == Vb6Type::Boolean) {
                         provided = "&((VARIANT*)args[" + idx + "])->lVal";  /* ByRef Boolean: same as Long, VB6 uses int32_t */
                         missing = "&(int32_t){0}";
-                    } else if (pType == Vb6Type::Double || pType == Vb6Type::Single) {
+                    } else if (pType == Vb6Type::Double || pType == Vb6Type::Single ||
+                               pType == Vb6Type::Date) {
                         provided = "&((VARIANT*)args[" + idx + "])->dblVal";
                         missing = "&(double){0.0}";
                     } else if (pType == Vb6Type::Variant) {
@@ -502,11 +539,38 @@
                         retClsInst = cIdent(rcInstSym2->name);
                     }
                 }
+                /* 账 #305 §11.129 (第一百四十八刀): **本类返回**那一档。
+                 * `Public Property Get Child() As B148Box`（返回类型 = 所在类自己）的 C 返回型
+                 * 是 `void*`，于是上面那条 (retType == "vb6_VARIANT") 不命中，落到本函数最后
+                 * 那个 else: `vt = VT_I4; lVal = (int32_t)(intptr_t)_r` —— 对象被当成整数交出去，
+                 * x64 上指针当场截断。实测 (.temp/k148/probe): 客户端读到 vt=3 (VT_I4)
+                 * val=150397680，而 `As B148Item`（别的类）那条走 vb6_VariantObjectTransfer
+                 * 是 vt=9，一切正常。
+                 * 口径: 只要声明的返回类型真是**本工程的类**（有 coclass 描述符），与异类返回
+                 * 同一律 —— 包一层 IDispatch，并把那一枚引用交给 VARIANT。
+                 * 注: `As Object` 的 retType 也是 "void*"（mapType(Object)），但它不走这一档；
+                 * 那一档在下面单独按 VT_DISPATCH 转交，见 §11.129 第二处。 */
+                if (retClsInst.empty() && retType == "void*" && !methodSym->variableTypeName.empty()) {
+                    auto* rcSelf2 = lookupModuleDotted(methodSym->variableTypeName);
+                    if (rcSelf2 && rcSelf2->kind == SymbolKind::Class && !rcSelf2->isInterface) {
+                        std::string nmSelf2 = cIdent(rcSelf2->name);
+                        for (auto& ccSelf2 : coClasses) {
+                            if (cIdent(ccSelf2.moduleName) == nmSelf2) { retClsInst = nmSelf2; break; }
+                        }
+                    }
+                }
+                // 实例指针的 C 声明型: Fix 184 那一档源码里已是 vb6_cls_X*; 本类那一档是 void*。
+                const std::string retInstDeclType =
+                    (retType == "vb6_VARIANT") ? ("vb6_cls_" + retClsInst + "*") : retType;
                 entry.emitLine("if (result) {");
                 entry.indent();
                 if (!retClsInst.empty()) {
-                    entry.emitLine("vb6_cls_" + retClsInst + "* _p = " + procName + "(" + callArgs + ");");
-                    entry.emitLine("vb6_VARIANT _r = vb6_VariantObject(vb6_ComObject_FromInstance("
+                    entry.emitLine(retInstDeclType + " _p = " + procName + "(" + callArgs + ");");
+                    /* 账 #305 §11.126 (第一百四十五刀): FromInstance 交出来的那一枚引用**转移**给
+                     * VARIANT, 不能再叠一枚 AddRef。改前这一句是 vb6_VariantObject(...) —— 它按
+                     * Fix 024 必 AddRef, 于是每一次类成员读数在服务端就多一枚 (实测 C3_COM_RC_TRACE:
+                     * FROM-INST cnt=1 → ADDREF cnt=2 → 客户端那一枚 PackCopyInto 再 cnt=3)。 */
+                    entry.emitLine("vb6_VARIANT _r = vb6_VariantObjectTransfer(vb6_ComObject_FromInstance("
                                    "vb6_FindCoClassDesc(\"" + retClsInst + "\"), (void*)_p));");
                 } else {
                     entry.emitLine(retType + " _r = " + procName + "(" + callArgs + ");");
@@ -527,6 +591,13 @@
                     // vb6_VARIANT 结构体不能 cast 为 intptr_t,
                     // 用 memcpy 复制到 Windows VARIANT (布局兼容: vt + padding + union).
                     entry.emitLine("memcpy(result, &_r, sizeof(vb6_VARIANT));");
+                } else if (retType == "void*") {
+                    /* 账 #305 §11.129 (第一百四十八刀) 第二处: `As Object` 的 getter。
+                     * 与上面同一个兜底 else 吃掉了它: `vt = VT_I4; lVal = (int32_t)(intptr_t)_r`。
+                     * 类模块里 getter 的返回槽**已经**为泛对象档 claim 了一枚（实测 B148Box.c:
+                     * `vb6_ret_Held = gHold; vb6_ComAddRefDispatch(...)`），所以这里只是把那一枚
+                     * **转移**进 VARIANT —— 既不再 AddRef，也不释放。客户端按 §11.127 收下即持。 */
+                    entry.emitLine("((VARIANT*)result)->vt = VT_DISPATCH; ((VARIANT*)result)->pdispVal = (IDispatch*)_r;");
                 } else {
                     entry.emitLine("((VARIANT*)result)->vt = VT_I4; ((VARIANT*)result)->lVal = (int32_t)(intptr_t)_r;");
                 }

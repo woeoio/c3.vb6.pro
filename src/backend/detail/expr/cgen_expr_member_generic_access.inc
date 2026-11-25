@@ -20,6 +20,33 @@
             std::cerr << "[ST-GEN] marker obj=" << comObjExpr_
                       << " member=" << comMemberName_ << std::endl;
         }
+        // 第一百一十四刀 (§11.96): With 块 UDT 的**对象字段**已经解到底了。
+        // Fix 110t (cgen_expr_with.cpp) 对 `With h(i): .Prop.Add …` 设的标记是
+        // objExpr = `_vb6_with_5->Prop` (字段值本身) + memberName = "Prop" (字段名)。
+        // 也就是**对象已经在手上**, 名字只是记着它是哪个字段。这里再 resolve 一次
+        // 就成了「拿这个对象问它自己叫不叫 Prop」:
+        //   vb6_ComCall(vb6_ComGetObjectProp(_vb6_with_5->Prop, L"Prop"), L"Add", …)
+        // 以前内建 Collection 对未知名一律宽容 (return 1 + 空对象), 这层空转被吞掉了
+        // —— Charts2020 ucTreeMaps 那 60+ 条 `.Prop.Add` 其实一次都没进过集合;
+        // 第一百一十三刀让 Collection 老实回 438 之后, 它们全成了进程级错误。
+        // 判据: objExpr 的尾巴就是 memberName (字段取值的发码形), 两个条件一起认才动。
+        {
+            const std::string tailSt = Symbol::toLower(comObjExpr_);
+            const std::string memSt = Symbol::toLower(comMemberName_);
+            const bool tailIsField = !memSt.empty() && tailSt.size() > memSt.size() + 2
+                && tailSt.compare(tailSt.size() - memSt.size() - 2, memSt.size() + 2,
+                                  "->" + memSt) == 0;
+            if (tailIsField) {
+                const std::string fieldObjSt = comObjExpr_;
+                comObjExpr_ = fieldObjSt;
+                comMemberName_ = node.memberName;
+                isComMarker_ = true;
+                lastExpr_ = fieldObjSt;
+                if (std::getenv("C3_DBG_ST"))
+                    std::cerr << "[ST-GEN3] udt field-object chain " << node.memberName << std::endl;
+                return;
+            }
+        }
         // object是COM属性访问, 解析为对象值
         resolveComValue("Object");
         // 检查resolveComValue后的结果是否是对象表达式 (ComCallObject/ComGetObjectProp)

@@ -1,0 +1,7 @@
+Type=Exe
+Name="B152App"
+Module=B152Main; B152Main.bas
+Class=B152Item; B152Item.cls
+Class=B152Holder; B152Holder.cls
+Startup="Sub Main"
+ExeName32="B152.exe"

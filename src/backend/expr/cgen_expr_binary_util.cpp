@@ -62,6 +62,13 @@ static const char* kBstrReturningCalls[] = {
     "vb6_MshFlexGrid_GetTextArray",
     "vb6_MshFlexGrid_GetFormatString",
     "vb6_MshFlexGrid_GetDataSource",
+    // 账 #305 §11.137 (第一百五十六刀): 晚绑定属性读的 BSTR 出口。
+    // `vb6_ComGetStringProp` 交回的就是 `BSTR`（`vb6_ComUnpackBSTR` 内部
+    // `VariantChangeType(…, VT_BSTR)`，VT_I4/VT_R8/VT_BOOL 都能折成 "11" / "True"）——
+    // 漏登记会导致它按 `inferExprType` 的**同名符号**档位再套一层 `vb6_CStrLong(`：
+    // 把 BSTR 指针当 int32_t 交给格式化（实测 `"Q5=" & o.Held` 改前 x64 打 128849432、
+    // x86 打 14248540）。登记后同一个表达式直通，值由 RTL 那一步转换说话。
+    "vb6_ComGetStringProp(",
 };
 
 bool CCodeGen::isBstrReturningCall(const std::string& expr) {
@@ -242,8 +249,18 @@ std::string CCodeGen::wrapToBSTR(const std::string& expr, Expr& node) {
         // intptr_t 为 32 位, 但该分支只在 LongPtr 变量作字符串拼接时命中, 传 intptr_t
         // 给 int64_t 形参是合法提升, 无截断风险 (x86 值本来就只有 32 位)。
         case Vb6Type::LongPtr:  return "vb6_CStrLongLong((int64_t)" + expr + ")";
-        case Vb6Type::Single:
-        case Vb6Type::Double: return "vb6_CStrDbl(" + expr + ")";
+        case Vb6Type::Single:   return "vb6_CStrSingle(" + expr + ")";
+        case Vb6Type::Double:   return "vb6_CStrDbl(" + expr + ")";
+        // 账 #305 §11.153 (第一百七十一刀): Currency 必须在这里有一格。
+        // 病: Currency 的 C 存储就是 double (`Dim c As Currency` 的标识符档走 Double ⇒
+        // `vb6_CStrDbl(c)`, 10.5 打 10.5 是对的), 但**属性读**那一形经
+        // memberReturnTypes 答 Currency (cgen_util_type.cpp:652), 本 switch 没有
+        // Currency 臂 ⇒ 落 default 的 vb6_CStrLong((int64_t)double): 10.5 打 "10",
+        // 10.5+1 打 "11"。实测 tests/b170.../B170Box.C1 (Currency 属性)。
+        // 与 Double 同一条格式化出口 —— 表示本来就一致, 不另开一条路。
+        // 在册: VB6 的 Currency 赋值会先圈到 4 位小数, 本仓的 double 承载不圈;
+        //       那是表示层的老账, 与本处选哪枚格式化函数无关。
+        case Vb6Type::Currency: return "vb6_CStrDbl(" + expr + ")";
         case Vb6Type::Boolean: return "vb6_CStrBool(" + expr + ")";
         case Vb6Type::Byte:   return "vb6_CStrByte(" + expr + ")";
         case Vb6Type::Date:   return "vb6_CStrDate(" + expr + ")";

@@ -65,7 +65,11 @@ int32_t vb6_LenB_BSTR(BSTR s) {  // Fix 048: LenB for BSTR — byte length (wcha
 }
 
 BSTR vb6_Left(BSTR s, int32_t n) {
-    if (!s || n <= 0) return vb6_BSTR_Empty();
+    // C30-11 第八十六刀: `Left(s, -1)` 在 VB6 里报 5 (Invalid procedure call or argument)，
+    // 旧实现把 n<=0 一律当空串 —— 于是「该 raise 没 raise」，赋值站也就不会中止语句。
+    if (!s) return vb6_BSTR_Empty();
+    if (n < 0) { if (vb6_ArgConvertFailed()) return vb6_BSTR_Empty(); vb6_ErrRaiseNumber(5); return vb6_BSTR_Empty(); }
+    if (n == 0) return vb6_BSTR_Empty();
     int32_t len = vb6_BSTR_Len(s);
     if (n > len) n = len;
     /* 账 §39 (C:/D: 少两行): 取子串必须按**定长**建结果 —— vb6_BSTR_FromStr 走
@@ -75,14 +79,20 @@ BSTR vb6_Left(BSTR s, int32_t n) {
 }
 
 BSTR vb6_Right(BSTR s, int32_t n) {
-    if (!s || n <= 0) return vb6_BSTR_Empty();
+    // C30-11 第八十六刀: 与 Left 同口径 —— 负长度报 5，0 才是空串。
+    if (!s) return vb6_BSTR_Empty();
+    if (n < 0) { if (vb6_ArgConvertFailed()) return vb6_BSTR_Empty(); vb6_ErrRaiseNumber(5); return vb6_BSTR_Empty(); }
+    if (n == 0) return vb6_BSTR_Empty();
     int32_t len = vb6_BSTR_Len(s);
     if (n > len) n = len;
     return vb6_BSTR_FromStrN(s + len - n, n);
 }
 
 BSTR vb6_Mid(BSTR s, int32_t start, int32_t len) {
-    if (!s || start < 1) return vb6_BSTR_Empty();
+    // C30-11 第八十六刀: 起点 < 1 ⇒ 5 (VB6 的 Mid("abc", 0) 报 5)。
+    // len < 0 是 cgen 对省略 length 参数 (Mid$(s, n)) 的哨兵，不当错误。
+    if (!s) return vb6_BSTR_Empty();
+    if (start < 1) { if (vb6_ArgConvertFailed()) return vb6_BSTR_Empty(); vb6_ErrRaiseNumber(5); return vb6_BSTR_Empty(); }
     int32_t slen = vb6_BSTR_Len(s);
     int32_t offset = start - 1;  // VB6是1-based
     if (offset >= slen) return vb6_BSTR_Empty();
@@ -103,21 +113,29 @@ BSTR vb6_Mid(BSTR s, int32_t start, int32_t len) {
 // 账 §39: 与上面 Left/Right/Mid 同口径 —— 取子串按**定长**建结果, 不许走
 // vb6_BSTR_FromStr (wcslen 会把内嵌 NUL 当串尾)。
 BSTR vb6_LeftB(BSTR s, int32_t n) {
-    if (!s || n <= 0) return vb6_BSTR_Empty();
+    // C30-11 第八十六刀: 与 vb6_Left 同口径。
+    if (!s) return vb6_BSTR_Empty();
+    if (n < 0) { if (vb6_ArgConvertFailed()) return vb6_BSTR_Empty(); vb6_ErrRaiseNumber(5); return vb6_BSTR_Empty(); }
+    if (n == 0) return vb6_BSTR_Empty();
     int32_t len = vb6_BSTR_Len(s);
     if (n > len) n = len;
     return vb6_BSTR_FromStrN(s, n);
 }
 
 BSTR vb6_RightB(BSTR s, int32_t n) {
-    if (!s || n <= 0) return vb6_BSTR_Empty();
+    // C30-11 第八十六刀: 与 vb6_Right 同口径。
+    if (!s) return vb6_BSTR_Empty();
+    if (n < 0) { if (vb6_ArgConvertFailed()) return vb6_BSTR_Empty(); vb6_ErrRaiseNumber(5); return vb6_BSTR_Empty(); }
+    if (n == 0) return vb6_BSTR_Empty();
     int32_t len = vb6_BSTR_Len(s);
     if (n > len) n = len;
     return vb6_BSTR_FromStrN(s + len - n, n);
 }
 
 BSTR vb6_MidB(BSTR s, int32_t start, int32_t len) {
-    if (!s || start < 1) return vb6_BSTR_Empty();
+    // C30-11 第八十六刀: 与 vb6_Mid 同口径（起点 < 1 ⇒ 5；len<0 是哨兵）。
+    if (!s) return vb6_BSTR_Empty();
+    if (start < 1) { if (vb6_ArgConvertFailed()) return vb6_BSTR_Empty(); vb6_ErrRaiseNumber(5); return vb6_BSTR_Empty(); }
     int32_t slen = vb6_BSTR_Len(s);
     int32_t offset = start - 1;  // VB6 是 1-based 字节下标
     if (offset >= slen) return vb6_BSTR_Empty();
@@ -198,10 +216,19 @@ int32_t vb6_TextFindRev(BSTR haystack, BSTR needle, int32_t from0, int32_t compa
 
 // compare 版实现 (vbBinaryCompare = 0 走原 memcmp 路, 行为逐字不变)。
 int32_t vb6_InStrC(int32_t start, BSTR haystack, BSTR needle, int32_t compare) {
+    // C30-11 第八十七刀: 起点 < 1 ⇒ 5。真机读数（.temp/k87/oracle_instr.vbs）：
+    //   InStr(0,"abc","b") / InStr(-1,…) => 5 且目标不动；
+    //   InStr(0,"abc","") 也是先校起点（=> 5），所以这道校验必须在“空 needle”之前。
+    // 旧写法把 start 悄悄夹成 1 —— 于是 `n = InStr(0,h,s)` 既不报错、还把 n 写成 2。
+    if (start < 1) {
+        if (!vb6_ArgConvertFailed()) vb6_ErrRaiseNumber(5);
+        return 0;
+    }
     if (!haystack || !needle) return 0;
     int32_t nlen = vb6_BSTR_Len(needle);
-    if (nlen == 0) return start;
-    if (start < 1) start = 1;
+    // C30-11 第八十八刀: 空 needle 交回的是**查找起点**，但起点超过 Len 时真机交 0
+    // （oracle: InStr(4,"abc","") => 0，InStr(3,…) => 3）。旧写法无条件 return start。
+    if (nlen == 0) return (start > vb6_BSTR_Len(haystack)) ? 0 : start;
     int32_t i = vb6_TextFind(haystack, needle, start - 1, compare);
     return (i < 0) ? 0 : i + 1;   // VB6 的 InStr 返回 1 基
 }
@@ -240,15 +267,21 @@ int32_t vb6_InStrVarC(int32_t start, BSTR haystack, vb6_VARIANT needle, int32_t 
 // 用 1D 描述符判定 (cDims==1 + fFeatures 标记, 见 vb6rtl_array.h) 区分两种载体,
 // 避免在 RTL 里区分运行时指针类型. 旧写法是比 signature == 0x5A1D.
 int32_t vb6_InStrB(int32_t start, void* haystack, void* needle) {
+    // C30-11 第八十七刀: 与 vb6_InStr 同口径（起点 < 1 ⇒ 5）。“先校起点再判空 needle”
+    // 这一点两边一致（真机 InStrB 是 InStr 的字节版，缺省起点也是 1）。
+    if (start < 1) {
+        if (!vb6_ArgConvertFailed()) vb6_ErrRaiseNumber(5);
+        return 0;
+    }
     if (!haystack || !needle) return 0;
-    if (start < 1) start = 1;
     {
         const vb6_SafeArray1D* ha = (const vb6_SafeArray1D*)haystack;
         const vb6_SafeArray1D* ne = (const vb6_SafeArray1D*)needle;
         if (vb6_SaIs1D(ha) && vb6_SaIs1D(ne)) {
             int32_t hlen = ha->count * ha->elemSize;
             int32_t nlen = ne->count * ne->elemSize;
-            if (nlen == 0) return start;
+            // 第八十八刀: 与 vb6_InStr 同口径（空 needle ⇒ 起点，起点 > Len ⇒ 0）。
+            if (nlen == 0) return (start > hlen) ? 0 : start;
             if (!ha->data || !ne->data) return 0;
             for (int32_t i = start - 1; i <= hlen - nlen; i++) {
                 if (memcmp((const uint8_t*)ha->data + i, ne->data, (size_t)nlen) == 0) {
@@ -263,7 +296,7 @@ int32_t vb6_InStrB(int32_t start, void* haystack, void* needle) {
         BSTR n = (BSTR)needle;
         int32_t hlen = vb6_BSTR_Len(h);
         int32_t nlen = vb6_BSTR_Len(n);
-        if (nlen == 0) return start;
+        if (nlen == 0) return (start > hlen) ? 0 : start;
         for (int32_t i = start - 1; i <= hlen - nlen; i++) {
             if (memcmp(h + i, n, (size_t)nlen * sizeof(wchar_t)) == 0) {
                 return i * 2 + 1;  // 字节偏移
@@ -344,6 +377,12 @@ BSTR vb6_RTrim(BSTR s) {
 }
 
 BSTR vb6_Chr(int32_t code) {
+    // C30-11 第八十六刀: 码点越界 ⇒ 5（VB6: Chr(-1) / Chr(70000) 都报 5）。
+    // 合法区间是 0..65535；Chr$(0) 仍是长度 1 的字符串（见下），不是空串。
+    if (code < 0 || code > 65535) {
+        if (!vb6_ArgConvertFailed()) vb6_ErrRaiseNumber(5);
+        return vb6_BSTR_Empty();
+    }
     // 账 #118 续: Chr$(0) 在 VB6 里是**长度 1** 的字符串 (内容为 NUL), 不是空串。
     // 原实现走 vb6_BSTR_FromStr → wcslen 见到首字符 NUL 就返回 0, 于是
     // `Len(Chr$(0))=0`、`InStr(sPath, Chr$(0))` 命中空 needle 规则返回 1、
@@ -719,9 +758,22 @@ int32_t vb6_InStrRev(BSTR haystack, BSTR needle, int32_t start, int32_t compare)
     if (!haystack || !needle) return 0;
     int32_t hLen = vb6_BSTR_Len(haystack);
     int32_t nLen = vb6_BSTR_Len(needle);
-    if (nLen == 0) return hLen;
+    // C30-11 第八十七刀: start 的合法档只有 -1（从尾部，等同省略）与 >= 1。
+    // 真机读数: InStrRev(…,0) / InStrRev(…,-2) => 5 且目标不动；-1 与省略 => 2。
+    // 旧写法把 <=0 一律夹成 hLen —— 0 与 -2 因此既不报错还答了 2。
+    if (start == -1) {
+        start = hLen;
+    } else if (start < 1) {
+        if (!vb6_ArgConvertFailed()) vb6_ErrRaiseNumber(5);
+        return 0;
+    }
+    // C30-11 第八十八刀: 起点 > Len 真机交 0（oracle: InStrRev("abc","b",4/99) => 0 且无错），
+    // 且这条**先于空 needle**（InStrRev("abc","",4) => 0，InStrRev("","",1) => 0）。
+    // 旧写法把它夹成 hLen 继续查 —— 于是 4 与 99 都答 2。
+    if (start > hLen) return 0;
+    // 空 needle 交回查找起点（oracle: InStrRev("abc","",2) => 2、省略 => 3 = hLen）。
+    if (nLen == 0) return start;
     if (nLen > hLen) return 0;
-    if (start <= 0 || start > hLen) start = hLen;
     // <vbeclipse>: compare 形参此前被 (void) 丢掉; 改走共用查找核 (二进制形逐字不变)。
     int32_t i = vb6_TextFindRev(haystack, needle, start - nLen, compare);
     return (i < 0) ? 0 : i + 1;   // VB6 的 1 基
@@ -857,6 +909,18 @@ vb6_VARIANT vb6_LenV(vb6_VARIANT v) {
     return vb6_VariantLong(vb6_Len(vb6_VariantToString(v)));
 }
 
+// C30-11 第九十一刀: LenB 的变体位。口径与 vb6_LenV 同一句（手册: Len/LenB 收到
+// Variant 都按 String 看 ⇒ Null 原样交出），差别只在字节数那一档: 串实参走
+// vb6_LenB_BSTR（宽字符 ×2），**不是** `sizeof(vb6_VARIANT)` —— 后者是 vb6_LenB 宏
+// 对非 BSTR 实参的默认臂，拿它答 Variant 槽会答成 24/20。
+vb6_VARIANT vb6_LenBV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    BSTR s = vb6_VariantToString(v);
+    int32_t n = vb6_LenB_BSTR(s);
+    vb6_BSTR_Free(s);          // VariantToString 现造一枚；只读长度，就地收回
+    return vb6_VariantLong(n);
+}
+
 vb6_VARIANT vb6_TrimV(vb6_VARIANT v) {
     if (v.vt == vb6_vtNull) return vb6_VariantNull();
     return vb6_VariantString(vb6_Trim(vb6_VariantToString(v)));
@@ -893,4 +957,35 @@ void vb6_BSTR_AssignFromVariant(BSTR* target, vb6_VARIANT src) {
         return;   /* 目标一字不动 */
     }
     vb6_BSTR_AssignMove(target, vb6_CStr(src));
+}
+
+// C30-11 第九十刀: **定长串目标**收 Variant 右值 (UDT `String * N` 字段与模块级 `String * N`)。
+// 与 vb6_BSTR_AssignFromVariant 同一口径: Null ⇒ 94 且目标**一字不动**; 其余档先按 vb6_CStr
+// 折成串 (与旧的宽松口逐字节相同), 再走定长那两条既有写侧 (右补空格 / 右截断)。
+//
+// 为什么要单独开出口: 定长串目标以前绕开了严格赋值站 (第七十三/七十四刀那两枚只看普通
+// BSTR 槽), 于是 `u.f = CStr(Null)` / `g = Null` 都变成「err=0 + 字段被抹成空格」。
+void vb6_FixedStrAssignFromVariant(char* buf, int32_t cap, vb6_VARIANT src) {
+    if (src.vt == vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        return;   /* buf 一字不动 */
+    }
+    BSTR s = vb6_CStr(src);
+    vb6_FixedStrAssign(buf, cap, s);
+    vb6_BSTR_Free(s);
+}
+
+// 模块级 `String * N` (BSTR 模型) 的同一口径: 先把变体折成串, 再 fit 成 N 长度并换进目标;
+// Null 那一档 raise 94 后直接返回 —— 目标还是旧值 (不能交 Entry 让调用方 AssignMove 空串)。
+void vb6_LSetFromVariant(BSTR* target, int32_t cap, vb6_VARIANT src) {
+    if (src.vt == vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        return;   /* *target 一字不动 */
+    }
+    BSTR s = vb6_CStr(src);
+    BSTR fit = vb6_LSet(s, cap);
+    vb6_BSTR_Free(s);
+    vb6_BSTR_AssignMove(target, fit);
 }

@@ -1007,7 +1007,7 @@ void vb6_ArraySlotWriteBack(VARIANT *client, void *slot) {
  * 体里改的也是槽，这里按 pointee 的类型写回对端变量。只认数值/布尔那几档：BSTR 要换分配器、
  * 对象要动引用计数、Variant 要整枚拷贝 —— 都不在本刀（槽留 Empty 那一形与改前同形）。 */
 void vb6_ByRefScalarWriteBack(VARIANT *client, void *slot) {
-    const vb6_VARIANT* s = (const vb6_VARIANT*)slot;
+    vb6_VARIANT* s = (vb6_VARIANT*)slot;
     if (!client || !s) return;
     if ((client->vt & VT_BYREF) == 0 || (client->vt & VT_ARRAY) != 0) return;
     switch (client->vt & VT_TYPEMASK) {
@@ -1017,6 +1017,27 @@ void vb6_ByRefScalarWriteBack(VARIANT *client, void *slot) {
         case VT_R4:   if (client->pfltVal)  *client->pfltVal  = s->fltVal;  break;
         case VT_BOOL: if (client->pboolVal) *client->pboolVal = s->boolVal; break;
         case VT_UI1:  if (client->pbVal)    *client->pbVal    = s->bVal;    break;
+        /* 账 #305 §11.146 (第一百六十四刀): Currency / Date 的出站回写。
+         * Date 住 dblVal (与 vtDate 的既有约定同: 序列号在 dblVal), 这里只搬那枚双精度;
+         * Currency 住 cyVal (int64 缩放到 1/10000)。 */
+        case VT_CY:   if (client->pcyVal)   client->pcyVal->int64 = s->cyVal;  break;
+        case VT_DATE: if (client->pdate)    *client->pdate    = s->dblVal;  break;
+        /* 账 #305 §11.143 (第一百六十一刀): ByRef String 的出站 —— 所有权转移，不是拷贝。
+         * 入槽那一臂已经把对端那枚串拷进槽（槽里那份是**我们的**），体里改的是槽；
+         * 这里把槽里那枚交给对端，同时把对端旧的那枚退掉，顺序不能反（先赋值再退旧，
+         * 对端 `*pbstrVal` 若与槽里那份是同一枚也不会被双重释放 —— 它们永远不同：
+         * 入槽是 SysAllocString，体里赋值又是另一枚）。交出去后把槽置空，
+         * 下面那一圈收尾就不会再去碰它（vb6_VariantSlotRelease 只认数组，本就不得退串）。 */
+        case VT_BSTR:
+            if (client->pbstrVal) {
+                BSTR* dst = client->pbstrVal;
+                BSTR old = *dst;
+                *dst = s->bstrVal;
+                s->bstrVal = NULL;
+                s->vt = vb6_vtEmpty;
+                if (old) SysFreeString(old);
+            }
+            break;
         default: break;
     }
 }
@@ -1124,6 +1145,20 @@ void vb6_VariantBorrowIntoSlot(const VARIANT *src, void *slot) {
             case VT_R4:   s->vt = vb6_vtSingle;  s->fltVal  = src->pfltVal  ? *src->pfltVal  : 0; return;
             case VT_BOOL: s->vt = vb6_vtBoolean; s->boolVal = src->pboolVal ? *src->pboolVal : 0; return;
             case VT_UI1:  s->vt = vb6_vtByte;    s->bVal    = src->pbVal    ? *src->pbVal    : 0; return;
+            /* 账 #305 §11.146 (第一百六十四刀): Currency / Date 两档 —— 本仓的 C 存储就是
+             * int64_t / double, 与 oleaut32 那两格同宽同偏移, 直搬值。 */
+            case VT_CY:   s->vt = vb6_vtCurrency;
+                          s->cyVal = src->pcyVal ? (int64_t)src->pcyVal->int64 : 0; return;
+            case VT_DATE: s->vt = vb6_vtDate;
+                          s->dblVal = src->pdate ? (double)*src->pdate : 0; return;
+            /* 账 #305 §11.143 (第一百六十一刀): ByRef String —— 数值那六档是把**值**搬进槽，
+             * 字符串不能照办：体里一句 `x = x & "-ok"` 先 SysFreeString 掉 `*x`，那就是
+             * 调用方那枚串。所以这里给槽**自己的一份副本**（槽的生命周期到出站回写为止，
+             * 回写时所有权直接交给对端），调用方那枚在此期间一个字节不动。 */
+            case VT_BSTR: s->vt = vb6_vtBSTR;
+                          s->bstrVal = (src->pbstrVal && *src->pbstrVal)
+                                           ? SysAllocString(*src->pbstrVal) : NULL;
+                          return;
             default:      return;
         }
     }
@@ -1166,14 +1201,40 @@ HRESULT vb6_ComChangeType(VARIANT *dest, const VARIANT *src, VARTYPE want) {
  * 对端那份资源一个字节都不动，产物住在调用方给的 scratch 里由调用方回收。
  * 同档那一发也刻意不调换算：槽里那一份是 §B144 的借用，本来就正确，多走一趟反而会把
  * 借来的指针换成我们自己的副本(就没人回收了)。 */
+/* 账 #305 §11.142 (第一百六十刀): 上一趟换算失败的原因。
+ * 服务端 Invoke 在换算失败那一瞬就读回去（就在同一个 STA 线程、同一个循环里），
+ * 所以一枚静态就够；不要把它当「跨调用状态」用。 */
+static HRESULT g_vb6_argNormErrHr = DISP_E_TYPEMISMATCH;
+void vb6_ComArgNormLastHrSet(HRESULT hr) { g_vb6_argNormErrHr = hr; }
+HRESULT vb6_ComArgNormLastHr(void) { return g_vb6_argNormErrHr; }
+
 HRESULT vb6_ComArgNormalize(const VARIANT *src, VARTYPE want, void *slot, VARIANT *scratch) {
     VariantInit(scratch);
     if (want == VB6_ARGVT_SKIP) return S_OK;   /* 这一格不问，也不许顺手清一下 */
     if (!src || src->vt == want) return S_OK;  /* 同档：借用就是答案 */
+    /* 账 #305 §11.143 (第一百六十一刀): 引用形的 pointee 已经等于声明档 ⇒ **不换算**，
+     * 但这只限 vb6_VariantBorrowIntoSlot 真搬过的那七档 (它把 pointee 的值/副本写进槽)。
+     * 其余形 (典型 BYREF|VT_VARIANT) 入槽那臂不接 (槽留 Empty)，必须走换算才算得出值 —— 
+     * 把那几档也跳过就是把「引用变体」读成空。 */
+    if (src->vt & VT_BYREF) {
+        const VARTYPE base = (VARTYPE)(src->vt & VT_TYPEMASK);
+        const VARTYPE wantBase = (VARTYPE)(want & VT_TYPEMASK);
+        const int unwrapped = (base == VT_I4 || base == VT_I2 || base == VT_R8 ||
+                               base == VT_R4 || base == VT_BOOL || base == VT_UI1 ||
+                               base == VT_BSTR || base == VT_CY || base == VT_DATE);
+        if (unwrapped && base == wantBase) return S_OK;
+    }
     /* 账 #305 §B224: 目的档是 BSTR 时口径归 VB 语言(布尔答 True/False)，见 vb6_ComChangeType。 */
-    if (FAILED(vb6_ComChangeType(scratch, src, want))) {
-        VariantInit(scratch);
-        return DISP_E_TYPEMISMATCH;
+    {
+        const HRESULT hrConv = vb6_ComChangeType(scratch, src, want);
+        if (FAILED(hrConv)) {
+            VariantInit(scratch);
+            /* 账 #305 §11.142 (第一百六十刀): 换不动的**原因**要带出去 —— 收窄越界是
+             * DISP_E_OVERFLOW(真 VB6 报 6)，其余仍是 TYPEMISMATCH(13)。以前一律折成 13，
+             * 于是 `o.I = 40000`(Integer 形参) 在客户端被报成「类型不匹配」。 */
+            vb6_ComArgNormLastHrSet(hrConv);
+            return hrConv;
+        }
     }
     vb6_VariantBorrowIntoSlot(scratch, slot);
     return S_OK;
@@ -2111,14 +2172,23 @@ static int32_t vb6_uc_measureText(BSTR text, int wantWidth) {
     // 此前直接用 GetDC(NULL) 的默认字体 → 控件内部的文字/标题/图例排版全部算错:
     // 标题预留高度(TopHeader)不足 → 图例压在标题上; 轴标签宽度不对 → 文字裁切。
     HFONT hOld = NULL, hNew = NULL;
+    /* 第一百一十九刀: 量字的字体必须与**画字**同一 DPI 口径。
+       控件里 (Charts 2020 ucPieChart/ucChartArea/ucTreeMaps 全部如此) 画字走
+       `MulDiv(oFont.Size, GetDeviceCaps(hDC, LOGPIXELSY), 72)` = 真屏 DPI; 而本函数此前
+       恒用 96 (Fix 113k 记过: 换真屏 DPI 曾把 Charts 的图例/轴标签排布推坏 —— 那次两侧
+       只对上了一半, 不成立)。本机 DPI=120 实测: `TextWidth("0000000000")` = 60 (11px 口径),
+       同串 GDI+ 按 14px 画出 ≈ 75 ⇒ 量出来比画出来小 25%, 控件自己按 TextWidth 算的
+       标签框/标题行高全部偏窄: ucPieChart2 的 `{P}%` 标签最后一个字形被切掉, 只剩 `23.1`。
+       改后同一台机上五个标签 `20.7% / 21.1% / 11.4% / 22.8% / 24%` 全部完整。
+       DPI=96 的机器上取值与改前一模一样 (96/96), 门里的 96 口径语料逐字节不变。 */
+    int dpiY = GetDeviceCaps(hdc, LOGPIXELSY);
+    if (dpiY <= 0) dpiY = 96;
     if (len) {
         /* 账 #305 第二百七十六刀: 这一整块「八档 → LOGFONT」以前就地抄了一份,
            现在问唯一主人 vb6_UC_FontLogFont (uc_controls.c) —— VB 层那枚 `Font.hFont`
            也从同一位主人拿答案, 两处不许各有第二套字重/兜底。
-           DPI 与质量档是**调用方**的选择, 量字这一路维持它自己一贯的 96 + 0
-           (Fix 113k 记过: 给 TextWidth/TextHeight 换成真屏 DPI 的字体度量, 反而把
-           Charts 的图例/轴标签排布推坏)。vb6rtl 与 vb6forms 不互 include 头,
-           故就地 extern (与上面 vb6_ScalePxToUser 同款)。 */
+           DPI 由调用方给 (本函数给真屏 DPI, 见上), 质量档维持 0。
+           vb6rtl 与 vb6forms 不互 include 头, 故就地 extern (与上面 vb6_ScalePxToUser 同款)。 */
         extern void vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* lfOut);
         LOGFONTW lf;
         // ucTreeView: UserControl.FontBold/FontUnderline 在 VB6 里就是 Font 的
@@ -2129,9 +2199,9 @@ static int32_t vb6_uc_measureText(BSTR text, int wantWidth) {
             vb6_ComIface_Font scratch = *vb6_UserControl_Font;
             if (vb6_UserControl_FontBold) scratch.Bold = -1;
             if (vb6_UserControl_FontUnderline) scratch.Underline = -1;
-            vb6_UC_FontLogFont(&scratch, 96, 0, &lf);
+            vb6_UC_FontLogFont(&scratch, dpiY, 0, &lf);
         } else {
-            vb6_UC_FontLogFont(vb6_UserControl_Font, 96, 0, &lf);
+            vb6_UC_FontLogFont(vb6_UserControl_Font, dpiY, 0, &lf);
         }
         hNew = CreateFontIndirectW(&lf);
         if (hNew) hOld = (HFONT)SelectObject(hdc, hNew);

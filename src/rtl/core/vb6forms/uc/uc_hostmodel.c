@@ -321,6 +321,8 @@ static void vb6_ho_clientTwips(void* hwnd, int32_t* w, int32_t* h) {
 static int32_t vb6_ho_getFontMember(void* fontProxy, const wchar_t* name, vb6_VARIANT* out) {
     vb6_ComIface_Font* f = vb6_uc_fontOf(fontProxy);
     if (!f) return 0;
+    /* §11.99: 有主人的代理先与控件对齐（静态路径 `.FontSize` 改了也看得见）。 */
+    vb6_UC_FontSyncFromOwner(fontProxy);
     if (_wcsicmp(name, L"Size") == 0)      { vb6_ho_setVariantDouble(out, f->Size); return 1; }
     if (_wcsicmp(name, L"Bold") == 0)      { vb6_ho_setVariantLong(out, f->Bold ? -1 : 0); return 1; }
     if (_wcsicmp(name, L"Italic") == 0)    { vb6_ho_setVariantLong(out, f->Italic ? -1 : 0); return 1; }
@@ -344,16 +346,19 @@ static int32_t vb6_ho_getFontMember(void* fontProxy, const wchar_t* name, vb6_VA
 
 static int32_t vb6_ho_putFontMember(void* fontProxy, const wchar_t* name, const vb6_VARIANT* v) {
     vb6_ComIface_Font* f = vb6_uc_fontOf(fontProxy);
+    int32_t hit = 0;
     if (!f) return 0;
-    if (_wcsicmp(name, L"Size") == 0)      { f->Size = (float)vb6_ho_variantToDouble(v); return 1; }
-    if (_wcsicmp(name, L"Bold") == 0)      { f->Bold = (int16_t)(vb6_ho_variantToLong(v) ? -1 : 0); return 1; }
-    if (_wcsicmp(name, L"Italic") == 0)    { f->Italic = (int16_t)(vb6_ho_variantToLong(v) ? -1 : 0); return 1; }
-    if (_wcsicmp(name, L"Underline") == 0) { f->Underline = (int16_t)(vb6_ho_variantToLong(v) ? -1 : 0); return 1; }
-    if (_wcsicmp(name, L"Strikethrough") == 0) { f->Strikethrough = (int16_t)(vb6_ho_variantToLong(v) ? -1 : 0); return 1; }
-    if (_wcsicmp(name, L"Weight") == 0)    { f->Weight = vb6_ho_variantToLong(v); return 1; }
-    if (_wcsicmp(name, L"Charset") == 0)   { f->Charset = vb6_ho_variantToLong(v); return 1; }
-    if (_wcsicmp(name, L"Name") == 0)      { f->Name = vb6_ho_variantToBstr(v); return 1; }
-    return 0;
+    if (_wcsicmp(name, L"Size") == 0)      { f->Size = (float)vb6_ho_variantToDouble(v); hit = 1; }
+    else if (_wcsicmp(name, L"Bold") == 0) { f->Bold = (int16_t)(vb6_ho_variantToLong(v) ? -1 : 0); hit = 1; }
+    else if (_wcsicmp(name, L"Italic") == 0) { f->Italic = (int16_t)(vb6_ho_variantToLong(v) ? -1 : 0); hit = 1; }
+    else if (_wcsicmp(name, L"Underline") == 0) { f->Underline = (int16_t)(vb6_ho_variantToLong(v) ? -1 : 0); hit = 1; }
+    else if (_wcsicmp(name, L"Strikethrough") == 0) { f->Strikethrough = (int16_t)(vb6_ho_variantToLong(v) ? -1 : 0); hit = 1; }
+    else if (_wcsicmp(name, L"Weight") == 0) { f->Weight = vb6_ho_variantToLong(v); hit = 1; }
+    else if (_wcsicmp(name, L"Charset") == 0) { f->Charset = vb6_ho_variantToLong(v); hit = 1; }
+    else if (_wcsicmp(name, L"Name") == 0) { f->Name = vb6_ho_variantToBstr(v); hit = 1; }
+    /* §11.99: 写进代理不算完 —— 有主人就交回那六位 setter（落盘 + WM_SETFONT）。 */
+    if (hit) vb6_UC_FontCommit(fontProxy, name);
+    return hit;
 }
 
 /* 账 #305 第二百七十三刀: 「报一行宿主通道认不出的名字」从三条岔口的手抄收成一位主人。
@@ -528,9 +533,18 @@ typedef struct Vb6HostWrap {
     IDispatch disp;
     ULONG refs;
     void* target;
+    int ownsTarget;   /* 第一百二十九刀: 包装器替 target (内建 Collection) 持一份载体引用 */
     wchar_t names[24][64];
     int nameCount;
 } Vb6HostWrap;
+
+/* 账 #305 §11.111 (第一百二十九刀): 只给「包的过程中收了一份引用」的那一枚打标。
+   宿主对象一般照旧借用不计数 (czUI 实测: 给宿主包装器算引用会 0xC000041D),
+   所以标记只由 vb6_ComPackObject 的 Collection 那一档打上。 */
+void vb6_UC_WrapHostObjectOwns(void* wrap) {
+    Vb6HostWrap* w = (Vb6HostWrap*)wrap;
+    if (w) w->ownsTarget = 1;
+}
 
 static HRESULT STDMETHODCALLTYPE HW_QI(IDispatch* self, REFIID riid, void** out) {
     if (!out) return E_POINTER;
@@ -561,7 +575,13 @@ static void vb6_UC_DropWrapPair(void* wrap) {
 static ULONG STDMETHODCALLTYPE HW_Release(IDispatch* self) {
     Vb6HostWrap* w = (Vb6HostWrap*)self;
     ULONG r = --w->refs;
-    if (r == 0) { vb6_UC_DropWrapPair(w); free(w); }
+    if (r == 0) {
+        if (w->ownsTarget && w->target) {
+            extern int32_t vb6_Collection_Release(void* p);
+            vb6_Collection_Release(w->target);   /* 与 vb6_ComPackObject 那一份 AddRef 配对 */
+        }
+        vb6_UC_DropWrapPair(w); free(w);
+    }
     return r;
 }
 static HRESULT STDMETHODCALLTYPE HW_GetTypeInfoCount(IDispatch* self, UINT* n) {
@@ -660,6 +680,18 @@ void* vb6_UC_UnwrapHost(void* obj) {
     for (int i = 0; i < g_uc_wrapCount; i++)
         if (g_uc_wraps[i].wrap == obj) return g_uc_wraps[i].target;
     return obj;
+}
+
+/* 账 #305 §11.110 (第一百二十八刀补): 「这枚指针是不是我们从宿主对象包出来的那枚
+ * Vb6HostWrap」。只答包装器本人 —— 真宿主对象 (HWND / UC 实例 / 集合 / 字体)
+ * 一个空字段都不能当 vtable 碰, 所以不能退回 lpVtbl 那套判据。
+ * 从后往前扫: 表只追加不撤, 地址会被下一枚包装器复用, 最新的那条才是它的主人
+ * (§B165 第五十四刀那条 stale pair 的教训)。 */
+int32_t vb6_UC_IsHostWrap(void* obj) {
+    if (!obj) return 0;
+    for (int i = g_uc_wrapCount - 1; i >= 0; i--)
+        if (g_uc_wraps[i].wrap == obj) return 1;
+    return 0;
 }
 
 #ifdef __cplusplus

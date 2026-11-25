@@ -296,9 +296,11 @@ foreach ($v in $bstrByFile169.Values) { $bstrTotal169 += $v }
 # 「这枚左值有多窄」也要先问这张表, 才答得出 `Me.ci` / `h.ci` / `k.ci` 三形该套哪只范围闸);
 # 读侧那三站一处不许少, 写侧这一站也只许一处。
 # 第六十二刀 (§B171) 的第三站是**同一问的第三个读点** (isDefinitelyVariantExpr 的成员读分支), 不是新抄一份答案; 它同时把「尾注 variant 词」收进 cExprIsVariantSlotFieldRead 一处 (见 R9).
-$WantReadAsk170 = [ordered]@{ 'cgen_util_type.cpp' = 4 }
+# §11.144/§11.145 (第 162/163 刀): 晚绑定 ByRef 实参那一问 —— 类字段 (MemberAccessExpr) 与
+# With 成员 (WithMemberExpr) 各问一次「这枚字段是哪一档」，与读侧那三站同一个出口，不是新抄一份答案。
+$WantReadAsk170 = [ordered]@{ 'cgen_util_type.cpp' = 4; 'cgen_util_com.cpp' = 2 }
 $KnownAskFiles170 = @('cgen_api.inc', 'cgen_state.inc', 'driver_codegen_fieldkind_scan.inc',
-                      'cgen_assign_prop_write.inc', 'cgen_util_type.cpp')
+                      'cgen_assign_prop_write.inc', 'cgen_util_type.cpp', 'cgen_util_com.cpp')
 $askByFile170 = @{}
 foreach ($f in $srcFiles168) {
     $t = [System.IO.File]::ReadAllText($f.FullName)

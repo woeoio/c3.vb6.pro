@@ -1,0 +1,7 @@
+Type=Exe
+Name="B151App"
+Module=B151Main; B151Main.bas
+Class=B151Box; B151Box.cls
+Class=B151Item; B151Item.cls
+Startup="Sub Main"
+ExeName32="B151.exe"

@@ -317,11 +317,74 @@ void CCodeGen::visit(CallStmt& node) {
         // Fix 015: 标记 callee 上下文, 让 visit(MemberAccessExpr) 的 Fix 015 路径
         // 把链式对象参数通过 pendingChainObj_ 交付, 而不是直接合成 func(wrappedObj)
         // (那样会让下面的 bare-call 判定 callExpr.find('(') != npos 错过 padding).
+        // 第一百零二刀 (§11.80): 语句位置的调用实参。真机 I 族（I1 gN=0 / I2 gN=1）
+        // 量到「命中即整句中止」—— 坏实参之后的不再求值、之前的照常求值、调用跳过。
+        // 逐实参提升 + 每次求值前比序号可同时满足两条；由 CallArgScope102 统一收尾。
+        struct CallArgScope102 {
+            CCodeGen* g;
+            ~CallArgScope102() {
+                g->stmtCallArgSerial_.clear();
+                g->stmtCallArgEmitted_ = false;
+                g->stmtCallArgFirstLate_ = -1;
+                g->stmtCallArgVarTemps_.clear();
+                g->comPropWrites_.clear();
+                g->comPropWriteWindow_ = false;
+            }
+        } callArgScope102_{this};
+        if (node.callee && node.callee->kind == ASTNodeKind::IndexOrCallExpr) {
+            auto& c102 = static_cast<IndexOrCallExpr&>(*node.callee);
+            for (size_t i102 = 0; i102 < c102.positional.size(); i102++) {
+                if (c102.positional[i102]
+                    && exprHasLateBoundComRead(c102.positional[i102].get())) {
+                    stmtCallArgFirstLate_ = (int)i102;
+                    stmtCallArgSerial_ = "_eg" + std::to_string(tempCounter_++);
+                    break;
+                }
+            }
+        }
         pendingChainObj_.clear();
         bool savedAsCallCallee = asCallCallee_;
+        // 账 #305 §11.147/§11.148: 只有语句位置这棵被调方表达式树里，属性读当 ByRef
+        // 实参才登记读-改-写（下面那条尾巴有“调用前/调用后”两个位置）。
+        comPropWriteWindow_ = true;
         asCallCallee_ = true;
         emitExpr(*node.callee);
+        comPropWriteWindow_ = false;
         asCallCallee_ = savedAsCallCallee;
+        // 第一百一十四刀 (§11.96): 语句位置的 `With <UDT>: .ObjField.Method args`。
+        // 外层成员访问 (cgen_expr_member_generic_access.inc 的 ST-GEN3 支) 把接收者交成
+        // 「已解好的对象字段 + 方法名」的标记; 语句路这里不许再拼 `field.Method(args)`
+        // —— 那是 C 结构体方法调用形 (编不过 / 语义全错; 实测 `.Prop.Add 1, "k"`
+        // 被拼成 `_vb6_with_0->Prop.Add(1, _own_1)`)。直接发晚绑定 ComCall。
+        if (isComMarker_ && !comMemberName_.empty() && node.callee
+            && node.callee->kind == ASTNodeKind::IndexOrCallExpr
+            && !static_cast<IndexOrCallExpr&>(*node.callee).positional.empty()) {
+            auto& call114 = static_cast<IndexOrCallExpr&>(*node.callee);
+            const std::string objSt114 = comObjExpr_;
+            const std::string memSt114 = comMemberName_;
+            isComMarker_ = false;
+            comObjExpr_.clear();
+            comMemberName_.clear();
+            std::vector<std::string> packed114;
+            for (size_t i114 = 0; i114 < call114.positional.size(); i114++) {
+                const std::string packFn114 = comPackExpr(*call114.positional[i114]);
+                emitExpr(*call114.positional[i114]);
+                { std::string r114 = resolveComMarkerForPack(packFn114);
+                  if (!r114.empty()) lastExpr_ = r114; }
+                packed114.push_back(packArgValue(packFn114, lastExpr_, call114.positional[i114].get()));
+            }
+            std::string arr114 = packed114.empty() ? std::string("NULL") : std::string("(void*[]){");
+            for (size_t i114 = 0; i114 < packed114.size(); i114++) {
+                if (i114 > 0) arr114 += ", ";
+                arr114 += packed114[i114];
+            }
+            if (!packed114.empty()) arr114 += "}";
+            c_.emitLine("vb6_ComVarFree((void*)vb6_ComCall((void*)" + objSt114 + ", L\""
+                        + escapeWideCString(memSt114) + "\", " + arr114 + ", "
+                        + std::to_string(packed114.size())
+                        + "));  /* With UDT 对象字段方法 (晚绑定) */");
+            return;
+        }
         // 语句级调用: 确保表达式被求值(即使是void调用)
         // 如果结果是函数名(不含括号), 自动添加()调用
         std::string callExpr = lastExpr_;
@@ -923,6 +986,12 @@ void CCodeGen::visit(CallStmt& node) {
             }
         }
 
+        const bool guard102 = !stmtCallArgSerial_.empty() && stmtCallArgEmitted_;
+        // 账 #305 §11.147: 读那一半 —— 临时量在调用前起手（先把属性值拷出来，再递它的地址）。
+        for (auto& pw147 : comPropWrites_) c_.emitLine(pw147.decl);
+        if (guard102) {
+            c_.emitLine("if (" + stmtCallArgSerial_ + " == vb6_ErrSerial()) {");
+        }
         if (callExpr.find("vb6_ComCall(") == 0
             || callExpr.find("vb6_ComCallByDispid(") == 0) {
             // ComCall返回可能含对象的VARIANT*, 用VarFree避免Release对象
@@ -931,6 +1000,23 @@ void CCodeGen::visit(CallStmt& node) {
             c_.emitLine("vb6_ComVarClear((void*)" + callExpr + ");  /* COM prop get, discard result */");
         } else {
             c_.emitLine(callExpr + ";");
+        }
+        // 账 #305 §11.147: 写回那一半 —— 调用回来经 Let 写回。放在守卫**里**：
+        // 「命中即整句中止」时调用被跳过，属性也不该变。
+        for (auto& pw147w : comPropWrites_) c_.emitLine(pw147w.setter);
+        if (guard102) {
+            c_.emitLine("}");
+        }
+        // 账 #305 §11.149 (第一百六十七刀): String 那一档临时量的归还。
+        // 放在守卫**外**: 守卫没放行时调用被跳过, 临时量里仍是 prop_get 新分配的那枚串,
+        // 更得退。标量五档没有这一行。
+        for (auto& pw149 : comPropWrites_) {
+            if (!pw149.release.empty()) c_.emitLine(pw149.release);
+        }
+        // 第一百零五刀 (§11.83): 聚合实参临时量的归还。守卫没放行时它仍是空的，
+        // vb6_VariantClear 对空值是一次空转，故无条件发。
+        for (size_t i105 = 0; i105 < stmtCallArgVarTemps_.size(); i105++) {
+            c_.emitLine("vb6_VariantClear(&" + stmtCallArgVarTemps_[i105] + ");");
         }
 
         // M22: ANSI临时变量释放由emitStmtList统一处理, 此处不再单独清理

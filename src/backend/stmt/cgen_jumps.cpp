@@ -48,6 +48,33 @@ void CCodeGen::visit(GoToStmt& node) {
     // 只定义一份, 加后缀会指向不存在的 vb6_label_X_dN → C2094 (cZipArchive 事件取消出口)。
     // Fix 092b: 后缀归一到 forSplitLabelSuffix (与 LabelStmt 同一出口, 支持嵌套拆分)。
     std::string lblSuffix = forSplitLabelSuffix(Symbol::toLower(node.labelName));
+    // 账 #305 §11.116 五 (第一百四十一刀): `GoTo` 跳出 With 块时, 本块自己造的载体要先退。
+    // 载体变量就声明在 With 体内 —— 走到这条 `GoTo` 时它仍在作用域里 (与 Exit 那几臂同理);
+    // 跳出去之后块尾那句放手永远跑不到, 不退就活到进程结束。
+    // 层深表是过程入口预先扫好的 (见 collectLabelWithDepth); 查不到就不发 —— 宁少退不多退。
+    auto itDepth141 = labelWithDepth_.find(Symbol::toLower(node.labelName));
+    if (itDepth141 != labelWithDepth_.end()) {
+        int targetDepth141 = itDepth141->second;
+        int curDepth141 = (int)withObjectInfoStack_.size();
+        for (int i = curDepth141 - 1; i >= targetDepth141 && i >= 0; --i) {
+            if (i >= (int)withObjectVars_.size()) continue;
+            const WithObjInfo& fr141 = withObjectInfoStack_[i];
+            if (!fr141.ownsCarrier && fr141.carrierClass.empty()) continue;
+            const std::string& tv141 = withObjectVars_[i];
+            if (!fr141.carrierClass.empty()) {
+                c_.emitLine("if (" + tv141 + ") vb6_cls_" + cIdent(fr141.carrierClass) + "_Release(" +
+                            tv141 +
+                            ");  /* 账 #305 §11.116 五: GoTo 出 With 块, 本块自己造的类实例 */");
+                continue;
+            }
+            c_.emitLine("vb6_ReleaseObject((void**)&" + tv141 +
+                        ");  /* 账 #305 §11.116 五: GoTo 出 With 块, 本块自己造的那一枚 */");
+            if (fr141.ownerSlot >= 0) {
+                c_.emitLine("_vb6_own[" + std::to_string(fr141.ownerSlot) +
+                            "] = 0;  /* §11.119: GoTo 出块注销 */");
+            }
+        }
+    }
     c_.emitLine("goto vb6_label_" + cIdent(node.labelName) + lblSuffix + ";");
 }
 
@@ -80,6 +107,23 @@ void CCodeGen::visit(OnErrorStmt& node) {
             c_.indent();
             if (hasResume_) {
                 c_.emitLine("vb6_err_in_handler = 0;");
+            }
+            // 账 #305 §11.119 (第一百三十九刀): 错误落点按名册逐枚放手。
+            // 启用条件已经保了「本过程一句 `Resume` 都没有」—— 那种 handler 回不到块内,
+            // 所以此刻还登记着的每一枚载体都是真的死了。`vb6_ReleaseObject` 自己置空,
+            // 未登记 / 已出块注销 / 已退过的槽都是 0, 天然跳过。
+            if (hoistOwnActive_) {
+                for (int own139 = 0; own139 < hoistOwnN_; ++own139) {
+                    // 账 #305 §11.119 四.4 (第一百四十二刀): 工程类那一档的槽里存的是
+                    // `vb6_cls_X` 实例, 不能用 `vb6_ReleaseObject` (那是 COM 槽的放法) ——
+                    // 登记时把类自己的 `vb6_cls_X_Release` 地址也存进 `_vb6_ownRel[k]`,
+                    // 落点按它放手。别的一档该槽是 0, 照旧走 `vb6_ReleaseObject`。
+                    const std::string k = std::to_string(own139);
+                    c_.emitLine("if (_vb6_own[" + k + "]) { if (_vb6_ownRel[" + k +
+                                "]) { _vb6_ownRel[" + k + "](*_vb6_own[" + k +
+                                "]); *_vb6_own[" + k + "] = 0; } else vb6_ReleaseObject(_vb6_own[" + k +
+                                "]); }  /* 账 #305 §11.119: 落点放手 (handler 无 Resume) */");
+                }
             }
             c_.emitLine("goto vb6_label_" + cIdent(node.labelName) + ";");
             c_.dedent();
@@ -145,6 +189,34 @@ void CCodeGen::visit(ErrorStmt& node) {
     c_.emitLine("vb6_RaiseError(" + errNum + ", NULL);");
 }
 void CCodeGen::visit(ExitStmt& node) {
+    // 账 #305 §11.116 (第一百三十四刀): 从 `With New …` 体内 `Exit` 出去时，先把这块自己造的
+    // 那枚载体放手（§11.115 留在册的那一格）。
+    // 载体声明就在 With 体内那一层 ⇒ 走到这条 Exit 时它仍然在作用域里；而且`goto`
+    // 一出块就没人再问它 —— 不在这里退，它就活到进程结束。
+    // 只认信息栈上盖过印的那几帧（借用型 / 窗体默认实例 / 工程类 New 一概不发）；
+    // 内层先退（栈顶往下）。`vb6_ReleaseObject` 自己置空 ⇒ 与块尾那一发不会二次退。
+    auto emitWithCarrierReleaseOnExit134 = [&]() {
+        for (int i = (int)withObjectInfoStack_.size() - 1; i >= 0; --i) {
+            const WithObjInfo& fr134 = withObjectInfoStack_[i];
+            if (!fr134.ownsCarrier && fr134.carrierClass.empty()) continue;
+            if (i >= (int)withObjectVars_.size()) continue;
+            const std::string& tv134 = withObjectVars_[i];
+            if (!fr134.carrierClass.empty()) {
+                // §11.117 (第一百三十五刀): `With New <工程类>` 的载体归类自己的 _Release。
+                c_.emitLine("if (" + tv134 + ") vb6_cls_" + cIdent(fr134.carrierClass) + "_Release(" +
+                            tv134 +
+                            ");  /* 账 #305 §11.117: Exit 出 With 块，本块自己造的类实例 */");
+                continue;
+            }
+            c_.emitLine("vb6_ReleaseObject((void**)&" + tv134 +
+                        ");  /* 账 #305 §11.116: Exit 出 With 块，本块自己造的那一枚 */");
+            // §11.119: 退完一枚就把名册槽位清 0 (见 cgen_with 块尾那一发)。
+            if (fr134.ownerSlot >= 0) {
+                c_.emitLine("_vb6_own[" + std::to_string(fr134.ownerSlot) +
+                            "] = 0;  /* §11.119: Exit 出块注销 */");
+            }
+        }
+    };
     switch (node.exitKind) {
         case ExitKind::Do:
         case ExitKind::For: {
@@ -167,16 +239,19 @@ void CCodeGen::visit(ExitStmt& node) {
             // Fix <vbeclipse>: 不能发裸 `return;` —— 那会越过过程尾部的
             // vb6_RestoreErrState()/ivref Release (错误处理状态泄漏 → 之后
             // vb6_ErrRaise 的 longjmp 打进已失效栈帧 → 野读崩)。统一走过程出口标签。
+            emitWithCarrierReleaseOnExit134();
             c_.emitLine("goto vb6_proc_exit;");
             procExitLabelUsed_ = true;
             break;
         case ExitKind::Function:
+            emitWithCarrierReleaseOnExit134();
             c_.emitLine("goto vb6_proc_exit;");
             procExitLabelUsed_ = true;
             break;
         case ExitKind::Property:
             // Fix 181: Property Get 有返回值, 出口处装回 vb6_ret_<name>;
             // Property Let/Set 无返回值。两者都在统一出口发 return (见 decl_proc/func/prop 尾部)。
+            emitWithCarrierReleaseOnExit134();
             c_.emitLine("goto vb6_proc_exit;");
             procExitLabelUsed_ = true;
             break;

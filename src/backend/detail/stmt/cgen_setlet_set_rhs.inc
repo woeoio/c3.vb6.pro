@@ -7,6 +7,10 @@
     // 语义 = 把对象引用存进 Variant (拷贝/FromValue), 而非提取对象到 typed 指针.
     std::string checkName = target;
     if (checkName.substr(0, 4) == "me->") checkName = checkName.substr(4);
+    // Fix 025: 单字母形参的 `(*x)` 不在这里剥 (下面是 4 字符的严格长) —— 剥壳必须看**声明档**:
+    // 工程类出参槽 `(*p)` 也是这个形状, 剥了就会被当成 Variant 容器、把 §B218 腿②' 那位主人抢走
+    // (第一百一十一刀 A/B 实测: 只按长度剥 ⇒ B187d/B445 两行发码各短 72/3 字节)。
+    // 真要认的那一形 (声明确实为 Variant 的 `(*w)`) 由下面 derefVariant111 单独一问。
     if (checkName.size() > 4 && checkName[0] == '(' && checkName[1] == '*'
         && checkName.back() == ')') {
         checkName = checkName.substr(2, checkName.size() - 3);
@@ -27,6 +31,54 @@
         && classVariantFields_.count(targetLower) > 0) {
         targetIsVariant = true;
     }
+    // 第一百一十刀 (§11.91): 类字段的 Variant 槽 —— 从**类外面**写 (`Set c.f = …`) 时,
+    // 字段读那一站给目标拼了一枚尾注, checkName 于是带注释, 上面三条按名判定全落空 ⇒
+    // 目标被当 typed 槽: 既不装箱也不守卫, 直接发 `c->f … = vb6_ComGetObjectProp(o, …)`
+    // ⇒ C2440 (void* → vb6_VARIANT)。真机 P 族: P1 (c.f, 类外) / P2 (me->f, 类内)
+    // 都 = 111 / 438 —— 字段一个字不动; P3/P4 控制格必须落槽。
+    // 判据问工程级那张类字段表 (§B168 同一问句: 字段档 + 方法/属性否决), **不认文本**。
+    bool classVarFieldSlot110_ast110 = false;
+    if (node.target && node.target->kind == ASTNodeKind::MemberAccessExpr) {
+        auto& maT110 = static_cast<MemberAccessExpr&>(*node.target);
+        const std::string clsT110 = maT110.object ? inferClassTypeOfExpr(*maT110.object)
+                                                 : std::string();
+        if (!clsT110.empty()
+            && resolveClassMemberCall(clsT110, maT110.memberName).empty()
+            && classFieldIsVariantSlot(clsT110, maT110.memberName)) {
+            classVarFieldSlot110_ast110 = true;
+        }
+    }
+    if (classVarFieldSlot110_ast110) targetIsVariant = true;
+    // 类内那一形 (`Set f = …` 在类模块里) 的 AST 是裸 IdentifierExpr, 发码是 `me->f` ——
+    // 上面那条只认 MemberAccessExpr, 所以这里补上「`me->` + 类字段表」那一条腿
+    // (与 Fix 091p 同一张表, 不认文本)。
+    const bool classVarFieldSlot110 =
+        classVarFieldSlot110_ast110
+        || (target.rfind("me->", 0) == 0 && classVariantFields_.count(targetLower) > 0);
+    if (classVarFieldSlot110) targetIsVariant = true;
+    // 第一百一十一刀 (§11.93): 真机 Q1 `Set w = o.NoSuchProperty`（w = ByRef Variant 形参）
+    // 的目标文本是 `(*w)`，恰好 4 个字符 —— 上面那句 `size() > 4` 的剥壳恰好不成立，
+    // 目标名带着星号去查表 ⇒ 当 typed 槽发 `(*w) = vb6_ComGetObjectProp(...)`（C2440）。
+    // 这里单开一问，剥壳只在**声明确实为 Variant**时生效：
+    //   ① 名字在 Variant 表里，不在对象 / 带类型 COM 表里；
+    //   ② AST 答得出类名就否决 —— 工程类出参槽 `(*p)`（`p As B187Good`）就是这一形，
+    //      与 `class_refcount_authority` 点名那个「出参槽类名问句只许 4 处」的口径也一致
+    //      （那一问不在这一站重问一次）。
+    bool derefVariant111 = false;
+    if (target.compare(0, 2, "(*") == 0 && target.back() == ')') {
+        const std::string inner111 = target.substr(2, target.size() - 3);
+        if (!inner111.empty() && inner111.find_first_of(" ()->.") == std::string::npos) {
+            std::string low111 = inner111;
+            std::transform(low111.begin(), low111.end(), low111.begin(), ::tolower);
+            derefVariant111 = knownVariantVars_.count(low111) > 0
+                && !knownObjectVars_.count(low111)
+                && !knownTypedComVars_.count(low111)
+                && (!node.target || inferClassTypeOfExpr(*node.target).empty());
+        }
+    }
+    if (derefVariant111) targetIsVariant = true;
+    if (std::getenv("C3_DBG_VSET110") && classVarFieldSlot110)
+        std::cerr << "[VSET110-DET] tgt=" << target << std::endl;
     // Fix 084n: UDT 的 Variant 字段 (如 ZipFileInfo.SourceFile As Variant)
     // Set .SourceFile = obj → 也需 vb6_VariantFromValue 包装对象指针 (void*→vb6_VARIANT C2440)
     // ai/022 B08f-1 (D37): 但 `As <项目类>` 的 UDT 字段在语义层**也**记成 Variant，而它在 C 里是
@@ -252,6 +304,26 @@
                 return itV != classVoidFieldMap_->end()
                     && itV->second.count(targetLower) > 0;
             }
+            // 账 #305 §11.104 (第一百二十二刀): 声明档是**工程类**的槽不是泛对象槽。
+            // 逼出这一问的是实测 (.temp/k122/shape): knownObjectVars_ 里混着别的类的
+            // `As Object` **字段名** (未限定), 局部名一旦撞上就误答 ——
+            //   Dim k1 As FC : Set k1 = New FC  ⇒ k1 = Unbox(FC_New())                (对)
+            //   Dim b  As FC : Set b  = New FC  ⇒ b = Unbox(FromInstance(desc, FC_New()))
+            // 后者把**拥有型包装器**写进 vb6_cls_FC* 槽: 包装器再没有主人 (槽里装的是裸实例),
+            // 而 vb6_cls_FC_Release 见 me->__comObj 非空就 "wrapper owns teardown" 直接返回
+            // ⇒ 实例永久存活 (.temp/k122/fieldprobe 的 C0 臂: seed=31 全程无 Terminate)。
+            // 另两臂读数同形但无害: 包装器带 __comObj 后类 Release 不再拆 (读法同上)。
+            // 问 AST 而不是名字表: 拿不到类名时 (As Object / Variant) 照旧落到下面那条。
+            if (node.target && !inferClassTypeOfExpr(*node.target).empty()) return false;
+            // 账 #305 §11.105 (第一百二十三刀): **非 me 接收者**的成员访问对象槽 —— `q.O`
+            // (q 是局部/形参/模块级工程类变量) 与 With 体的 `_vb6_with_N->O`。
+            // 实测 (.temp/k122/fieldprobe FProbe6): 不加这一臂时 `Set x.A = y`(y 是声明档
+            // FC 局部) 把裸 vb6_cls_FC* 直写进 void* 槽 ⇒ `TypeName(x.A)` 答 "Object"
+            // (VB6 答 "FC"), 且槽里拿不到 IDispatch, 晚绑定成员调用必落空。
+            // 判据复用发码自带的标记而不另开名单: `field voidptr` 只由成员读的 void* 字段
+            // 那一支追加 (cgen_expr_member_class_fallback.inc); 外部 COM 字段进装箱站后会被
+            // classHasCoClassDesc / 已有包装器两道闸挡回, 行为不变。
+            if (targetLower.find("field voidptr") != std::string::npos) return true;
             return knownObjectVars_.count(targetLower) > 0;
         };
 
@@ -370,7 +442,27 @@
             (target.compare(0, 7, "VB6_SA_") == 0
              && target.find("(vb6_VARIANT,") != std::string::npos);
         if (targetIsVariantArraySlot) {
-            c_.emitLine("vb6_VariantAssign(&" + target + ", " + value + ");  /* Set */");
+            // 第一百零九刀 (§11.89): 真机 N1 `Set va(0) = o.NoSuchProperty` ⇒ `va(0)=111` err=438
+            // （目标一个字都不写）。这一支以前直接发 `vb6_VariantAssign(&<slot>, <boxed>);  /* Set */`，
+            // 缺读报 438 之后照样把槽清成空值（本机旧读数 `va(0)=`）。
+            // 与赋值位/Set 裸变量位同一条规则；槽是**借来**的存储 ⇒ 仍走 VariantAssign（深拷贝），
+            // 临时量自有时才自己收回（Dispatch 的 AddRef 一进一出，账是平的）。
+            if (node.value && exprHasLateBoundComRead(node.value.get())) {
+                const std::string gv109 = "_e" + std::to_string(stmtAbortSeq_++);
+                const std::string tv109 = "_vs" + std::to_string(tempCounter_++);
+                const bool owns109 = variantRhsOwnsValue(node.value.get(), value);
+                if (std::getenv("C3_DBG_VSET108"))
+                    std::cerr << "[VSET109] slot tgt=" << target << std::endl;
+                c_.emitLine("const int32_t " + gv109 + " = vb6_ErrSerial();");
+                c_.emitLine("vb6_VARIANT " + tv109 + " = vb6_VariantEmpty();");
+                c_.emitLine("if (" + gv109 + " == vb6_ErrSerial()) { " + tv109 + " = " + value
+                            + "; }");
+                c_.emitLine("if (" + gv109 + " == vb6_ErrSerial()) { vb6_VariantAssign(&" + target
+                            + ", " + tv109 + "); }");
+                if (owns109) c_.emitLine("vb6_VariantClear(&" + tv109 + ");");
+            } else {
+                c_.emitLine("vb6_VariantAssign(&" + target + ", " + value + ");  /* Set */");
+            }
         } else if (target.rfind("vb6_Extender_", 0) == 0) {
             /* Fix 296 / 3a 的**镜像**, 但走的是**另一条**发码路径: Property Set 存取器体
                (`Public Property Set Container(ByVal Value As Object)`) 的那句赋值由
@@ -389,7 +481,61 @@
             // 不清空, 别的过程里同名的类局部会漏进来 (VbEclipse ucPerspective.Refresh:
             // `Dim l_ucFolder As Variant` 拿到 ClosePerspective 的同名 `As ucFolder` ⇒
             // `vb6_cls_ucFolder* __clsold = l_ucFolder;` = cl C2440 + AddRef(C2172/C2083))。
-            c_.emitLine(target + " = " + value + ";  /* Set */");
+            // 第一百零八刀 (§11.87): 真机 M2 `Set v = o.NoSuchProperty` ⇒ `v=111` err=438
+            // （目标一个字都不写）。Set 这一站以前直接发 `v = <boxed>;  /* Set */`，
+            // 缺读报 438 之后照样把空值塞进 v（本机旧读数 `v=`）。
+            // 只接**裸变量**目标（`v`）——数组元素那一支在上面先走了（未量，不猜）；
+            // `me->字段` / UDT 字段槽 / 解引用形同样未量，仍走下面的原路。
+            // 第一百一十一刀 (§11.93): 真机 Q1/Q3 = 111/438 —— 「解引用槽 `(*w)`」与
+            // 「With 块 / UDT 走 `->` 的字段槽」同样是一处**真存储**, 与裸变量同一条规则:
+            // 读数失败 ⇒ 槽里一个字不动。旧判据把「含 ( 或 ->」一律排到裸赋那条路 ——
+            // 后果就是本刀那两格 (Q3 槽被清空、Q1 连装箱都没有)。
+            // 判据改成「目标是不是一次**纯粹的左值求值**」: `(*w)` 与「`->` 前没有括号」
+            // 两形都纯; 只把**带函数调用**的目标 (`Add(…)->Image`, 求值两次有副作用)
+            // 留在原路。
+            const bool pureLvalue111 = [&]() -> bool {
+                if (target.compare(0, 2, "(*") == 0 && target.back() == ')')
+                    return target.find(')', 2) == target.size() - 1;
+                const size_t mem111 = target.rfind("->");
+                const size_t lp111 = target.find('(');
+                return lp111 == std::string::npos
+                    || (mem111 != std::string::npos && lp111 > mem111);
+            }();
+            const bool plainVar108 = target.compare(0, 7, "VB6_SA_") != 0 && pureLvalue111;
+            // 第一百一十刀 (§11.91): 类字段 Variant 槽 —— 真机 P1/P2 与裸变量位同一条规则
+            // (读数失败 ⇒ 槽里一个字不动); P3/P4 控制格必须落槽。槽是**真存储**, 覆写前
+            // 先退旧值 (以前 me-> 那一形连旧值都不退, 只发一句裸 `me->f = <boxed>`)。
+            // 守卫两枚成功时临时量是**移**进槽里的 ⇒ 不自己收回。
+            if (classVarFieldSlot110) {
+                if (node.value && exprHasLateBoundComRead(node.value.get())) {
+                    const std::string gv110 = "_e" + std::to_string(stmtAbortSeq_++);
+                    const std::string tv110 = "_vs" + std::to_string(tempCounter_++);
+                    if (std::getenv("C3_DBG_VSET110"))
+                        std::cerr << "[VSET110] class field tgt=" << target << std::endl;
+                    c_.emitLine("const int32_t " + gv110 + " = vb6_ErrSerial();");
+                    c_.emitLine("vb6_VARIANT " + tv110 + " = vb6_VariantEmpty();");
+                    c_.emitLine("if (" + gv110 + " == vb6_ErrSerial()) { " + tv110 + " = "
+                                + value + "; }");
+                    c_.emitLine("if (" + gv110 + " == vb6_ErrSerial()) { vb6_VariantClear(&"
+                                + target + "); " + target + " = " + tv110 + "; }");
+                } else {
+                    emitVariantSlotStore(target, value,
+                                         variantRhsOwnsValue(node.value.get(), value), false);
+                }
+            } else if (plainVar108 && node.value && exprHasLateBoundComRead(node.value.get())) {
+                if (std::getenv("C3_DBG_VSET108"))
+                    std::cerr << "[VSET108] tgt=" << target << std::endl;
+                const std::string gv108 = "_e" + std::to_string(stmtAbortSeq_++);
+                const std::string tv108 = "_vs" + std::to_string(tempCounter_++);
+                c_.emitLine("const int32_t " + gv108 + " = vb6_ErrSerial();");
+                c_.emitLine("vb6_VARIANT " + tv108 + " = vb6_VariantEmpty();");
+                c_.emitLine("if (" + gv108 + " == vb6_ErrSerial()) { " + tv108 + " = " + value
+                            + "; }");
+                c_.emitLine("if (" + gv108 + " == vb6_ErrSerial()) { vb6_VariantClear(&" + target
+                            + "); " + target + " = " + tv108 + "; }");
+            } else {
+                c_.emitLine(target + " = " + value + ";  /* Set */");
+            }
         } else {
             // 账 #305 §B218 (甲) 腿②: 目标是一格 typed 工程类槽 ⇒ 走那位主人。
             // 类名两问按 #408 定的次序排: 先问 AST (作用域感知), 落空才问按名那张表。
@@ -531,8 +677,49 @@
                    子文字（小一号字体）与粗体/下划线全静默失效。 */
                 c_.emitLine("vb6_UC_SetFont((void*)" + value
                             + ");  /* Set UserControl.Font (DC 字体) */");
+            } else if (slotIsLegacyIfaceView(targetLower)) {
+                /* 账 #305 §11.103 (第一百二十一刀): legacy 接口视图槽是**按值结构体**
+                 * (`vb6_iface_<I> view = {0};`) —— 不是指针。三步那条写法要取址
+                 * (`(void**)&view`) 与 void* 互转 ⇒ cl C2440 (实测夹具 k481_sat / SatWorker.c:
+                 * "cannot convert from 'vb6_iface_SatIface' to 'void *'")。
+                 * 这一档维持裸拷贝, 与改前一字不差; 视图的引用归属另有主人 (腿②)。 */
+                c_.emitLine(target + " = " + value + ";  /* Set (legacy 接口视图 = 按值结构体) */");
             } else {
-                c_.emitLine(target + " = " + value + ";  /* Set */");
+                /* 账 #305 §11.103 (第一百二十一刀, 乙): 兜底那条裸拷贝 = **只拷指针**。
+                 * 实测 (.temp/k121/typeprobe): `Set s1 = New TofC : Set s2 = s1` 发成
+                 * `s2 = s1;` 不取引用, 随后 `Set s1 = Nothing` 就 vb6_ReleaseObject 把
+                 * 唯一那一枚退掉 ⇒ s2 悬垂 (Label="" seed=0 + C3_LATEBIND_MISS
+                 * notdispatchable); 三槽同理, 第一枚清掉即销毁。旧值还另有第二面:
+                 * 槽里有值时再 Set 一次 = 裸覆写不退 => 泄漏。
+                 * VB6 口径三步, 顺序是硬口径 (先取新的再退旧的 ⇒ `Set a = a` 安全):
+                 *   取引用 -> 退旧 (置 NULL) -> 写新的
+                 * 两枚闸都在 RTL 里: vb6_ComAddRefDispatch / vb6_ReleaseObject 都先问
+                 * vb6_ComIsDispatchable (HWND / 裸工程实例指针 / 伪 vtable 全被跳过),
+                 * 于是裸拷贝原有的那几档行为一字不变, 只有真 COM/包装器才计数。 */
+                const std::string refTmp = "_vref" + std::to_string(refClaimSeq_++);
+                /* 取引用那一半有前提: 右值若**自带一枚对价引用** (New / 调用形态 /
+                 * 新建包装器 `vb6_ComObject_From*Instance(...)`), 那枚就是交给槽的,
+                 * 再 claim = 每发净 +1 ⇒ 槽清空也退不到 0 (实测第一版全局 AddRef:
+                 * 探针 Tof 全场 term=0, 连 `Set q = New TofC : Set q = Nothing` 都不销毁)。
+                 * 所以只对**裸槽标识符**(拷的是持有者的那一枚)取引用; 退旧那一半对所有
+                 * 形状都做 (槽里的旧值就是槽自己的那一枚)。 */
+                const bool rhsOwned =
+                    rhsTransferred
+                    || (node.value && node.value->kind == ASTNodeKind::IndexOrCallExpr)
+                    || value.find("vb6_ComObject_From") != std::string::npos
+                    /* 账 #305 §11.127 (第一百四十六刀): `Set x = <晚绑定对象>.<属性>` —— 初始化器
+                     * 发 `vb6_ComGetObjectProp(o, L"Prop")`。RTL 契约写死「取走 pv->pdispVal 之后
+                     * 只 vb6_ComVarFree(pv), 对象引用已转移给调用方」⇒ 槽拿走的就是交回的那一枚,
+                     * 再 AddRef = 每发净 +1 (实测 .temp/k146/probe: `Set c = o.Fresh : Set c = Nothing`
+                     * 之后 terms 仍 0 —— 新造的实例永不销毁)。与 §11.126 的 With 四口同一口径、
+                     * 同一座桥, 只是主人从 With 临时量换成槽自己。 */
+                    || value.rfind("vb6_ComGetObjectProp(", 0) == 0
+                    || value == "NULL";
+                c_.emitLine("{ void* " + refTmp + " = (void*)(" + value + "); "
+                            + (rhsOwned ? std::string() : ("vb6_ComAddRefDispatch(" + refTmp + "); "))
+                            + "vb6_ReleaseObject((void**)&" + target + "); "
+                            + target + " = " + refTmp
+                            + "; }  /* Set: 取引用 + 退旧值 (VB6 引用计数口径) */");
             }
         }
     }

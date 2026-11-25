@@ -5,8 +5,11 @@
 #   R2  服务端只在收尾之前调一次，且顺序钉死：那一句的行号必须小于
 #       `vb6_VariantSlotRelease(&((vb6_VarSlot*)coercedArgs)` 那一句。
 #   R3  入槽那一臂必须按 pointee 的类型搬值：`vb6_VariantBorrowIntoSlot` 函数体内
-#       `case VT_I4/VT_I2/VT_R8/VT_R4/VT_BOOL/VT_UI1:` 恰 6 条 —— 少一条就是某一档又去读指针了。
-#   R4  出站回写认同一组六档：`vb6_ByRefScalarWriteBack` 函数体内同样恰 6 条。
+#       `case VT_I4/VT_I2/VT_R8/VT_R4/VT_BOOL/VT_UI1/VT_BSTR:` 恰 7 条 —— 少一条就是某一档又去读指针了。
+#       (VT_BSTR 那一档是 §11.143 第一百六十一刀补的: 数值搬值, 字符串搬**副本** —— 体里一句
+#        `x = x & "-ok"` 会先 SysFreeString 掉 `*x`, 那就是调用方那枚串。)
+#   R4  出站回写认同一组七档：`vb6_ByRefScalarWriteBack` 函数体内同样恰 7 条 (VT_BSTR 那一臂
+#       是所有权转移 + 退对端旧串, 交出去后槽置空)。
 #   R5  夹具三件都在：类（`Bump(ByRef v As Long)` 里 `v = v + 1`）、CoClass 块、vbp 的 Class= 行。
 #   R6  判据已进门禁：`b231_byref_scalar` 恰 2 格（x64 + x86），探针 `BYREFARG=` / `BYVALARG=` 各 1 处 dispatch。
 #
@@ -70,8 +73,8 @@ $lnCall = Line-Of $srvC 'vb6_ByRefScalarWriteBack\('
 $lnRel  = Line-Of $srvC 'vb6_VariantSlotRelease\(&\(\(vb6_VarSlot\*\)coercedArgs\)'
 if (($lnCall -gt 0) -and ($lnRel -gt 0) -and ($lnCall -lt $lnRel)) { $orderOk = 1 } else { $orderOk = 0 }
 Expect 'R2_writeback_before_release' $orderOk 1 ("回写须在收尾之前 (call=" + $lnCall + " release=" + $lnRel + ")")
-Expect 'R3_inbound_switch'  (Count-InFunc $comC 'void vb6_VariantBorrowIntoSlot(' 'case VT_(I4|I2|R8|R4|BOOL|UI1):') 6 '入槽那一臂六档各一条'
-Expect 'R4_outbound_switch' (Count-InFunc $comC 'void vb6_ByRefScalarWriteBack(' 'case VT_(I4|I2|R8|R4|BOOL|UI1):') 6 '出站回写认同一组六档'
+Expect 'R3_inbound_switch'  (Count-InFunc $comC 'void vb6_VariantBorrowIntoSlot(' 'case VT_(I4|I2|R8|R4|BOOL|UI1|BSTR):') 7 '入槽那一臂七档各一条'
+Expect 'R4_outbound_switch' (Count-InFunc $comC 'void vb6_ByRefScalarWriteBack(' 'case VT_(I4|I2|R8|R4|BOOL|UI1|BSTR):') 7 '出站回写认同一组七档'
 Expect 'R5_fixture_class'   (Count-InFile $fxCls 'Public Function Bump\(ByRef v As Long\) As Long') 1 '夹具那一枚方法'
 Expect 'R5_fixture_coclass' (Count-InFile $fxBas 'Implementation\("ByRefCls"\)') 1 'CoClass 块'
 Expect 'R5_fixture_vbp'     (Count-InFile $fxVbp 'Class=ByRefCls; ByRefCls.cls') 1 'vbp 的 Class= 行'

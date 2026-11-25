@@ -279,6 +279,7 @@ static inline void vb6_BSTR_Assign(BSTR* target, BSTR source) {
     }
 }
 
+// 第九十九刀 (C30-11): 晚绑定成员读交回的 BSTR —— 调用已经发生（可能已报 438）。
 // BSTR连接
 BSTR vb6_BSTR_Concat(BSTR a, BSTR b);
 
@@ -299,6 +300,19 @@ static inline void vb6_BSTR_AssignMove(BSTR* target, BSTR source) {
         if (*target != source) vb6_BSTR_Free(*target);
         *target = source;
     }
+}
+
+// 第九十九刀 (C30-11 §11.77): 晚绑定成员读交回的 BSTR —— 调用已经发生（可能已报 438）。
+// 序号变了 ⇒ 语句中止：**目标一字不动**，把这枚串放掉；否则按转移所有权写入。
+// 真机读数 (.temp/k93/vb6probe F6): `s2 = o.NoSuchStringProperty` ⇒ s2 仍是 keep、err=438。
+// 改前本仓报 438 之后仍把 s2 清成 ""（错误号对了、值被清）。
+// 必顶在 vb6_BSTR_AssignMove 之后：放前面会被当隐式声明（C2371 重定义）。
+static inline void vb6_BSTR_AssignMoveIfOk(BSTR* target, BSTR source, int32_t serialBefore) {
+    if (serialBefore == vb6_ErrSerial()) {
+        vb6_BSTR_AssignMove(target, source);   /* 正常：转手写进目标 */
+        return;
+    }
+    if (source) vb6_BSTR_Free(source);         /* 语句已中止：放掉交回的串，目标一字不动 */
 }
 
 // BSTR长度 (返回字符数, 非字节数)

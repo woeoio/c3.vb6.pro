@@ -39,6 +39,13 @@
         std::transform(argLower.begin(), argLower.end(), argLower.begin(), ::tolower);
         auto udtIt = knownUdtVars_.find(argLower);
         if (udtIt != knownUdtVars_.end()) {
+            // C30-11 第九十六刀: LenB(<整枚 UDT>) **刻意不折**，保留 sizeof。
+            //
+            // 真机读数 A8/A10 是 10/16（定长串按 UTF-16、2N），而 C3 的 UDT 定长串是按
+            // **ANSI 内联** 存的（cgen_decl 那支 `char f[N]`，与 SHFILEINFO 那个真机 "Len = 352"
+            // 同一条 ABI 选择）。真机里 UDT 实打实就是 2N 字节，报 692 是安全；C3 里它只有 N 字节，
+            // 报 2N 会让 `cbSize = LenB(u)` 这类 Idiom 越过自己的对象底（语法钉 tests/test_declare_shadows_builtin
+            // 就是这一形：GetObjectA 的 cbSize）。所以这一格选择「与自己的存储一致」，差异登记在台账。
             lastExpr_ = "(int32_t)sizeof(" + udtIt->second + ")";
             return;
         }

@@ -560,15 +560,25 @@ function Get-RunBudgetSec {
 # 值 = 精确条数 (不是开关: 多一条少一条都红 —— 「负控必须恰好响一次」本身就是判据)。
 $LateBindMissAllow = @{
     'B446' = 1        # tests/b446_latebind —— 负控: Nothing 接收者必须恰好响一次
-    # 下面三行是**已知缺口**的精确条数 (不是「可以随便漏」的白名单) ——
+    # 下面那一行（B190）是**已知缺口**的精确条数 (不是「可以随便漏」的白名单) ——
     # 每一行都要写清是哪个缺口、哪几处、为什么这一刀不修。
     # 条数一变就红 ⇒ 逼着人回来改数字并说明 (门 #40495973903 四条红的归因)。
-    # 账 #412: 工程类实例经 As Object 形参 => 无 IDispatch (kind=notdispatchable)。
-    # 4 处缺口, 每处各响两行 (DispView 那一档 + ComGetProp 那一档) ⇒ 精确 8 行。
-    # 旧值 4 是「缺口处数」, 后来 RTL 把接收者视图那半也打了标记, 行数翻倍而表没跟。
-    'B190' = 8
-    'czFormDemo' = 3 # 控件的 Font 伪对象还没实现 => txtEmbed.Font 为空 (kind=null)
-    'Proyecto1' = 67 # VB6 内建运行时对象没有 IDispatch 包器: 45 x Collection.Add + 22 x StdFont.Size (kind=null)
+    # 第一百一十八刀 (§B217): B190 8 -> 0（条目删掉 = 期望恰 0）。
+    # 旧读数 8 = 4 处缺口 × 2 行（DispView + ComGetProp）：`As Object` 形参收工程类实例时
+    # 发的是裸 `vb6_cls_B190A*`，vb6_ComIsDispatchable 判否 ⇒ kind=notdispatchable。
+    # 本刀把「可装箱」与「可对外创建」拆成两条判据（Symbol::isLateBindClass），
+    # 缺省 Instancing 的类也占一行 desc（progId 空 ⇒ 不注册），装箱腿这才敢包。
+    # 本机 x86 实测：8 -> 0；同一产物 12 个探针值全部落成
+    # P3/P4 A1、P9/P10 A-label、P6 Nothing、P7/P8/P11/P12 B190A/B190B。
+    # 同族 9 个夹具（b168..b173/b183/b184/b190_memberarray）本机也全绿、miss=0。
+    # 第一百一十六刀 (§11.98): Proyecto1 23 -> 0 / czFormDemo 3 -> 0（条目删掉 = 期望恰 0）。
+    # 两条旧读数的原形（都是宿主 Font 臂恒交 Empty，接收者 NULL）：
+    #   Proyecto1 23 条 = site=ComGetProp  name="Size"  disp=0  —— Charts2020/ClsResizer.cls:107
+    #                    `CallByName(oCtrl, "Font", VbGet).Size`
+    #   czFormDemo 3 条 = site=ComSetProp name="Name"/"Size"/"Bold" disp=0 —— txtEmbed.Font
+    # 本机 x86 同一产物、同样跑 8~10 秒实测：旧编译 23 / 3，新编译 0 / 0。
+    # 旧的 67 -> 23（第一百一十四刀）也跟着这轮出完：45 x Collection.Add 已在 §11.96 真落地。
+    # 当天 CI 实测读数 (Charts2020.err): miss=23 且 name 分组只有 "Size" 一项, 一个 Add 也没有。
     # GUISample 本机验收 (-Category guisample, 不入 CI 判据) 实测基线。
     # 旧值 3: ① CommandBars.EnableGroups ② 全局 Workspace.Flags ③ CommandBars.RefreshColors。
     # 2026-11-04 TabWorkspace 那条接通后 (ShowTabWorkspace 返回真对象, 不再是 Nothing),
@@ -4966,6 +4976,36 @@ if ($Category -in @("all", "run", "bas")) {
     Add-BasTest "test_m5" "$Tests\test_m5.bas"
     Add-BasTest "test_rtl" "$Tests\test_rtl.bas"
     Add-BasTest "test_array" "$Tests\test_array.bas" @("wa-clone=22", "wa-ub=3", "wa-str=65", "wa-rt=65", "=== Array Tests PASSED ===")
+    # 第一百一十二刀 (§11.94): 模块级 UDT 初始化 —— 零初始化语义（Variant=Empty / String="" /
+    # Long=0、嵌套同形）与模块级槽的 438 守卫（UDTMOD-6 与真机 probe111 Q2 逐字一致）。
+    Add-BasTest "test_udtmod" "$Tests\test_udtmod.bas" @(
+        "UDTMOD-1 VarType=0 IsEmpty=True IsNull=False",
+        "UDTMOD-2 uv.f=7 VarType=2",
+        "UDTMOD-3 nst.inner.f=[] nst.s=[] nst.n=0",
+        "UDTMOD-4 x|abc|42",
+        "UDTMOD-5 IsEmpty(pv.f)=True",
+        "UDTMOD-6 v=111 err=438",
+        "UDTMOD-7 isobj=True err=0",
+        "UDTMOD-DONE")
+    # 第一百一十三刀 (§11.95): 内建 Collection 的未知名成员 —— 真机 probe112 P3 = 438 且不写目标。
+    # 修前宿主模型对 Collection 任何未知成员 `return 1`（答了但没答），438 收口走不到。
+    Add-BasTest "test_collmiss" "$Tests\test_collmiss.bas" @(
+        "CM-1 count=1",
+        "CM-2 item=5",
+        "CM-3 v=[111] err=438",
+        "CM-4 count=1 err=0",
+        "CM-5 v=[222] err=438",
+        "COLLMISS-DONE")
+    # 第一百一十五刀 (§11.97): Collection 的**调用臂** —— Count / 空名默认成员 / 未知名 438。
+    # 真机 probe113: Q2 v=[1] err=0 VarType=3 / Q2b v=[5] err=0 / Q2c v=[111] err=438。
+    Add-BasTest "test_collcall" "$Tests\test_collcall.bas" @(
+        "CC-1 count v=[1] VarType=3",
+        "CC-2 item v=[5]",
+        "CC-3 v=[111] err=438",
+        "CC-4 count=1 err=0",
+        "CC-5 withitem=[7] count=1",
+        "CC-6 stmt err=438",
+        "COLLCALL-DONE")
     # <vbeclipse>: Array() 空数组那一形 (UBound=-1/LBound=0/For Each 零次) 与"未分配 →
     # 运行时错误 9"两形; 读数全取自真实输出。常量实参那形见 arr_n01_ubound_vbnull。
     Add-BasTest "test_arr_empty" "$Tests\test_arr_empty.bas" @("EA-ub=-1", "EA-lb=0", "EA-n=0", "EA-isarr=True", "EA-join=[", "EA-fe=0", "EA-vub=-1", "EA-3ub=2", "EA-e2=9", "EA-rb-lb=1", "EA-rb-ub=3", "EA-err=9", "EA-ea-nullread=9", "EA-ea-nullwrite=9",
@@ -5489,7 +5529,7 @@ if ($Category -in @("all", "run", "bas")) {
     # 发码形状针: 这一对行就是那枚出口的产物, 缺任何一行都是有人把「先清再搬」这个决定又改回一份。
     Test-EmitcShape "b164_slot_store_shape" @("$Tests\test_fe_slot_leak.bas") @(
         'vb6_VariantClear(&e);',
-        'e = vb6_VariantFromStackVARIANT(&_fe_var_0);',
+        'e = vb6_VariantFromStackVARIANT(&_fe_var_',   # §11.103: 下标是临时量计数器, 全局 Set 站点占号后会移 (实测 _fe_var_0 -> _fe_var_2)
         'vb6_VariantAssign(&e, vb6_VariantFromValue(VB6_SA_AT(BSTR, gArr, _fe_i5)));',
         'vb6_VariantAssign(&keep, vb6_VariantFromValue(e));'
     )
@@ -5524,11 +5564,15 @@ if ($Category -in @("all", "run", "bas")) {
         'x->vt->putref_owner(x, NULL);',
         'x->vt->put_item(x, 3, vb6_BSTR_FromStr(L"a"));',
         'vb6_BSTR_Assign(&s, x->vt->get_item(x, 3));',
-        'o = _vb6_with_0->vt->get_owner(_vb6_with_0);',
         'vb6_ivref_IK2947* vb6_ret_OwnView = 0;',
         'vb6_ret_OwnView = ((me) ? &(me)->__iv_IK2947 : NULL);',
-        'vb6_ivref_IK2947* _vb6_with_1 = vb6_mdl2947_MakeI()',
-        'vb6_ivref_IK2947* _vb6_with_2 = vb6_H2947_prop_get_OwnView(h)',
+        # §11.103 (第一百二十一刀): Set 兜底改成三步后占了一个临时量号 ⇒ 视图 With 那几枚
+        # _vb6_with_N / __iv* 的**序号**整体后移, 而变量名后面的形状一字未改。钉形状, 不钉序号。
+        'vb6_ivref_IK2947* _vb6_with_',
+        '= vb6_mdl2947_MakeI()  /* With object ref (视图值拷贝) */;',
+        '= vb6_H2947_prop_get_OwnView(h)  /* With object ref (视图值拷贝) */;',
+        '->vt->get_owner(_vb6_with_',
+        'vb6_ReleaseObject((void**)&o); o = _vref',
         'vb6_ret_ViaMe = __ivrecv',
         'vb6_ivref_IK2947* __ivrecv',
         '->vt->has(__ivrecv'
@@ -7661,14 +7705,23 @@ if ($Category -in @("all", "run", "vbp")) {
         'if (pNM42->code == -451 && (void*)pNM42->hwndFrom == vb6_hwnd_tv1) {',
         'vb6_TreeView_NotifyExpanded((void*)lParam) == -1',
         # 账 #88: 比较上下文里字符串成员必须按 BSTR 解包 (TV35 那条链式形态)。
-        'vb6_CStr(vb6_VariantFromValue(vb6_ComGetStringProp(vb6_ComCallObject(vb6_TreeView_Nodes(',
+        # 账 #305 §11.132: 接收者（ Nodes(i) 交回的那一枚）现在落成 `_rrvN` 再递一层，
+        # 语句末收回 —— 文本不再是嵌套调用；这两条钉的是「接收者=临时量」与它的来源。
+        'void* _rrv',
+        '= vb6_ComCallObject(vb6_TreeView_Nodes((void*)vb6_hwnd_tv1), L"Item", (void*[]){vb6_ComPackInt(2)}, 1);',
+        # 账 #305 §11.137 (第一百五十六刀): 字符串成员在**比较**上下文里的形状换成了
+        # `vb6_StrCmp(vb6_ComGetStringProp(_rrv…)` —— 以前是先把已验证的 BSTR 重新包成
+        # VARIANT 再 `vb6_CStr(...)` 折回串 (`vb6_CStr(vb6_VariantFromValue(...))`)。
+        # 现在 `vb6_ComGetStringProp(` 登记在 isBstrReturningCall 那张表里，直通给 StrCmp：
+        # 值仍是 RTL 内部 VariantChangeType(…, VT_BSTR) 的产物，一次多余的折叠没有了。
+        'vb6_StrCmp(vb6_ComGetStringProp(_rrv',
         # 同一条判据的选择性那一半: 数值成员走**数值档**，不许被改成 BSTR 档 ——
         # 它的作用是挡住"为了修字符串把两档一起改成 BSTR"那种反向过度修正。
         # C30-11 后记（遗留问题②）: 关系比较的晚绑定属性改按 Double 解封 ——
         # 真引擎读数 `drv.TotalSize > 0` = True（TypeName=Double/VarType=5），
         # 旧口径发 IntProp 会把 254 GB 截成 0 答 False。所以这里钉的是 DoubleProp，
         # int 档不再出现于关系比较（算术运算仍按 Long，未变）。
-        'vb6_ComGetDoubleProp(vb6_ComCallObject(vb6_TreeView_Nodes((void*)vb6_hwnd_tv1), L"Item", (void*[]){vb6_ComPackInt(2)}, 1), L"Index")',
+        'vb6_ComGetDoubleProp(_rrv',
         'vb6_CStrBool(vb6_TreeView_GetCheckBoxes('
     )
     Test-EmitcAbsent "tv_emitc_no_com_fallback" @("$Tests\ctrltreeview\TvfApp.vbp") @(
@@ -8716,13 +8769,13 @@ if ($Category -in @("all", "run", "vbp")) {
     # (真语料按产物 82 处 / 27 份文件, 最响的一族是 Do While Not rs.EOF = 死循环; 读数见第二百四十三刀)。
     # 七站各一枚正针: If / ElseIf / Do While / Do Until / Loop While / Loop Until / While Wend。
     Test-EmitcShape "b244_cond_truth_shape" @("$Tests\test_late_cond.bas") @(
-        'if (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-IF"))}, 1))) {',
-        'if (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-ELSEIF"))}, 1))) {',
-        'if (!(vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-DOWHILE"))}, 1)))) goto vb6_loop_exit_0;',
-        'if (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-DOUNTIL"))}, 1))) goto vb6_loop_exit_4;',
-        '} while (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-LOOPWHILE"))}, 1)));',
-        '} while (!(vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-LOOPUNTIL"))}, 1))));',
-        'if (!(vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-WHILE"))}, 1)))) goto vb6_loop_exit_10;'
+        'if (vb6_CondIfErr(_c0, (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-IF"))}, 1))))) {',
+        'if (vb6_CondIfErr(_c4, (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-ELSEIF"))}, 1))))) {',
+        'if (!(vb6_CondIfErr(_c5, (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-DOWHILE"))}, 1)))))) goto vb6_loop_exit_0;',
+        'if (vb6_CondIfNoErr(_c7, (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-DOUNTIL"))}, 1))))) goto vb6_loop_exit_4;',
+        'if (!(vb6_CondIfNoErr(_c8, (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-LOOPWHILE"))}, 1)))))) break;',
+        'if (vb6_CondIfErr(_c11, (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-LOOPUNTIL"))}, 1))))) break;',
+        'if (!(vb6_CondIfErr(_c12, (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-WHILE"))}, 1)))))) goto vb6_loop_exit_10;'
     )
     # 反面针: 改前那七形一形都不许再出现 (同一枚夹具、同一台编译器)。
     Test-EmitcAbsent "b244_cond_truth_lesion" @("$Tests\test_late_cond.bas") @(
@@ -8740,11 +8793,194 @@ if ($Category -in @("all", "run", "vbp")) {
     # 46 处 / 20 份文件, 是 82 处里最大一族; 最响的书写式就是 `Do While Not rs.EOF`)。
     # 现在真值位与值位同走 vb6_ComResultToNot (解引用 + 按档取值 + 收回那枚堆块)。
     Test-EmitcShape "b247_not_fold_shape" @("$Tests\test_late_cond.bas") @(
-        'if (vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-NOT"))}, 1))) {',
-        'if (vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"A"))}, 1))) {',
-        'x = vb6_ChkLong(vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"A"))}, 1)));',
-        'x = vb6_ChkLong(vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-VAL"))}, 1)));',
-        'if (!(vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"A"))}, 1)))) goto vb6_loop_exit_12;'
+        'if (vb6_CondIfErr(_c2, (vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-NOT"))}, 1))))) {',
+        'if (vb6_CondIfErr(_c13, (vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"A"))}, 1))))) {',
+        # 第一百刀 (§11.78): `x = Not d.Exists(...)` 是**值位置**的晚绑定读 —— 真机 G1/G2/G3/G6
+        # 都是「整句中止」，所以这两句现在套上守卫+临时量。钉的是**折叠那一截**（仍走
+        # vb6_ComResultToNot + vb6_ChkLong）与时状那一截（`? (<折叠>) : (int32_t)0;`），
+        # 不钉 _e/_av 的序号（那两枚会随同文件的其他语句漂）。
+        '? (vb6_ChkLong(vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"A"))}, 1)))) : (int32_t)0;',
+        '? (vb6_ChkLong(vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-VAL"))}, 1)))) : (int32_t)0;',
+        'if (!(vb6_CondIfErr(_c16, (vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"A"))}, 1)))))) goto vb6_loop_exit_12;'
+    )
+    # 第一百零二刀 (§11.80): 实参位上的归来绑定缺成员读。真机 I 族量到「命中即整句中止」:
+    # I1 `Call GTouch2(o.Bad, GFn())` = gHit=0 gN=0（坏实参之后的不再求值）,
+    # I2 `Call GTouch2(GFn(), o.Bad)` = gHit=0 gN=1（前面的照常求值）. C 的实参求值顺序
+    # **未定义**（MSVC 从右向左），所以得逐枚提升成临时量 + 每枚求值前比一次序号，
+    # 调用本身包在同一个守卫里。下面钉的就是这个形。
+    # 第一百零五刀 (§11.83): 聚合体（Variant）实参位。真机 K 族与 Long 槽（I 族）同一条规则:
+    # K1 gHit=0 / K2 gN=1 gHit=0 / K5 gHit=0 —— 命中即整句中止。聚合体不能 `= 0` 起手，
+    # 但 C 里 `vb6_VARIANT` 是可声明的: Empty 起手 + 深拷贝 + 调用后 Clear。
+    Test-EmitcShape "b250_vararg_guard_shape" @("$Tests\test_late_vararg.bas") @(
+        'if (_eg0 == vb6_ErrSerial()) { vb6_VARIANT _as2 = vb6_VariantFromValue(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))); vb6_VariantCopy(&_ag1, &_as2); }',
+        'vb6_GVar(_ag1);',
+        'vb6_VariantClear(&_ag1);',
+        'if (_eg3 == vb6_ErrSerial()) { _ag4 = vb6_GFn(); }',
+        'vb6_GVar2(_ag4, _ag5);',
+        'if (_eg7 == vb6_ErrSerial()) { vb6_VariantCopy(&_ag8, (&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=vb6_VariantToString(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty")))})); }',
+        'vb6_GVarRef(&_ag8);'
+    )
+    # 反面针: 修复前那两形原样（来自未接提升时的逐字发射，不是照形推的）。
+    Test-EmitcAbsent "b250_vararg_guard_lesion" @("$Tests\test_late_vararg.bas") @(
+        'vb6_GVar(vb6_VariantFromValue(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))));',
+        'vb6_GVarRef((&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=vb6_VariantToString(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty")))}));'
+    )
+    # 第一百零六刀 (§11.84): Variant 槽的**赋值位** —— 真机 K4 `v = 111 : v = o.NoSuchProperty`
+    # 答 `v=111` / `err=438`（目标一个字都不写）。守卫机制原先只认 Int/Double/String 目标，
+    # Variant 目标直接发 `v = vb6_VariantFromComResult(...)` ⇒ 438 之后照样把值写进 v。
+    # 形：序号先抓、右值进 `_av`（Empty 起手）、同一枚序号决定写不写；控制格（Count/Item）钉住
+    # “正常赋值不许被守卫挡掉”。
+    Test-EmitcShape "b251_varslot_guard_shape" @("$Tests\test_late_varslot.bas") @(
+        'vb6_VARIANT _vs0 = vb6_VariantEmpty();',
+        'if (_e0 == vb6_ErrSerial()) { _vs0 = vb6_VariantFromComResult(vb6_ComCall(o, L"NoSuchProperty", NULL, 0)); }',
+        'if (_e0 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _vs0; }',
+        'if (_e1 == vb6_ErrSerial()) { _vs1 = vb6_VariantFromComResult(vb6_ComCall(o, L"Count", NULL, 0)); }',
+        'if (_e3 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _vs3; }'
+    )
+    # 反面针：修复前那一形（逐字取自未接守卫时的发射）。
+    Test-EmitcAbsent "b251_varslot_guard_lesion" @("$Tests\test_late_varslot.bas") @(
+        'v = vb6_VariantFromComResult(vb6_ComCall(o, L"NoSuchProperty", NULL, 0));'
+    )
+    # 第一百零七刀 (§11.85): 真机 L6/L7/L8/L9 —— 表达式**内部**的晚绑定读、Variant
+    # 数组元素目标、UDT 的 Variant 字段目标, 也都是「目标一个字都不写」(111/438)。
+    # 形: 判据换成 exprHasLateBoundComRead; 槽形 (数组元素/UDT 字段/解引用) 一律
+    # vb6_VariantAssign (Clear + 深拷贝) 再把临时量自己放掉 (它自有才放)。
+    Test-EmitcShape "b252_varslot2_shape" @("$Tests\test_late_varslot2.bas") @(
+        'vb6_VARIANT _vs0 = vb6_VariantEmpty();',
+        'if (_e0 == vb6_ErrSerial()) { _vs0 = vb6_VariantFromValue((1 + vb6_ComGetIntProp(o, L"NoSuchProperty"))); }',
+        'if (_e2 == vb6_ErrSerial()) { vb6_VariantAssign(&VB6_SA_AT(vb6_VARIANT, va, 0), _vs2); }',
+        'vb6_VariantClear(&_vs2);',
+        'if (_e3 == vb6_ErrSerial()) { vb6_VariantAssign(&uv.f, _vs3); }',
+        'vb6_VariantClear(&_vs3);',
+        'if (_e4 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _vs4; }'
+    )
+    # 反面针: 修复前那一形 (表达式内部/数组元素目标都直接写目标)。
+    Test-EmitcAbsent "b252_varslot2_lesion" @("$Tests\test_late_varslot2.bas") @(
+        'v = vb6_VariantFromValue((1 + vb6_ComGetIntProp(o, L"NoSuchProperty")));',
+        'vb6_VariantAssign(&VB6_SA_AT(vb6_VARIANT, va, 0), vb6_VariantFromValue(vb6_ComGetStringProp(o, L"NoSuchProperty")));'
+    )
+    # 第一百零八刀 (§11.87): 真机 M2 `Set v = o.NoSuchProperty` 与 M4（ByRef Variant 形参做目标，
+    # C 里是 `(*w)`）也都是 111 / 438 —— 目标一个字都不写。
+    # M2 补在 Set 站（裸变量目标）；M4 的根因是 lateBoundComReadExpr 只认 knownLocalVars_，
+    # 形参 `ByVal o As Object` 不在那张表里 ⇒ 守卫没接上，目标被清空。
+    Test-EmitcShape "b253_setvar_shape" @("$Tests\test_late_setvar.bas") @(
+        'if (_e0 == vb6_ErrSerial()) { _vs0 = vb6_VariantFromComResult(vb6_ComCall(o, L"NoSuchProperty", NULL, 0)); }',
+        'if (_e0 == vb6_ErrSerial()) { vb6_VariantAssign(&(*w), _vs0); }',
+        'vb6_VariantClear(&_vs0);',
+        'if (_e1 == vb6_ErrSerial()) { _vs1 = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty")); }',
+        'if (_e1 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _vs1; }'
+    )
+    # 反面针: 修复前那两形（Set 直接写目标 / ByRef 形参目标被清后裸赋）。
+    Test-EmitcAbsent "b253_setvar_lesion" @("$Tests\test_late_setvar.bas") @(
+        'v = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty"));  /* Set */',
+        '(*w) = vb6_VariantFromComResult(vb6_ComCall(o, L"NoSuchProperty", NULL, 0));'
+    )
+    # 第一百零九刀 (§11.89): 真机 N1 `Set va(0) = o.NoSuchProperty` ⇒ `va(0)=111` / 438。
+    # Set 到 Variant 数组元素以前直接发 `vb6_VariantAssign(&<slot>, <boxed>);  /* Set */`，
+    # 438 之后照样把槽清成空。槽仍走 VariantAssign（深拷贝），临时量自有才收回。
+    Test-EmitcShape "b254_setslot_shape" @("$Tests\test_late_setslot.bas") @(
+        'vb6_VARIANT _vs0 = vb6_VariantEmpty();',
+        'if (_e0 == vb6_ErrSerial()) { _vs0 = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty")); }',
+        'if (_e0 == vb6_ErrSerial()) { vb6_VariantAssign(&VB6_SA_AT(vb6_VARIANT, va, 0), _vs0); }',
+        'vb6_VariantClear(&_vs0);'
+    )
+    # 反面针: 修复前那一形（Set 直接写数组元素）。
+    Test-EmitcAbsent "b254_setslot_lesion" @("$Tests\test_late_setslot.bas") @(
+        'vb6_VariantAssign(&VB6_SA_AT(vb6_VARIANT, va, 0), vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty")));  /* Set */'
+    )
+    # 第一百一十刀 (§11.91): 真机 P 族 —— Set 到**工程类 Variant 字段槽**。
+    #   P1 `Set c.f = o.NoSuchProperty`（类外, C: c->f）  = c.f=111 err=438
+    #   P2 `Set f = o.NoSuchProperty`（类内, C: me->f）  = c.f=111 err=438
+    #   P3/P4 控制格 = isobj=True err=0
+    # 类外那一形带尾注 `/* class var .f field variant */`，以前没被认成 Variant 容器 ⇒
+    # 不装箱（C2440）。类内那一形以前装箱但不守卫、也不退旧值。
+    $setclsExpected = @(
+        "P1-lateoutside c.f=111 err=438",
+        "P2-lateinside c.f=111 err=438",
+        "P3-ctloutside isobj=True err=0",
+        "P4-ctlinside isobj=True err=0",
+        "P-DONE")
+    Test-Vbp "setcls" "$Tests\setcls\SetCls.vbp" $setclsExpected
+    Test-Vbp "setcls_x86" "$Tests\setcls\SetCls.vbp" $setclsExpected -Arch "x86"
+    Test-EmitcShape "b255_setclsslot_shape" @("$Tests\setcls\SetCls.vbp") @(
+        'if (_e0 == vb6_ErrSerial()) { vb6_VariantClear(&c->f  /* class var .f field variant */); c->f  /* class var .f field variant */ = _vs0; }',
+        '_vs0 = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty")); }',
+        'if (_e0 == vb6_ErrSerial()) { vb6_VariantClear(&me->f); me->f = _vs0; }',
+        'vb6_VariantClear(&me->f);',
+        'c->f  /* class var .f field variant */ = vb6_VariantFromValue(o);',
+        'me->f = vb6_VariantFromValue(o);'
+    )
+    # 反面针: 修复前那两形（类外目标不装箱裸写 / 类内装箱但不守卫）。
+    Test-EmitcAbsent "b255_setclsslot_lesion" @("$Tests\setcls\SetCls.vbp") @(
+        'field variant */ = vb6_ComGetObjectProp(o, L"NoSuchProperty");',
+        'me->f = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty"));'
+    )
+    # 第一百一十一刀 (§11.93): 真机 Q 族 —— Set 的目标还剩两形:
+    #   Q1 `Set w = …`（ByRef Variant 形参, C `(*w)`）      = v=111 err=438
+    #   Q3 `With uv: Set .f = …`（UDT Variant 字段）        = uv.f=111 err=438
+    # 旧判据把「含 ( 或 ->」的目标一律排到裸赋那条路: Q3 槽被清、Q1 连装箱都没有 (C2440)。
+    Test-EmitcShape "b256_setslot2_shape" @("$Tests\test_late_setslot2.bas") @(
+        'vb6_VariantClear(&(*w)); (*w) = _vs',
+        '->f); _vb6_with_',
+        '_vb6_with_',
+        '= vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty")); }',
+        'vb6_VariantClear(&uv.f); uv.f = _vs',
+        '(*w) = vb6_VariantFromValue(o);  /* Set */',
+        '->f = vb6_VariantFromValue(o);  /* Set */'
+    )
+    # 反面针: 修复前那两形（解引用槽不装箱裸写 / With 字段裸赋、438 后清空）。
+    Test-EmitcAbsent "b256_setslot2_lesion" @("$Tests\test_late_setslot2.bas") @(
+        '(*w) = vb6_ComGetObjectProp(o, L"NoSuchProperty");',
+        '->f = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty"));'
+    )
+    # 第一百一十二刀 (§11.94): 模块级 UDT 变量的静态初始化
+    # `Public uv As UV`（UV 含 Variant 成员）原先发 `vb6_type_UV uv = 0;` —— 结构体不能用
+    # `= 0` 初始化, cl 直接 C2074, 整个工程编不过。根因: UDT 判定只问 lookupDotted, 而
+    # `Public Type` 只登记在**模块作用域**。修法: 模块作用域兜底 + `vb6_type_` 前缀兜底。
+    Test-EmitcShape "b257_udtmod_shape" @("$Tests\test_udtmod.bas") @(
+        'vb6_type_UV uv = {0};',
+        'vb6_type_Nest nst = {0};',
+        'vb6_type_UV pv = {0};',
+        'vb6_VariantClear(&uv.f); uv.f = _vs'
+    )
+    # 反面针: 修前三行（Public / 嵌套 / Private 三形）都是 `= 0`。
+    Test-EmitcAbsent "b257_udtmod_lesion" @("$Tests\test_udtmod.bas") @(
+        'vb6_type_UV uv = 0;',
+        'vb6_type_Nest nst = 0;',
+        'vb6_type_UV pv = 0;'
+    )
+    # 第一百零四刀 (§11.82): 裸成员做循环条件 —— 与 If / Do While 同一收口
+    # (`if (isComMarker_) resolveComValue("Int")`)。没收口时 COM 取值标记会悬到
+    # 循环体首条语句上收尾：`gN = gN + 1` 被改写成 `o.NoSuchProperty = gN + 1`，
+    # 读变写、那条语句消失。量到的四站形如下（真机 J9/J10 = 4 / 1，err=438）。
+    Test-EmitcShape "b248_bare_cond_shape" @("$Tests\test_late_barecond.bas") @(
+        'if (vb6_CondIfNoErr(_c0, (vb6_ComGetIntProp(o, L"NoSuchProperty")))) goto vb6_loop_exit_0;',
+        'if (!(vb6_CondIfErr(_c1, (vb6_ComGetIntProp(o, L"NoSuchProperty"))))) goto vb6_loop_exit_2;',
+        'if (vb6_CondIfErr(_c2, (vb6_ComGetIntProp(o, L"NoSuchProperty")))) break;',
+        'if (!(vb6_CondIfNoErr(_c3, (vb6_ComGetIntProp(o, L"NoSuchProperty"))))) break;'
+    )
+    # 反面针: 修复前那五行原样（同一夹具、同一台编译器，只差这一臂）。
+    # 这五行是从**撤掉修复的构建**逐字取回的，不是照形推的。
+    Test-EmitcAbsent "b248_bare_cond_lesion" @("$Tests\test_late_barecond.bas") @(
+        'if (vb6_CondIfNoErr(_c0, (o))) goto vb6_loop_exit_0;',
+        'if (!(vb6_CondIfErr(_c1, (o)))) goto vb6_loop_exit_2;',
+        'if (vb6_CondIfErr(_c2, (o))) break;',
+        'if (!(vb6_CondIfNoErr(_c3, (o)))) break;',
+        'vb6_ComSetProp(o, L"NoSuchProperty", vb6_ComPackInt((gN + 1)));  /* COM SetProp */'
+    )
+    Test-EmitcShape "b102_late_arg_guard_shape" @("$Tests\test_late_arg.bas") @(
+        'const int32_t _eg0 = vb6_ErrSerial();',
+        'if (_eg0 == vb6_ErrSerial()) { _ag1 = vb6_VariantToLong(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))); }',
+        'vb6_GTouch(_ag1);',
+        'if (_eg2 == vb6_ErrSerial()) { _ag3 = vb6_VariantToLong(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))); }',
+        'if (_eg4 == vb6_ErrSerial()) { _ag5 = vb6_GFn(); }',
+        'vb6_GTouch2(_ag5, _ag6);'
+    )
+    # 反面针: 修复前那三行原样（实参直接内联、报错后照旧把 0 喂给被调）
+    Test-EmitcAbsent "b102_late_arg_lesion" @("$Tests\test_late_arg.bas") @(
+        'vb6_GTouch(vb6_VariantToLong(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))));',
+        'vb6_GTouch2(vb6_VariantToLong(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))), vb6_GFn());',
+        'vb6_GTouch2(vb6_GFn(), vb6_VariantToLong(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))));'
     )
     # 反面针: 修复前那五行原样 (同一枚夹具、同一台编译器, 只差这一臂 —— 读数 12/16 也是这一发量的)。
     Test-EmitcAbsent "b247_not_fold_lesion" @("$Tests\test_late_cond.bas") @(
@@ -8858,7 +9094,10 @@ if ($Category -in @("all", "run", "vbp")) {
     #   136 行那条循环体 (Left 的自有临时) / 定长串 String$ / ByRef 形参解引用目标
     #   / 借用侧 (变量赋给变量) 必须**留在**深拷贝 —— 它错了就是悬垂, 不是泄漏。
     Test-EmitcShape "strleak_emitc_move" @("$Tests\test_str_leak.bas") @(
-        'vb6_BSTR_AssignMove(&s, vb6_Left(gBig, 64));',
+        # 第八十六刀: Left 进了守卫白名单 ⇒ 这行变成“先算进 BSTR 临时量、再移动”，
+        # 针拆两截：取值那一行原样在场 + 目标吃临时量。
+        '? (vb6_Left(gBig, 64)) : NULL;',
+        'vb6_BSTR_AssignMove(&s, _av',
         'vb6_BSTR_AssignMove(&t, vb6_String((*n), 67));',
         'vb6_BSTR_AssignMove(&(*o), vb6_MakeTag((&(int32_t){3})));',
         'vb6_BSTR_Assign(&d, s);'
@@ -10482,7 +10721,10 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-EmitcShape "k3060_set_variant_shape" @("$Tests\k3060_setvariant\K3060.vbp") @(
         'vb6_VARIANT leak = vb6_VariantEmpty();',
         'leak = vb6_VariantFromValue(vb6_',
-        'bt = vb6_CByte(vb6_NumVal(_own_'
+        # 第八十六刀: `bt = CByte("&H" & Mid(...))` 的右值里有 Mid ⇒ 现在走整型临时量形，
+        # 针拆两截：取值那一行原样在场 + 目标吃临时量。
+        '? (vb6_CByte(vb6_NumVal(_own_',
+        ') bt = _av'
     )
     Test-EmitcAbsent "k3060_set_variant_lesion" @("$Tests\k3060_setvariant\K3060.vbp") @(
         '= leak;',
@@ -10866,9 +11108,11 @@ if ($Category -in @("all", "run", "vbp")) {
     # 发码两头: 正面三条 (泛对象槽 / Variant 槽 / typed 控件变量那枚证人形 = P16 撤后的同一串),
     # 反面两条正是 BASE (`aeb883a9` 那台) 原地发出去的默认属性形。
     Test-EmitcShape "so_emitc_set_rhs_is_object" @("$Tests\setobj\SetObj.vbp") @(
-        'o = vb6_hwnd_Text1;  /* Set */',
+        '(void*)(vb6_hwnd_Text1); vb6_ComAddRefDispatch(',
+        'vb6_ReleaseObject((void**)&o); o = _vref',
         'v = vb6_VariantFromValue(vb6_hwnd_Check1);  /* Set */',
-        'cmdW = vb6_hwnd_Command1;  /* Set */')
+        '(void*)(vb6_hwnd_Command1); vb6_ComAddRefDispatch(',
+        'vb6_ReleaseObject((void**)&cmdW); cmdW = _vref')
     Test-EmitcAbsent "so_emitc_default_prop_in_set" @("$Tests\setobj\SetObj.vbp") @(
         'o = vb6_GetControlText(vb6_hwnd_Text1)  /* default prop: .Text */;  /* Set */',
         'v = vb6_VariantFromValue(vb6_GetCheckValue(vb6_hwnd_Check1)  /* default prop: .Value */);  /* Set */')
@@ -10902,7 +11146,8 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_ComGetStringProp((void*)vb6_UC_ParentObject(), L"Name")',
         'vb6_ComGetStringProp((void*)vb6_UC_ParentObject(), L"Caption")',
         'vb6_ComGetIntProp((void*)vb6_UC_ParentObject(), L"BackColor")',
-        'vb6_ComGetStringProp(vb6_ComGetObjectProp(vb6_hwnd_Label1, L"Parent"), L"Name")')
+        '= vb6_ComGetObjectProp(vb6_hwnd_Label1, L"Parent");',
+        'vb6_ComGetStringProp(_rrv')
     Test-EmitcAbsent "pd_parentsem_emitc_absent" @("$Tests\pd_parentsem\PdParentSem.vbp") @(
         "vb6_Parent_Name", "vb6_Parent_Caption", "vb6_Parent_BackColor")
 
@@ -11481,6 +11726,10 @@ if ($Category -in @("all", "run", "vbp")) {
     # 「Null→Long」钉报错且客户端活到 DONE; Absent 那一枚钉的是改前的**静默错**(hr=0 交回垃圾) ——
     # 只比 hr 就等于把「换不动」漏成一格没人看。
     # EchoLng ← VT_BOOL / VT_EMPTY 那两发是改前**侥幸对**的档位, 原样钉住 = 这刀没把对的答案改坏;
+    # 账 #305 §11.141 (第一百五十九刀): **EchoBool 那两发改口了** —— 改前 Boolean 形参的
+    # 入站归一化借 VT_I4 就地透传，`EchoBool:i` 答 40 / `EchoBool:s` 答 12（把 CBool 那一步
+    # 跳过了）；真 VB6 里「数值/字符串 → Boolean 形参」是一次 CBool 换算，所以两发都答 **-1**。
+    # 现在 cDispatchArgVt 给 VT_BOOL，读臂读 boolVal 折成 -1/0（tests/b160_late_bool_arg）。
     # EchoVar 那两发钉 Variant 形参没被换算(VarType 照原标签答 3/8), 就是表里 VB6_ARGVT_SKIP 的证人。
     # 账 #305 §B224 (第二百三十八刀): EchoStr ← VT_BOOL 改前答 <-1> (Automation 的 VarBstrFromBool),
     # 而真 VB6 6.0 服务端实测答 [True]/[False] (ai/probes/bool_string A1/A2, 用户那台跑出来的) ——
@@ -11510,8 +11759,8 @@ if ($Category -in @("all", "run", "vbp")) {
         "VTARG=EchoDbl:s giving=BSTR(12) hr=0x00000000 vt=5 val=12.0000",
         "VTARG=EchoDbl:r giving=VT_R8 hr=0x00000000 vt=5 val=12.7500",
         "VTARG=EchoBool:b giving=VT_BOOL hr=0x00000000 vt=3 val=-1",
-        "VTARG=EchoBool:i giving=VT_I4 hr=0x00000000 vt=3 val=40",
-        "VTARG=EchoBool:s giving=BSTR(12) hr=0x00000000 vt=3 val=12",
+        "VTARG=EchoBool:i giving=VT_I4 hr=0x00000000 vt=3 val=-1",
+        "VTARG=EchoBool:s giving=BSTR(12) hr=0x00000000 vt=3 val=-1",
         "VTARG=EchoVar:i giving=VT_I4 hr=0x00000000 vt=3 val=3",
         "VTARG=EchoVar:x giving=BSTR(abc) hr=0x00000000 vt=3 val=8",
         "VTARG=SumTwo:i,s giving=VT_I4+BSTR(12) hr=0x00000000 vt=8 val=<12:40> len=5",
@@ -11550,8 +11799,8 @@ if ($Category -in @("all", "run", "vbp")) {
         "VTARG=EchoDbl:s giving=BSTR(12) hr=0x00000000 vt=5 val=12.0000",
         "VTARG=EchoDbl:r giving=VT_R8 hr=0x00000000 vt=5 val=12.7500",
         "VTARG=EchoBool:b giving=VT_BOOL hr=0x00000000 vt=3 val=-1",
-        "VTARG=EchoBool:i giving=VT_I4 hr=0x00000000 vt=3 val=40",
-        "VTARG=EchoBool:s giving=BSTR(12) hr=0x00000000 vt=3 val=12",
+        "VTARG=EchoBool:i giving=VT_I4 hr=0x00000000 vt=3 val=-1",
+        "VTARG=EchoBool:s giving=BSTR(12) hr=0x00000000 vt=3 val=-1",
         "VTARG=EchoVar:i giving=VT_I4 hr=0x00000000 vt=3 val=3",
         "VTARG=EchoVar:x giving=BSTR(abc) hr=0x00000000 vt=3 val=8",
         "VTARG=SumTwo:i,s giving=VT_I4+BSTR(12) hr=0x00000000 vt=8 val=<12:40> len=5",
@@ -11845,10 +12094,14 @@ if ($Category -in @("all", "run", "vbp")) {
     # 第八十三刀: String 目标的守卫改成「先算进临时量 BSTR _avN、再按序号决定写不写」⇒ 右值那一行
     # 从 `AssignMove(&目标, <右值>)` 变成 `BSTR _avN = (<守卫>) ? (<右值>) : NULL;`。针拆两截钉同一件事:
     # ① 右值原样在场 (不许折成常量 —— 这就是本条用例的靶子); ② 目标吃的是那枚临时量。
+    # 第一百二十四刀 (§11.106): 只读谓词的实参已改按**借用档**装箱 (不必要的 AddRef 漏引用),
+    # 形状从 `vb6_VariantFromValue(Value)` 变成 `vb6_VariantBorrowFromValue(Value)`。本条用例
+    # 钉的是「不许折成常量」那一面 (不是装箱函数名), 故按实测换名 —— 证据: `.temp/k124/ab`
+    # 四份夹具把借用档改回原名后与基线产物逐字节相同。
     Test-EmitcShape "b189_gate_same_name_slot_pair" @("$Tests\b189_gate\B189g.vbp") @(
         '? ((((Value) != NULL) ? vb6_BSTR_FromStr(L"B189Impl") : vb6_BSTR_FromStr(L"Nothing"))) : NULL;',
         'vb6_BSTR_AssignMove(&vb6_ret_F4, _av',
-        '? (vb6_TypeName(vb6_VariantFromValue(Value))) : NULL;',
+        '? (vb6_TypeName(vb6_VariantBorrowFromValue(Value))) : NULL;',
         'vb6_BSTR_AssignMove(&vb6_ret_F3, _av')
 
     # 账 #305 #408 (第八十九刀第五试): 按名那张类表 (knownClassVars_) 全程不清空, 于是**上一过程**
@@ -11861,16 +12114,18 @@ if ($Category -in @("all", "run", "vbp")) {
     # moduleClassVars_ 那份**模块级**快照每张过程入口恢复一次, 否则后面过程里同名模块级类变量的原生
     # 字段读会跟着掉 (P5 与上面那枚 Thing->Alpha 针钉的就是这一条)。
     Test-EmitcShape "b190_object_formal_goes_late" @("$Tests\b190_scope\B190.vbp") @(
-        'vb6_BSTR_Assign(&vb6_ret_ShadowParam, vb6_ComGetStringProp(Item, L"Alpha"));',
-        'vb6_BSTR_Assign(&vb6_ret_UsesObj, vb6_ComGetStringProp(Thing, L"Alpha"));',
+        'vb6_BSTR_AssignMoveIfOk(&vb6_ret_ShadowParam, vb6_ComGetStringProp(Item, L"Alpha"), _e',
+        'vb6_BSTR_AssignMoveIfOk(&vb6_ret_UsesObj, vb6_ComGetStringProp(Thing, L"Alpha"), _e',
         'vb6_BSTR_Assign(&vb6_ret_UsesModuleVar, Thing->Alpha  /* class var .Alpha field */);')
     Test-EmitcAbsent "b190_object_formal_keeps_no_stale_class_answer" @("$Tests\b190_scope\B190.vbp") @(
         'vb6_ret_ShadowParam, Item->Alpha',
         'vb6_ret_UsesObj, Thing->Alpha',
         '(((Thing) != NULL) ? vb6_BSTR_FromStr(L"B190A")')
     # 第八十三刀: 同上 —— 右值挪进临时量行, 针改成「这枚形参的 TypeName 仍在运行期算」+「目标吃临时量」。
+    # 第一百二十四刀 (§11.106): 同上, 装箱函数名按实测换成借用档 (物体档那一枚 AddRef
+    # 原先无主 —— TypeName 那条链的 D2 term=0 就出在这里)。
     Test-EmitcShape "b190_typename_of_object_formal_stays_runtime" @("$Tests\b190_scope\B190.vbp") @(
-        '? (vb6_TypeName(vb6_VariantFromValue(vb6_VariantFromValue(Thing)))) : NULL;',
+        '? (vb6_TypeName(vb6_VariantBorrowFromValue(vb6_VariantBorrowFromValue(Thing)))) : NULL;',
         'vb6_BSTR_AssignMove(&vb6_ret_TnShadow, _av')
     # 两台真跑只钉 VB6 也答得出的那五条: P1/P2 = 类形参照旧早绑定 (负条件, 否决不许过界),
     # P5 = 模块级同名变量没被撤走, P6 = 折叠那一支的 NULL 头, DONE = 进程活着。
@@ -11881,6 +12136,495 @@ if ($Category -in @("all", "run", "vbp")) {
                      "C3ProbeB190-DONE")
     Test-Vbp 'b190_object_formal_scope' "$Tests\b190_scope\B190.vbp" $b190Needles
     Test-Vbp 'b190_object_formal_scope_x86' "$Tests\b190_scope\B190.vbp" $b190Needles -Arch "x86"
+
+    # 账 #305 #412 (第一百二十五刀): `Type=Exe` 工程里 `Set <工程类实例>` 进 **Object 槽**
+    # 这一条以前在册为缺口 (「从不发包器 ⇒ Object 那一路的晚绑定调用全落空」)。
+    # 第一百二十二〜一百二十四刀把装箱站/包装器归属/谓词实参收拾完之后, 它已经不是缺口了:
+    # 本夹具在两条架构上都读到 P1/P3=类名 (包器身上问了类名), P2=22 / P4=23 (晚绑定 Set+Get
+    # 真进了实例), P5/P6 证明拆掉 Object 槽那一枚不影响 typed 变量那一枚 (借用型包装器),
+    # TERM=23 只在最后一枚 `Set a = Nothing` 之后打一次。
+    # 探针来历: `.temp/k125` (VJ x86 / B412 x86+x64 六臂读数逐字相同)。
+    $b412Needles = @("C3ProbeB412-P1=B412Item", "C3ProbeB412-P2=22",
+                     "C3ProbeB412-P3=B412Item", "C3ProbeB412-P4=23",
+                     "C3ProbeB412-P5=23", "C3ProbeB412-P6=23",
+                     "C3ProbeB412-TERM=23", "C3ProbeB412-DONE")
+    Test-Vbp 'b412_objslot_latebind' "$Tests\b412_objslot\B412ObjSlot.vbp" $b412Needles
+    Test-Vbp 'b412_objslot_latebind_x86' "$Tests\b412_objslot\B412ObjSlot.vbp" $b412Needles -Arch "x86"
+
+    # 账 #305 §11.108 (第一百二十六刀): 标准模块的 `Public gObj As Object` 跨模块那一臂。
+    # 本刀在跨模块登记站加了一条闸 (类模块的 Public 字段不进 knownObjectVars_),
+    # 这夹具钉的是闸的**上限**: 标准模块的 Object 全局仍然要进晚绑定集合, 消费模块里
+    # `gObj.Seed = 8` 发 vb6_ComSetProp / 读回 8, 不许因为是闸就一并放过。
+    $b126Needles = @("C3ProbeB126-A1=B126Item", "C3ProbeB126-A2=8", "C3ProbeB126-DONE")
+    Test-Vbp 'b126_crossmod_objglobal' "$Tests\b126_crossmod_objglobal\B126ObjGlobal.vbp" $b126Needles
+    Test-Vbp 'b126_crossmod_objglobal_x86' "$Tests\b126_crossmod_objglobal\B126ObjGlobal.vbp" $b126Needles -Arch "x86"
+
+    # 账 #305 §11.109 (第一百二十七刀): 腿④ 的第四档 —— 局部泛对象槽 (`Dim o As Object`)。
+    # 修前这一格压根不在 slotsToRelease_ 里: 过程里现造现丢, 包装器与它握着的那一枚类引用一起漏,
+    # 循环三次一枚 Terminate 不打。修后甲=3 / 丙再 +1 = 4; 乙是反面证人 (For Each 循环变量
+    # 每一轮由循环自己写, 出口不许退) ⇒ 容器里那一枚还活着。
+    $b127Needles = @("C3ProbeB127-A1-terms=3", "C3ProbeB127-A2-live=B127Item",
+                     "C3ProbeB127-A3-terms=4", "C3ProbeB127-DONE")
+    Test-Vbp 'b127_objlocal_scope_exit' "$Tests\b127_objlocal_scope\B127ObjLocal.vbp" $b127Needles
+    Test-Vbp 'b127_objlocal_scope_exit_x86' "$Tests\b127_objlocal_scope\B127ObjLocal.vbp" $b127Needles -Arch "x86"
+    # 发码两面: 正 = 出口那一发真在 (泛对象档专属注释); 反面 = `oEach` 那一格不许有。
+    Test-EmitcShape 'b127_objlocal_exit_release_shape' @(
+        "$Tests\b127_objlocal_scope\B127ObjLocal.vbp") @(
+        'vb6_ReleaseObject((void**)&o);  /* 账 #305 (甲) 腿④ 泛对象档: scope-exit release')
+    Test-EmitcAbsent 'b127_each_loop_var_never_gets_exit_release' @(
+        "$Tests\b127_objlocal_scope\B127ObjLocal.vbp") @(
+        'vb6_ReleaseObject((void**)&oEach)')
+
+    # 账 #305 §11.110 (第一百二十八刀): 晚绑定实参打包后的「内容」放手。
+    # 打包函交出的是堆上自造的 VARIANT: 结构体 free 之前内容得问 VariantClear。
+    # 修前宿主对象那一岔 (内建 Collection 走 vb6_Host_Call) 与 vb6_ComSetPropArg 两处
+    # 只 free 结构体 ⇒ 每发实参漏一枚引用, 元素到 Remove 也退不到 0。
+    # 甲 = 宿主那岔 (Collection.Add + Remove), 乙 = 真 IDispatch 那岔 (d("k") = o + Remove)。
+    $b128Needles = @("C3ProbeB128-A1-terms=1", "C3ProbeB128-A2-terms=2", "C3ProbeB128-DONE")
+    Test-Vbp 'b128_argpack_release' "$Tests\b128_argpack_release\B128ArgPack.vbp" $b128Needles
+    Test-Vbp 'b128_argpack_release_x86' "$Tests\b128_argpack_release\B128ArgPack.vbp" $b128Needles -Arch "x86"
+    # 账 #305 §11.111 (第一百二十九刀): 内建 Collection 的**载体寿命**。
+    # 载体是 calloc 的一枚指针, 而 Set 那对出口 (vb6_ComAddRefDispatch / vb6_ReleaseObject)
+    # 都先问 vb6_ComIsDispatchable —— 宿主对象一律不可分派 ⇒ 两个出口双双空跑。
+    # 修前三条岔的 terms 全 0 (载体既不拆、元素也不出厂)。
+    #   A1 = Set Nothing 两枚元素一起出厂; A2 = 重新赋值丢掉旧载体 (1) + 末了 Nothing (1);
+    #   B  = 两枚槽指同一枚载体 —— 反面证人: 退掉一枚槽不许拆, 最后一枚槽才拆。
+    #   C  = 集合套集合: 包进包装器的那一份引用护着载体, inner 置 Nothing 后仍可用。
+    $b129Needles = @(
+        "B129-A-count=2", "B129-A1-terms=2", "B129-A2-terms=4",
+        "B129-B-alive=1", "B129-B-terms=5",
+        "B129-C-inner=1", "B129-DONE")
+    Test-Vbp 'b129_coll_carrier_lifetime' "$Tests\b129_coll_lifetime\B129Coll.vbp" $b129Needles
+    Test-Vbp 'b129_coll_carrier_lifetime_x86' "$Tests\b129_coll_lifetime\B129Coll.vbp" $b129Needles -Arch "x86"
+
+# 账 #305 §11.112（第一百三十刀）：腿④ 宿主类局部档 —— `Dim c As New Collection` 出作用域那一句。
+# 反面证人两条：从字段借来的局部（出口只退自己那一份）、Static 槽（跨调用活着，不许放手）。
+$b130Needles = @(
+"B130-E1-count=1", "B130-E2-terms=1",
+"B130-A1-count=1", "B130-A2-field=1",
+"B130-S1-count=1", "B130-S2-terms=1",
+"B130-DONE")
+Test-Vbp 'b130_hostlocal_scope' "$Tests\b130_hostlocal_scope\B130Scope.vbp" $b130Needles
+Test-Vbp 'b130_hostlocal_scope_x86' "$Tests\b130_hostlocal_scope\B130Scope.vbp" $b130Needles -Arch "x86"
+
+# 账 #305 §11.113（第一百三十一刀）：腿④ 宿主类局部档第二格 —— `Dim dc As Dictionary` 出作用域那一句。
+# 三条反面证人：从字段借的局部、Static 槽、局部交给字段之后不许把字段手里的东西带走。
+$b131Needles = @(
+"B131-E1-count=1", "B131-E2-terms=1",
+"B131-A1-count=1", "B131-A2-field=1",
+"B131-S1-count=1", "B131-O1-alive=1", "B131-Z-terms=3",
+"B131-DONE")
+Test-Vbp 'b131_dict_local_scope' "$Tests\b131_dict_local_scope\B131Dict.vbp" $b131Needles
+Test-Vbp 'b131_dict_local_scope_x86' "$Tests\b131_dict_local_scope\B131Dict.vbp" $b131Needles -Arch "x86"
+
+# 账 #305 §11.114（第一百三十二刀）：腿④ 第三档 —— 类型化 COM 接口局部（`vb6_ComIface_I<X>*`）
+# 出作用域那一句。三条反面证人：从字段借、Static 槽、局部交给字段；另加一枚真外部服务器 (scrrun)。
+$b132Needles = @(
+"B132-A1-count=1", "B132-A2-terms=1",
+"B132-C1-count=1", "B132-C2-terms=2",
+"B132-F1-count=1", "B132-F2-field=1",
+"B132-S1-count=1", "B132-S2-terms=2",
+"B132-K1-alive=1", "B132-Z-terms=4",
+"B132-X1-name=win.ini", "B132-DONE")
+Test-Vbp 'b132_typedcom_local_scope' "$Tests\b132_typedcom_local_scope\B132Typed.vbp" $b132Needles
+Test-Vbp 'b132_typedcom_local_scope_x86' "$Tests\b132_typedcom_local_scope\B132Typed.vbp" $b132Needles -Arch "x86"
+
+# 账 #305 §11.115（第一百三十三刀）：`With` 自己造的那一枚载体（`With New Collection` /
+# `With CreateObject(...)`）在 `End With` 放手。三条反面证人：字段借的、局部借的、工程类 `New`（在册）。
+$b133Needles = @(
+"B133-A1-count=1", "B133-A2-terms=1",
+"B133-B1-count=1", "B133-B2-terms=2",
+"B133-C1-count=1", "B133-C2-terms=2",
+"B133-D1-count=2", "B133-D2-terms=2",
+"B133-E1-tag=11", "B133-E2-terms=3",
+"B133-Z-terms=3", "B133-DONE")
+Test-Vbp 'b133_with_carrier_scope' "$Tests\b133_with_carrier_scope\B133Carr.vbp" $b133Needles
+Test-Vbp 'b133_with_carrier_scope_x86' "$Tests\b133_with_carrier_scope\B133Carr.vbp" $b133Needles -Arch "x86"
+
+# 账 #305 §11.116（第一百三十四刀）：`With New …` 体内 `Exit Sub/Function` 那几条 goto 口
+# 先把本块自己造的那一枚放手。反面证人：With <字段> 里 Exit（借用型，不许退）+ 嵌套两层。
+$b134Needles = @(
+"B134-A1-count=1", "B134-A2-terms=1",
+"B134-F1-count=1", "B134-F2-terms=2",
+"B134-G1-count=1", "B134-G2-terms=2",
+"B134-H1=7", "B134-H2-terms=3",
+"B134-I2-terms=5", "B134-Z-terms=5", "B134-DONE")
+Test-Vbp 'b134_with_exit_scope' "$Tests\b134_with_exit_scope\B134Carr.vbp" $b134Needles
+Test-Vbp 'b134_with_exit_scope_x86' "$Tests\b134_with_exit_scope\B134Carr.vbp" $b134Needles -Arch "x86"
+
+# 账 #305 §11.117（第一百三十五刀）：`With New <工程类>` 的载体在块尾 / Exit 出块时放手
+# （类自己的 vb6_cls_X_Release 那一档）。反面证人：字段借来的实例、局部借来的实例 + Exit。
+$b135Needles = @(
+"B135-A1-tag=11", "B135-A2-terms=1",
+"B135-B1-tag=22", "B135-B2-terms=2",
+"B135-C1-tag=33", "B135-C2-terms=2",
+"B135-E1-tag=44", "B135-E2-terms=2",
+"B135-Z-terms=2", "B135-D1-field=44", "B135-DONE")
+Test-Vbp 'b135_with_class_carrier' "$Tests\b135_with_class_carrier\B135Carr.vbp" $b135Needles
+Test-Vbp 'b135_with_class_carrier_x86' "$Tests\b135_with_class_carrier\B135Carr.vbp" $b135Needles -Arch "x86"
+
+# 账 #305 §11.118（第一百三十六刀）：`With <工程函数>()` 的载体在块尾 / Exit 出块时放手。
+# 被调方的返回槽被腿④ 排除在出口放手之外 ⇒ 那一枚引用是交回给调用方的，With 临时量是它的主人。
+# 反面证人：字段借来的集合、局部借来的集合（借来的一枚一枚都不能退）。
+$b136Needles = @(
+"B136-A1-count=1", "B136-A2-terms=1",
+"B136-B1-count=1", "B136-B2-terms=2",
+"B136-C1-count=2", "B136-C2-terms=2",
+"B136-D1-count=3", "B136-D2-terms=2",
+"B136-Z-terms=2", "B136-DONE")
+Test-Vbp 'b136_fnret_carrier' "$Tests\b136_fnret_carrier\B136Fn.vbp" $b136Needles
+Test-Vbp 'b136_fnret_carrier_x86' "$Tests\b136_fnret_carrier\B136Fn.vbp" $b136Needles -Arch "x86"
+
+# 账 #305 §11.120（第一百三十八刀）：`Resume Next` 在块内的落点位置——回到出错语句的下一条，
+# 与嵌套深浅无关（以前只有过程顶层发 resume 点，块内 `Resume Next` 落到块尾之后，
+# 块内剩下的语句与块尾那句放手一并被跳过）。
+# A 路原先是 §11.119 的在册边界（handler 里一句 Resume 都没有）；§11.119 落码后由落点名册
+# 关掉（A2 0 -> 1），B/C 两路的累计数随之上移。
+$b137Needles = @(
+"B137-A1-count=1", "B137-A2-terms=1",
+"B137-B1-count=1", "B137-B1b-after-error", "B137-B2-terms=2",
+"B137-C1-count=1", "B137-C1c-after-error", "B137-C2-terms=3",
+"B137-Z-terms=3", "B137-DONE")
+Test-Vbp 'b137_resume_in_block' "$Tests\b137_resume_in_block\B137Res.vbp" $b137Needles
+Test-Vbp 'b137_resume_in_block_x86' "$Tests\b137_resume_in_block\B137Res.vbp" $b137Needles -Arch "x86"
+
+# 账 #305 §11.119（第一百三十九刀）：错误落点的活载体名册 —— 只在"本过程一句 Resume 都没有"时
+# 启用（那种 handler 回不到块内，落点可以逐枚放掉）。
+# C 路是反面证人：借来的（模块字段）那一枚落点一枚都不许动，handler 里仍能读 gColl.Count。
+$b138Needles = @(
+"B138-A1-count=1", "B138-A2-terms=1",
+"B138-B1-count=1", "B138-B2-terms=2",
+"B138-C1-count=2", "B138-C2-count=2", "B138-C3-terms=2",
+"B138-D2-terms=4",
+"B138-E1-count=1", "B138-E2-terms=5",
+"B138-Z-terms=5", "B138-Z-count=2", "B138-DONE")
+Test-Vbp 'b138_handler_landing' "$Tests\b138_handler_landing\B138Res.vbp" $b138Needles
+Test-Vbp 'b138_handler_landing_x86' "$Tests\b138_handler_landing\B138Res.vbp" $b138Needles -Arch "x86"
+
+# 账 #305 §11.119 八.3（第一百四十刀）：出错语句是块内**最后一条** + handler Resume Next。
+# 修前落点落到块外，块尾那句放手被跨过（A2/B2 = 0）；补点必须落在放手**之前**，
+# 否则 Resume Next 跳过去时把清理一起跳过。C 路对照（末句之后还有一句）不动；
+# D 路反面证人：借来的那一枚块尾没有清理可跳，handler 里仍能读 gColl.Count。
+$b139Needles = @(
+"B139-A2-terms=1", "B139-B2-terms=2",
+"B139-C1-after-error", "B139-C2-terms=3",
+"B139-D2-count=2",
+"B139-Z-terms=3", "B139-Z-count=2", "B139-DONE")
+Test-Vbp 'b139_blocktail_resume' "$Tests\b139_blocktail_resume\B139Res.vbp" $b139Needles
+Test-Vbp 'b139_blocktail_resume_x86' "$Tests\b139_blocktail_resume\B139Res.vbp" $b139Needles -Arch "x86"
+
+# 账 #305 §11.116 五（第一百四十一刀）：`GoTo` 跳出 With 块时，本块自己造的载体要先退。
+# 跳出去之后块尾那句放手永远跑不到。C 路对照（标签就在本块体内）一枚都不退；
+# E 路反面证人：借来的那一枚不许动。
+$b140Needles = @(
+"B140-A2-terms=1", "B140-B2-terms=3",
+"B140-C1-terms=3", "B140-C2-terms=4",
+"B140-D2-terms=5", "B140-E2-count=2",
+"B140-Z-terms=5", "B140-Z-count=2", "B140-DONE")
+Test-Vbp 'b140_goto_out_with' "$Tests\b140_goto_out_with\B140Res.vbp" $b140Needles
+Test-Vbp 'b140_goto_out_with_x86' "$Tests\b140_goto_out_with\B140Res.vbp" $b140Needles -Arch "x86"
+
+# 账 #305 §11.119 四.4（第一百四十二刀）：工程类载体进错误落点名册 ——
+# 名册槽里只有 `void**`，落点分不出类名，所以登记时把类自己的 `vb6_cls_X_Release`
+# 地址一并存进 `_vb6_ownRel[k]`。C 路反面证人：借来的那一帧不进名册。
+$b141Needles = @(
+"B141-A1-terms=1", "B141-B1-terms=3",
+"B141-C1-count=2", "B141-D1-terms=5",
+"B141-Z-terms=5", "B141-Z-count=2", "B141-DONE")
+Test-Vbp 'b141_roster_class' "$Tests\b141_roster_class\B141Res.vbp" $b141Needles
+Test-Vbp 'b141_roster_class_x86' "$Tests\b141_roster_class\B141Res.vbp" $b141Needles -Arch "x86"
+
+# 账 #305 §11.124（第一百四十三刀）：`With <对象>.<Property Get>` 交回的那一枚也归 With。
+# B 路反面证人：对象**字段**（`With gBox.Bare`）只是借，块尾一枚不许退，之后还要读得出来。
+$b142Needles = @(
+"B142-A2-terms=1", "B142-B2-tag=2",
+"B142-C1-terms=2", "B142-D1-terms=3",
+"B142-Z-terms=3", "B142-DONE")
+Test-Vbp 'b142_propget_with' "$Tests\b142_propget_with\B142Res.vbp" $b142Needles
+Test-Vbp 'b142_propget_with_x86' "$Tests\b142_propget_with\B142Res.vbp" $b142Needles -Arch "x86"
+
+# 账 #305 §11.126（第一百四十五刀）：`With <晚绑定对象>.<属性>` 交回的引用归 With。
+# 前置：第一百四十四刀先把桥的账量清楚（一次读数多交两枚），本刀把桥对平（适配器转移 +
+# 服务端清 tmpRet），一次读数恰好交出 1 枚 —— 四口这才有可判红的读数。
+# B 路反面证人：交回的是模块级共用实例，退自己那一枚之后它必须还活着（B2-terms 不前移）。
+$b144Needles = @(
+"B144-A2-terms=1", "B144-B2-tag=8", "B144-B2-terms=1",
+"B144-C1-terms=2", "B144-D1-terms=3", "B144-E1-terms=4",
+"B144-Z-terms=4", "B144-Z-tag=8", "B144-DONE")
+Test-Vbp 'b144_late_with_prop' "$Tests\b144_late_with_prop\B144Res.vbp" $b144Needles
+Test-Vbp 'b144_late_with_prop_x86' "$Tests\b144_late_with_prop\B144Res.vbp" $b144Needles -Arch "x86"
+
+# 账 #305 §11.127（第一百四十六刀）：`Set x = <晚绑定对象>.<属性>` 交回的引用归槽。
+# 桥在 §11.126 已对平 ⇒ 一次读数恰好交出 1 枚；setlet 站那一步多余的 claim 撤掉之后:
+#   A 新造实例: Set Nothing 后恰好 Terminate 一次
+#   B 反面证人: 交回模块级共用实例, 退读数那一枚之后它仍活 (tag=7, terms 不增)
+#   C 反方向的证人: `Set d = c` 是裸槽拷贝 (那一枚 claim 必须留着) ⇒ Set c = Nothing 之后
+#     实例仍活 (C1-alive=0), 直到 Set d = Nothing 才 Terminate (C2-terms=1)
+$b146Needles = @(
+"B146-A1-terms=1", "B146-B1-tag=7", "B146-B2-terms=0",
+"B146-C1-alive=0", "B146-C2-terms=1",
+"B146-Z-terms=2", "B146-Z-made=3", "B146-DONE")
+Test-Vbp 'b146_set_late_prop' "$Tests\b146_set_late_prop\B146Res.vbp" $b146Needles
+Test-Vbp 'b146_set_late_prop_x86' "$Tests\b146_set_late_prop\B146Res.vbp" $b146Needles -Arch "x86"
+
+# 账 #305 §11.128（第一百四十七刀）：`Set <晚绑定对象>.<属性> = <对象>` 的写口。
+# 改前 Get/Set 各拿一枚 dispid + 服务端 PUTREF 撞不上 `wFlags & PUT` ⇒ 写静默无效。
+#   W1/W2: 写进去之后 gHold 持有, 清 gHold 才 Terminate
+#   W3: 同一槽覆写两次, 清空之后恰好 2
+#   W4: 写 Nothing 不取引用
+#   R1..R3: 同名 Let/Get、普通 Sub、带参 Function 三条反而证人
+#   R4/R5: 写进去的再用 Get 读回 (那一枚归调用方, 见 §11.127)
+$b147Needles = @(
+"B147-W0-made=1", "B147-W1-terms=0", "B147-W2-terms=1",
+"B147-W3-terms=2", "B147-W4-terms=2",
+"B147-R1-num=41", "B147-R2-num=42", "B147-R3-tag=0",
+"B147-R4-terms=2", "B147-R5-terms=2",
+"B147-Z-made=3", "B147-DONE")
+Test-Vbp 'b147_setref_putref' "$Tests\b147_setref_putref\B147Res.vbp" $b147Needles
+Test-Vbp 'b147_setref_putref_x86' "$Tests\b147_setref_putref\B147Res.vbp" $b147Needles -Arch "x86"
+
+# 账 #305 §11.129（第一百四十八刀）：服务端 getter 适配器的**本类返回**那一档。
+# 改前 `Property Get Self As B148Box`（返回类型 = 所在类自己）被当整数交出去（VT_I4, 指针截断）。
+#   A2: 本类返回交回的就是那枚对象（改前 = Nothing）
+#   A3: 清 s 之后 o 仍可用（交回的那一枚归调用方, 见 §11.126）
+#   B2/B3: 异类返回是对照组, 收放照样对得上
+#   C2/C3: As Object 返回同样坏（改前也是 VT_I4）, 且交回的确实是写进去那一枚
+#   Z:  box 那一格停在 0 = 在册的那一枚残留（`Set Self = Me` 在返回槽上 claim 的, 另一把尺）
+$b148Needles = @(
+"B148-A2-self-tag=5", "B148-A3-tag=6",
+"B148-B2-fresh-tag=11", "B148-B3-item-terms=1",
+"B148-C2-held-tag=77", "B148-C3-item-terms=2",
+"B148-Z-box-terms=0", "B148-Z-item-made=2", "B148-Z-item-terms=2", "B148-DONE")
+Test-Vbp 'b148_selfcls_return' "$Tests\b148_selfcls_return\B148Res.vbp" $b148Needles
+Test-Vbp 'b148_selfcls_return_x86' "$Tests\b148_selfcls_return\B148Res.vbp" $b148Needles -Arch "x86"
+
+# 账 #305 §11.130（第一百四十九刀）：`Set <晚绑定 o>.<Child>.<Prop> = <对象>` 的两槽串位。
+# 改前发码 `prop_set_<P>(o, vb6_ComGetObjectProp(o, L"Child"))` —— 接收者写成裸 o、值写成 o.Child；
+# 首读就 438（量具实测）。改后 `vb6_ComSetRef(vb6_ComGetObjectProp(o, L"Child"), L"Held", it)`。
+#   A1: 根对象自己的 Held 仍是空（没写到根上）
+#   A2/A3: 子对象上写的确实是 it 那一枚（改 h.Tag 后 it.Tag 跟着变）
+#   Z:  box = 2（根 + 子都 Terminate）。本夹具里的嵌套读链 `Set h1 = o.Child.Held` 由 §11.132
+#       对平，所以这一行从 1 变 2；item 那枚由 §11.133 对平（0→1）
+$b149Needles = @(
+"B149-A1-root-held=empty", "B149-A2-child-held=B149Item", "B149-A3-tag=9",
+"B149-C1-item-terms=0", "B149-Z-box-terms=2", "B149-Z-item-made=1",
+"B149-Z-item-terms=1", "B149-DONE")
+Test-Vbp 'b149_chain_write' "$Tests\b149_chain_write\B149Res.vbp" $b149Needles
+Test-Vbp 'b149_chain_write_x86' "$Tests\b149_chain_write\B149Res.vbp" $b149Needles -Arch "x86"
+
+# 账 #305 §11.131（第一百五十刀）：链写**接收者**那一枚临时引用。
+# 改前 `vb6_ComSetRef(vb6_ComGetObjectProp(p, L"Child"), …)` —— 取回来的那一枚没人放，
+# 中间那枚对象永不 Terminate（box-terms 1）；改后落 _rcvN、派发完即放（box-terms 2）。
+#   A2: 写进去的确实是 it 那一枚
+#   Z : 根 + 子都 Terminate = 2；Z-item 也 Terminate（§11.133: As Object 字段出厂放手）
+$b150Needles = @(
+"B150-A2-held-tag=9", "B150-C1-item-terms=0", "B150-Z-box-terms=2",
+"B150-Z-item-made=1", "B150-Z-item-terms=1", "B150-DONE")
+Test-Vbp 'b150_chain_recv_ref' "$Tests\b150_chain_recv_ref\B150Res.vbp" $b150Needles
+Test-Vbp 'b150_chain_recv_ref_x86' "$Tests\b150_chain_recv_ref\B150Res.vbp" $b150Needles -Arch "x86"
+
+# 账 #305 §11.132（第一百五十一刀）：链读**接收者**那一枚临时引用。
+# 改前 `vb6_ComGetIntProp(vb6_ComGetObjectProp(p, L"Child"), L"Tag")` —— 接收者那枚没人放，
+# 每多一层链漏一枚（box-terms 1）；改后接收者落 _rrvN、语句末放（box-terms 3）。
+#   A2/B1: 嵌套对象读 / 嵌套标量读的值都对
+#   C1: 两层链 `p.Child.Child.Tag` 的值
+#   Z : 根 + 两级子对象都 Terminate = 3（改前 1）；Z-item 也 Terminate（§11.133）
+$b151Needles = @(
+"B151-A2-held-tag=7", "B151-B1-child-tag=99", "B151-C1-two-level-tag=99",
+"B151-Y-box-made=3", "B151-Z-box-terms=3", "B151-Z-item-made=1",
+"B151-Z-item-terms=1", "B151-DONE")
+Test-Vbp 'b151_chain_read_ref' "$Tests\b151_chain_read_ref\B151Res.vbp" $b151Needles
+Test-Vbp 'b151_chain_read_ref_x86' "$Tests\b151_chain_read_ref\B151Res.vbp" $b151Needles -Arch "x86"
+
+# 账 #305 §11.133（第一百五十二刀）：`As Object` 字段出厂那一枚引用。
+# 改前 `_Destroy` 只放类类型字段（`if (me->mChild) vb6_cls_X_Release(...)`），`As Object`
+# 那一格整支不出现 ⇒ 字段里握着的实例永不走 Class_Terminate（改前 Z-items=0）。
+#   A1: 写进字段、放掉局部变量之后仍被字段握着 = 0
+#   Z : 放掉持有者之后 item Terminate = 1（改前 0）—— 本刀的判据
+#   B1/B2: 裸实例 (Me) 进字段后出厂放手只清指针（Fix 191 判据），不崩
+$b152Needles = @(
+"B152-A1-items=0", "B152-A2-held-tag=7", "B152-Z-items=1",
+"B152-B1-self-nothing=False", "B152-B2-ok", "B152-DONE")
+Test-Vbp 'b152_object_field_teardown' "$Tests\b152_object_field_teardown\B152Res.vbp" $b152Needles
+Test-Vbp 'b152_object_field_teardown_x86' "$Tests\b152_object_field_teardown\B152Res.vbp" $b152Needles -Arch "x86"
+
+# 账 #305 §11.134（第一百五十三刀）：`As Variant` 字段的两站 —— 读出去那一枚要取引用,
+# 出厂那一站要清槽。
+# 改前: `V = mV` 发 `Clear + vb6_VariantFromValue(me->mV)`，而 `vb6_VariantFromValue` 对
+# vb6_VARIANT 是 identity **浅拷贝** ⇒ 返回槽与字段**共用**同一个对象，
+# `Set got = h.V` 之后 `Set got = Nothing` 就把字段还握着的那枚实例拆了（悬垂）。
+#   A1: 写进槽、放掉局部变量后 item 仍被槽握着 = 0
+#   A2: 槽里读得回
+#   A3: 读回并放掉那一枚之后 item **仍然活著** = 0（改前 1 ← 本刀的判据之一）
+#   Z : 放掉持有者 ⇒ 出厂清槽 ⇒ item Terminate = 1（改前就是 0 枚，因为早已被拆）
+#   B : 槽里放标量/串，出厂清槽不许把它们弄坏（1 / 4）
+#   C1: 两枚持有者各握一枚 ⇒ A(1) + C(1) = 2（改前 1：C 那一枚漏）
+$b153Needles = @(
+"B153-A1-terms=0", "B153-A2-held-tag=5", "B153-A3-terms=0", "B153-Z-terms=1",
+"B153-B1-len=1", "B153-B2-len=4", "B153-C1-terms=2", "B153-DONE")
+Test-Vbp 'b153_variant_field_teardown' "$Tests\b153_variant_field_teardown\B153Res.vbp" $b153Needles
+Test-Vbp 'b153_variant_field_teardown_x86' "$Tests\b153_variant_field_teardown\B153Res.vbp" $b153Needles -Arch "x86"
+# 账 #305 §11.135 (第一百五十四刀): 晚绑定属性写口的工程类实参。
+# 调用点递的是**裸实例** (`vb6_ComSetRef(o, L"Item", it)`), 而 COM 适配器剥壳问的是
+# `vb6_ComObject_GetInstance`（只认包装器, 其余答 NULL）⇒ 服务端形参收到 Nothing,
+# 属性写静默丢掉整枚对象。改后问 `vb6_ComObject_UnboxVb6Instance`（非包装器原样交回）。
+#   A: 早绑定写口对照（两条路径都必须存住）
+#   B1/B2: 晚绑定 `Set o.Item = it` 之后 `ItemIsNothing=False` 且读回 11（改前 True / -1）
+#   C1/C2: 放掉调用方那一枚后盒子还握着（False / 11）
+#   Z: 盒子放手 ⇒ 字段出厂放手 ⇒ item Terminate = 1（改前也 1: 那一枚从没进过盒子）
+$b154Needles = @(
+"B154-A1-nothing=False", "B154-A2-held=11", "B154-B1-nothing=False", "B154-B2-held=11",
+"B154-C1-nothing=False", "B154-C2-held=11", "B154-Z-terms=1", "B154-Z-made=1", "B154-DONE")
+Test-Vbp 'b154_late_prop_set' "$Tests\b154_late_prop_set\B154Res.vbp" $b154Needles
+Test-Vbp 'b154_late_prop_set_x86' "$Tests\b154_late_prop_set\B154Res.vbp" $b154Needles -Arch "x86"
+# 账 #305 §11.136 (第一百五十五刀): `Set <工程类>.Prop = Nothing` 必须调 setter 传 NULL。
+# 改前发成 `vb6_ReleaseObject((void**)(&(void*){vb6_B155Box_prop_get_Item(box)}))` ——
+# 拿 getter 的返回值 (借来的槽指针, 没 AddRef) 去 Release: 属性没清空 + 多算一次引用。
+#   P1: 置空后 ItemIsNothing=True (改前 False) ← 判据
+#   P2: 晚绑定置空经 COM 派发 (对照, 两档都 True)
+#   P3: 置空后再写还能存住 11
+#   P4: 放掉调用方那一枚后盒子还握着 (False)
+#   Z: 盒子放手 ⇒ item Terminate=1 (改前 0: 置空那一站把引用算坏了)
+$b155Needles = @(
+"B155-P1-held=11", "B155-P1-cleared=True", "B155-P2-cleared=True", "B155-P3-held=11",
+"B155-P4-nothing=False", "B155-Z-terms=1", "B155-Z-made=1", "B155-DONE")
+Test-Vbp 'b155_prop_set_nothing' "$Tests\b155_prop_set_nothing\B155Res.vbp" $b155Needles
+Test-Vbp 'b155_prop_set_nothing_x86' "$Tests\b155_prop_set_nothing\B155Res.vbp" $b155Needles -Arch "x86"
+# 账 #305 §11.137 (第一百五十六刀): 晚绑定读带类型的属性，已验证过的 BSTR 出口不许再套 CStr。
+# `o.Held`（Property Get Held() As Long，o 是 Object）在**拼串/裸值**那一格发成
+#   vb6_CStrLong(vb6_ComGetStringProp(o, L"Held"))
+# —— 把 BSTR 指针当 int32_t（改前 x64 打 128849432、x86 打 14248540）。
+#   Q1: 赋给 Long → ComGetIntProp（本来就对）
+#   Q2: 参与算术 → ComGetIntProp
+#   Q3: 与字面量比 → 对
+#   Q4: 赋给 String 的 String 属性 → ComGetStringProp 直通
+#   Q5: 拼串里的裸值 → 改前垃圾指针、改后 11 ← 判据
+$b156Needles = @(
+"B156-Q1=11", "B156-Q2=12", "B156-Q3=eq", "B156-Q4=hi", "B156-Q5=11", "B156-DONE")
+Test-Vbp 'b156_late_typed_prop_read' "$Tests\b156_late_typed_prop_read\B156Res.vbp" $b156Needles
+Test-Vbp 'b156_late_typed_prop_read_x86' "$Tests\b156_late_typed_prop_read\B156Res.vbp" $b156Needles -Arch "x86"
+# 账 #305 §11.139 (第一百五十七刀): 声明为 Variant 的成员晚绑定读，按 VARIANT 读（保留真实 VT）。
+# 改前 `n = o.V`（V 是 Property Get V() As Variant）发成
+#   vb6_ChkLong(vb6_VariantToLong(vb6_ComGetIntProp(o, L"V")))
+# —— 目标侧按 Variant 套 VariantToLong，读口却按目标档发 int ⇒ **C2440 编不过**。
+#   L1/L2/L3: 读进 Long / 参与算术 / CStr —— 改前整份工程编不过
+#   L4: 属性里揣着串时按 VB6 隐式转换取数 (42)
+#   L5: 读进 Variant 的型别必须是服务端那一档 (8 = VT_BSTR) 且值对
+$b158Needles = @(
+"B158-L1=11", "B158-L2=12", "B158-L3=11", "B158-L4=42", "B158-L5=8/42", "B158-DONE")
+Test-Vbp 'b158_late_variant_prop_read' "$Tests\b158_late_variant_prop_read\B158Res.vbp" $b158Needles
+Test-Vbp 'b158_late_variant_prop_read_x86' "$Tests\b158_late_variant_prop_read\B158Res.vbp" $b158Needles -Arch "x86"
+# 账 #305 §11.140 (第一百五十八刀): 成员声明为浮点/串档时，读口不与 consumer 各说一套。
+# 改前三笔真账（B159Box: S As String = "101" / D As Double = 1.5）：
+#   `d = o.S`  → `vb6_Dbl_AssignFromBSTR(&d, vb6_ComGetDoubleProp(...))` = **C2440**
+#   `n = o.S + 1` → `vb6_CStrDbl(vb6_Val(vb6_ComGetIntProp(...)) + 1)` = **运行期 AV**
+#   `n = o.D`  → `FltToLng(ComGetIntProp(...))` 先被 ChangeType 截断 = 1（VB6 要 2）
+$b159Needles = @(
+"B159-S1=101", "B159-S2=102", "B159-S3=101", "B159-S4=1.5", "B159-S5=2",
+"B159-S6=8/101", "B159-S7=77", "B159-Z-terms=1", "B159-DONE")
+Test-Vbp 'b159_late_decl_typed_read' "$Tests\b159_late_decl_typed_read\B159Res.vbp" $b159Needles
+Test-Vbp 'b159_late_decl_typed_read_x86' "$Tests\b159_late_decl_typed_read\B159Res.vbp" $b159Needles -Arch "x86"
+# 账 #305 §11.141 (第一百五十九刀): 晚绑定写进 Boolean 形参要有 CBool 那一步换算。
+# 改前 `o.B = 7` 借 VT_I4 就地透传 ⇒ m_B 真的存 7，`n = box.B` 答 7（真 VB6 是 -1）。
+#   W1~W4/W7/W8: 数值→Double、数值→String、串→Double、Double→Integer (2.5→2)、
+#                串→Integer、Variant→Integer (9.75→10)
+#   W5/W6: 数值→Boolean 存成 True、读回 Boolean 转 Long = -1
+$b160Needles = @(
+"B160-W1=2", "B160-W2=2", "B160-W3=3.5", "B160-W4=2", "B160-W5=True",
+"B160-W6=-1", "B160-W7=42", "B160-W8=10", "B160-Z=2/3.5", "B160-DONE")
+Test-Vbp 'b160_late_bool_arg' "$Tests\b160_late_bool_arg\B160Res.vbp" $b160Needles
+Test-Vbp 'b160_late_bool_arg_x86' "$Tests\b160_late_bool_arg\B160Res.vbp" $b160Needles -Arch "x86"
+# 账 #305 §11.142 (第一百六十刀): 窄整型形参的入站收窄要有溢出语义。
+# 改前 Integer/Byte 借 VT_I4 就地透传 ⇒ `o.I = 40000` 静默存成 -25536（真 VB6 报错误 6且目标不变）。
+$b161Needles = @(
+"B161-I1=ok 4000", "B161-I2=err6 val=4000", "B161-I3=err6 val=4000",
+"B161-Y1=ok 200", "B161-Y2=err6 val=200", "B161-L1=ok 2000000000", "B161-DONE")
+Test-Vbp 'b161_narrow_arg_overflow' "$Tests\b161_narrow_arg_overflow\B161Res.vbp" $b161Needles
+Test-Vbp 'b161_narrow_arg_overflow_x86' "$Tests\b161_narrow_arg_overflow\B161Res.vbp" $b161Needles -Arch "x86"
+# 账 #305 §11.143 (第一百六十一刀): ByRef String 形参的出站回写 —— 改前按值打包，体里的赋值
+# 落在我们的副本上，调用方变量原样不动（"hi" 而不是 "hi-ok"）。S4 是 ByVal 对照（不许回写），
+# S5 是体里不改（串必须完好），S6 是空串进，S7 是同一夹具里数值那六档的对照。
+$b162Needles = @(
+"B162-S1=5/hi-ok", "B162-S2=3/new", "B162-S3=0/[]", "B162-S4=4/keep",
+"B162-S5=4/loop", "B162-S6=3/-ok", "B162-S7=42", "B162-DONE")
+Test-Vbp 'b162_byref_string_arg' "$Tests\b162_byref_string_arg\B162Res.vbp" $b162Needles
+Test-Vbp 'b162_byref_string_arg_x86' "$Tests\b162_byref_string_arg\B162Res.vbp" $b162Needles -Arch "x86"
+# 账 #305 §11.144 (第一百六十二刀): 引用形不只裸标识符 —— 数组元素 / 类字段 / With 成员。
+# A6 是属性读（不可取址，仍按值 —— 在册），A8 是同一个元素连发两次（回写后槽仍是能用的串）。
+$b163Needles = @(
+"B163-A1=la-ok", "B163-A2=ma-ok", "B163-A3=new", "B163-A4=fs-ok",
+"B163-A5=ws-ok", "B163-A6=pt", "B163-A7=mg-ok", "B163-A8=tw-ok-ok", "B163-DONE")
+Test-Vbp 'b163_byref_addr' "$Tests\b163_byref_addr\B163Res.vbp" $b163Needles
+Test-Vbp 'b163_byref_addr_x86' "$Tests\b163_byref_addr\B163Res.vbp" $b163Needles -Arch "x86"
+# 账 #305 §11.145 (第一百六十三刀): 数值五档 / Boolean 的引用形也认数组元素与类字段。
+# N12 是 Byte（无 UI1 那一档，仍按值）、N13 是属性读（不可取址，仍按值），两条都是在册的负对照；
+# N10/N11 是要分清 `int16_t` 既是 Integer 也是 Boolean 的那两格（档靠声明表）。
+$b164Needles = @(
+"B164-N1=11", "B164-N2=21", "B164-N3=31", "B164-N4=41", "B164-N5=51",
+"B164-N6=61", "B164-N7=71.5", "B164-N8=81.5", "B164-N9=90.5",
+"B164-N10=True", "B164-N11=True", "B164-N12=7", "B164-N13=6", "B164-N14=2", "B164-DONE")
+Test-Vbp 'b164_byref_numeric_addr' "$Tests\b164_byref_numeric_addr\B164Res.vbp" $b164Needles
+Test-Vbp 'b164_byref_numeric_addr_x86' "$Tests\b164_byref_numeric_addr\B164Res.vbp" $b164Needles -Arch "x86"
+
+# 账 #305 §11.146 (第一百六十四刀): Byte / Currency / Date 三档的引用形。
+# C1 是货币**数组元素** —— 在册欠项 (标量 double 值语义 vs 元素 int64 存法)，仍按值。
+# 账 #305 §11.153 (第一百七十一刀): C2/C3 现在打出真值 (21.25/31.25) —— 改前 Currency 的
+# 类字段/模块级变量在拼串里走 vb6_CStrLong 被截成 21/31。C1 (数组元素) 仍截 —— 表示不一致
+# 那一格在册。
+$b165Needles = @(
+"B165-Y1=7", "B165-Y2=7", "B165-Y3=7",
+"B165-C1=10", "B165-C2=21.25", "B165-C3=31.25",
+"B165-T1=ok", "B165-T2=ok", "B165-T3=ok",
+"B165-Y4=7", "B165-DONE")
+Test-Vbp 'b165_byref_byte_cur_date' "$Tests\b165_byref_byte_cur_date\B165Res.vbp" $b165Needles
+Test-Vbp 'b165_byref_byte_cur_date_x86' "$Tests\b165_byref_byte_cur_date\B165Res.vbp" $b165Needles -Arch "x86"
+
+# 账 #305 §11.147 (第一百六十五刀): 属性读当 ByRef 实参的读-改-写。
+# 真 VB6 不递属性本身 (没地址)，而是「拷临时量 → 递地址 → 回来经 Let 写回」。
+# P1/P2 = 同一格连发两次 (每次都该在**已经写回**的值上再走一步)；
+# P8 / Q3 从第一百六十七刀 (§11.149) 起是正例了: String 属性也走读-改-写。
+$b166Needles = @(
+"B166-P1=41", "B166-P2=42", "B166-P3=21", "B166-P4=31.5",
+"B166-P5=7", "B166-P6=True", "B166-P7=2020,1,3",
+"B166-P8=abcd", "B166-P9=xyz",
+"B166-Q1=41", "B166-Q2=31.5", "B166-Q3=abcd", "B166-DONE")
+Test-Vbp 'b166_prop_byref' "$Tests\b166_prop_byref\B166Res.vbp" $b166Needles
+Test-Vbp 'b166_prop_byref_x86' "$Tests\b166_prop_byref\B166Res.vbp" $b166Needles -Arch "x86"
+
+# 账 #305 §11.150 (第一百六十八刀): 带索引的属性读当 ByRef 实参 —— 读-改-写。
+# S1/S2 单索引 (早绑定 / 晚绑定接收者)、S3 两个索引实参、S4 String 档带索引、
+# S5 索引本身是表达式。
+$b168Needles = @(
+"B168-S1=11", "B168-S2=12", "B168-S3=1002",
+"B168-S4=ab!", "B168-S5=31", "B168-DONE")
+Test-Vbp 'b168_indexed_prop_byref' "$Tests\b168_indexed_prop_byref\B168Res.vbp" $b168Needles
+Test-Vbp 'b168_indexed_prop_byref_x86' "$Tests\b168_indexed_prop_byref\B168Res.vbp" $b168Needles -Arch "x86"
+
+# 账 #305 §11.151 (第一百六十九刀): With 块里的属性读 (改前一个都不成立)。
+# W2 = 型不一致那一格，§11.152 (第一百七十刀) 之后也换算写回了 ⇒ 41（本刀之前是 40）。
+$b169Needles = @(
+"B169-W1=41", "B169-W2=41", "B169-W3=41",
+"B169-W4=ab!", "B169-W5=11", "B169-DONE")
+Test-Vbp 'b169_with_prop_byref' "$Tests\b169_with_prop_byref\B169Res.vbp" $b169Needles
+Test-Vbp 'b169_with_prop_byref_x86' "$Tests\b169_with_prop_byref\B169Res.vbp" $b169Needles -Arch "x86"
+
+# 账 #305 §11.152 (第一百七十刀): 型不一致那一格的换算 (临时量按形参 C 型造 + 两向换算)。
+# T6 用 3.7 而不是 3.2: 把「取整」与「截断」分开 (vb6_FltToLng 折 4 ⇒ 5; 截断会得 4)。
+# T7 是 Currency 证人 (本刀仍按值); 用比较串而不拼值 —— Currency 属性的拼串格式化
+# 另有一个旧病 (按 Long 发, 丢小数), 在册。
+$b170Needles = @(
+"B170-T1=41", "B170-T2=8", "B170-T3=21", "B170-T4=21",
+"B170-T5=2.5", "B170-T6=5", "B170-T7=unchanged", "B170-DONE")
+Test-Vbp 'b170_prop_byref_narrow' "$Tests\b170_prop_byref_narrow\B170Res.vbp" $b170Needles
+Test-Vbp 'b170_prop_byref_narrow_x86' "$Tests\b170_prop_byref_narrow\B170Res.vbp" $b170Needles -Arch "x86"
+
+# 账 #305 §11.153 (第一百七十一刀): Currency 属性在拼串里的格式化。改前只 Q3/Q6 (双精度/局部变量)
+# 是对的, Q1/Q2/Q4/Q5/Q7 全把小数截掉 (CStrLong)。
+$b171Needles = @(
+"B171-Q1=10.5", "B171-Q2=11.5", "B171-Q3=10.5", "B171-Q4=20.25",
+"B171-Q5=11.5", "B171-Q6=7.25", "B171-Q7=11.5", "B171-DONE")
+Test-Vbp 'b171_currency_prop_str' "$Tests\b171_currency_prop_str\B171Res.vbp" $b171Needles
+Test-Vbp 'b171_currency_prop_str_x86' "$Tests\b171_currency_prop_str\B171Res.vbp" $b171Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
@@ -11917,21 +12661,30 @@ if ($Category -in @("all", "run", "vbp")) {
                      "A3-moduleNew-tn=B216Impl late=42", "A4-fnResult-tn=B216Impl late=42",
                      "V1-variant-inlineNew-vt=9 tn=B216Impl late=42",
                      "V2-variant-classVar-vt=9 tn=B216Impl late=42",
-                     "N1-plain-inlineNew-tn=Object isNothing=False",
-                     "N2-plain-moduleNew-tn=Object isNothing=False",
-                     "N3-plain-variant-tn=Object", "B216-DONE")
+                     "N1-plain-inlineNew-tn=B216Plain isNothing=False",
+                     "N2-plain-moduleNew-tn=B216Plain isNothing=False",
+                     "N3-plain-variant-tn=B216Plain", "B216-DONE")
     Test-Vbp 'b216_slot_arm_answers' "$Tests\b216_slot\B216d.vbp" $b216Needles
     Test-Vbp 'b216_slot_arm_answers_x86' "$Tests\b216_slot\B216d.vbp" $b216Needles -Arch "x86"
-    # 发码针 (同一问只许从唯一发码处出): 四形 + Variant 两形都问那一位主人, 而且
-    # 表外那一枚类**一口都不许问表** —— 问到了就是有人在归一之外又发了一枚空壳包器。
+    # 发码针 (同一问只许从唯一发码处出): 四形 + Variant 两形都问那一位主人。
+    # §11.100 (第一百一十八刀): 缺省 Instancing 的 B216Plain 也进表 (registerable=false,
+    # progId/clsid 空), 所以它的三形**同样要走这一位主人** —— 读数从 Object 变成类名，
+    # 与 VB6 TypeName 一致。
     Test-EmitcShape 'b216_slot_stations_ask_one_owner' @("$Tests\b216_slot\B216d.vbp") @(
-        'vo1 = (void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("B216Impl"), (void*)vb6_cls_B216Impl_New());',
-        'vo4 = (void*)vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc("B216Impl"), (void*)vb6_Main_MakeImpl());',
+        '(void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("B216Impl"), (void*)vb6_cls_B216Impl_New())',
+        '(void*)vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc("B216Impl"), (void*)vb6_Main_MakeImpl())',
+        'vb6_ReleaseObject((void**)&vo1); vo1 = _vref',
+        'vb6_ReleaseObject((void**)&vo4); vo4 = _vref',
         'v1 = vb6_VariantFromValue((void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("B216Impl"), (void*)vb6_cls_B216Impl_New()));',
-        'v2 = vb6_VariantFromValue((void*)vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc("B216Impl"), (void*)a));')
-    Test-EmitcAbsent 'b216_slot_keeps_no_bare_box_and_no_empty_desc_ask' @("$Tests\b216_slot\B216d.vbp") @(
+        'v2 = vb6_VariantFromValue((void*)vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc("B216Impl"), (void*)a));',
+        '(void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("B216Plain"), (void*)vb6_cls_B216Plain_New())',
+        '(void*)vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc("B216Plain"), (void*)mP)',
+        'vb6_ReleaseObject((void**)&po1); po1 = _vref',
+        'vb6_ReleaseObject((void**)&po2); po2 = _vref',
+        'pv = vb6_VariantFromValue((void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("B216Plain"), (void*)vb6_cls_B216Plain_New()));')
+    Test-EmitcAbsent 'b216_slot_never_boxes_bare_instance' @("$Tests\b216_slot\B216d.vbp") @(
         'vb6_VariantFromValue((vb6_cls_B216Impl',
-        'vb6_FindCoClassDesc("B216Plain")',
+        'vb6_VariantFromValue((vb6_cls_B216Plain',
         '((void)(a), (void*)0)')
     # 账 #305 §B217 (第一百二十一刀): ByRef Variant 实参那一站每次调用取走**两枚**引用 —— 站点自己
     # 问 `vb6_ComObject_From*Instance` 取一枚, 装箱那一臂 `vb6_VariantObject` 又 AddRef 一枚
@@ -12253,7 +13006,7 @@ if ($Category -in @("all", "run", "vbp")) {
         "$Tests\b445_refcount\B445.vbp") @(
         '{  /* 账 #305 (甲) 腿②″: Set 泛对象槽 vb6_ret_HandOff38 */',
         'vb6_ComAddRefDispatch((void*)vb6_ret_HandOff38);',
-        'vb6_ret_PassThru39 = l39;  /* Set */')
+        'vb6_ReleaseObject((void**)&vb6_ret_PassThru39); vb6_ret_PassThru39 = _vref')
     Test-EmitcAbsent 'b445_late_return_slot_never_bare_writes_or_claims_a_local' @(
         "$Tests\b445_refcount\B445.vbp") @(
         'vb6_ret_HandOff38 = mSlot38;  /* Set */',
@@ -14427,7 +15180,9 @@ if ($Category -in @("all", "syntax")) {
     # 紧接着那条对照针证明**真内置站点没有被顺带改掉**：没有 Declare 的
     # `GetObject(, "Excel.Application")` 必须继续走 vb6_GetObject。
     Test-CodegenNote "declare_shadows_builtin" @("$Tests\test_declare_shadows_builtin.bas") @(
-        "vb6_lwa_GetObjectA(0L, ((int32_t)sizeof(bmp)), (void*)&(bmp))") @(
+        # 第九十六刀：`Len(<整枚 UDT>)` 已按真机口径折成常量（Σ成员，定长串按 N），
+        # BITMAP 全是有宽成员 ⇒ 24（= 原来的 sizeof(bmp)，数值不变，只是不再写 sizeof）。
+        "vb6_lwa_GetObjectA(0L, ((int32_t)24), (void*)&(bmp))") @(
         "vb6_GetObject(")
     Test-CodegenNote "getobject_builtin_kept" @("$Tests\test_p24_04b\test_getobject.bas") @(
         "vb6_GetObject(0L, ")

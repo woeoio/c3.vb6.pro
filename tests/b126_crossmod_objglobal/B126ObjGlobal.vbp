@@ -1,0 +1,7 @@
+Type=Exe
+Name="B126App"
+Module=B126M1; B126M1.bas
+Module=B126M2; B126M2.bas
+Class=B126Item; B126Item.cls
+Startup="Sub Main"
+ExeName32="B126.exe"

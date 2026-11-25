@@ -312,6 +312,9 @@ int32_t vb6_VariantToLong(vb6_VARIANT v) {
         case vb6_vtNull:
             vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
                          vb6_BSTR_FromStr(L"Invalid use of Null"));
+            // C30-11 第八十六刀: 与 vb6_CStrStrict 同口径，给读侧一个可判的痕迹。
+            // 否则 `Mid("abc", <Null>)` 会先报 94，再被 Mid 自己的 5 盖掉（真机是 94）。
+            vb6_ConvFailMark();
             return 0;  /* 不可达 */
         case vb6_vtBoolean: return v.boolVal ? -1 : 0;
         case vb6_vtByte:    return (int32_t)v.bVal;
@@ -816,6 +819,13 @@ int32_t vb6_ErrSerial(void) { return vb6_err_serial; }
 int32_t vb6_conv_fail_serial = -1;
 void vb6_ConvFailMark(void) { vb6_conv_fail_serial = vb6_err_serial; }
 
+// C30-11 第八十六刀: 「本语句里刚有一次实参转换失败」的判据。
+// Mid/Left/Right/Chr 这些自己会报 5 的内建用它决定要不要 raise ——
+// 实参已经是 Null（上游报了 94）时不许再拿 5 盖掉它（真机留 94）。
+int vb6_ArgConvertFailed(void) {
+    return (vb6_conv_fail_serial >= 0 && vb6_conv_fail_serial == vb6_err_serial) ? 1 : 0;
+}
+
 void vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description) {
     ++vb6_err_serial;
     vb6_err.number = errNum;
@@ -1049,6 +1059,11 @@ int32_t vb6_VarCmpLongGe(vb6_VARIANT* a, int32_t b) { vb6_VARIANT vb; memset(&vb
 
 
 void vb6_RaiseError(int32_t errNum, BSTR description) {
+    // C30-11 第九十三刀: 与 vb6_ErrRaise 同一句 —— **报错就要动序号**。
+    // 以前这两枚对序号的态度不一样（ErrRaise ++、RaiseError 不动），于是凡走这一枚报出来的
+    // 错误（全仓 34 处 / 15 份文件：COM 429/438、FSO、`vb6_NumVal` 的文本 13 …）在赋值站的
+    // 语句级守卫那里**一律不可见** ⇒ 语句照样把 0 写进目标。真机口径一成不变：报错即中止语句。
+    ++vb6_err_serial;
     vb6_err.number = errNum;
     vb6_err.description = description;
     if (vb6_err_resume_next) {

@@ -3100,7 +3100,7 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
     // 直接返回、目标不动。只认**单实参 + 实参是变体档 + 发码确实是 vb6_CStr(**那一形;
     // 第六十六刀那两条 vb6_CStrStrict(<比较>/<拼接>) 不在此列 (前缀就不是 vb6_CStr();
     // 定长串那一档读数未量, 仍走原路。
-    if (!valueIsVariant && fixedLen.empty() && rhs
+    if (!valueIsVariant && rhs
         && rhs->kind == ASTNodeKind::IndexOrCallExpr) {
         auto& call74 = static_cast<IndexOrCallExpr&>(*rhs);
         if (call74.callee && call74.callee->kind == ASTNodeKind::IdentifierExpr
@@ -3264,23 +3264,69 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         c_.emitLine("vb6_BSTR_AssignFromVariant(&" + target + ", " + rawVarValue221 + ");");
         return;
     }
+    // C30-11 第九十刀: 定长串目标收到 Variant 右值 —— 两支各走一枚**原子**出口
+    // (Null ⇒ 94 且目标一字不动; 其余档折成串后按 N 补空格/截右)。
+    // 不套上面的 vb6_BSTR_AssignFromVariant 是因为定长串的写侧有自己的形状:
+    // UDT 字段是内联 char[N] (不能当 BSTR* 用), 模块级是 BSTR 槽但多一道 fit。
+    if (strictVarAssign221 && !fixedLen.empty()) {
+        if (udtFixedField) {
+            c_.emitLine("vb6_FixedStrAssignFromVariant(" + target + ", " + fixedLen + ", "
+                        + rawVarValue221 + ");");
+        } else {
+            c_.emitLine("vb6_LSetFromVariant(&" + target + ", " + fixedLen + ", "
+                        + rawVarValue221 + ");");
+        }
+        return;
+    }
     if (!fixedLen.empty() && udtFixedField) {
         // 账 #118 续: 目标是 UDT 定长串字段 (C 类型 char[N], VB6 ABI 内联 ANSI) ——
         // 不能 &field 当 BSTR* 用。写侧按 N 右补空格/右截断 (与 LSet 同口径)。
         // 自有临时串那一侧顺手释放 (与上面 vb6_LSetFree 的选择同一把尺)。
+        //
+        // C30-11 第八十九刀: 语句级中止 —— 本语句里 raise 过就不写 char[N]。
+        // 旧形只发了 `const int32_t _eN = vb6_ErrSerial();` 却不看它: `u.f = Left("abc",-1)`
+        // 报 5 之后字段被抹成空格（真机：一字不动）。形与下面普通 BSTR 槽那两支同构:
+        // 右值**只算一次**进临时量, 再拿算完之后的序号决定是写进去还是收回。
+        const bool ownedU89 = valueOwned113 || wrapped122;
         const std::string assignFn118u =
-            (valueOwned113 || wrapped122) ? "vb6_FixedStrAssignFree" : "vb6_FixedStrAssign";
-        c_.emitLine(assignFn118u + "(" + target + ", " + fixedLen + ", " + value + ");");
+            ownedU89 ? "vb6_FixedStrAssignFree" : "vb6_FixedStrAssign";
+        if (stmtAbortGuard_.empty()) {
+            c_.emitLine(assignFn118u + "(" + target + ", " + fixedLen + ", " + value + ");");
+        } else {
+            const std::string tmp89 = "_av" + std::to_string(stmtAbortSeq_);
+            c_.emitLine("BSTR " + tmp89 + " = (" + stmtAbortGuard_ + " == vb6_ErrSerial()) ? ("
+                        + value + ") : NULL;");
+            if (ownedU89) {
+                c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) " + assignFn118u
+                            + "(" + target + ", " + fixedLen + ", " + tmp89
+                            + "); else vb6_BSTR_Free(" + tmp89 + ");");
+            } else {
+                c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) " + assignFn118u
+                            + "(" + target + ", " + fixedLen + ", " + tmp89 + ");");
+            }
+        }
     } else if (!fixedLen.empty()) {
         // 账 #118 ①: 定长串赋值的收口 —— 短则右侧补空格、长则截右 (VB6 手册 + 真机
         // CopyMemory 实测一致, 与 LSet 同口径)。必须先 fit 成一只**新** BSTR 再 move
         // 进目标: 先 Assign 再回头改长度会多留一只临时, 而裸赋值连长度都不对。
         // RHS 是自有临时串那一侧用 vb6_LSetFree 顺手把它释放 —— 尺与下面
         // AssignMove/Assign 的选择同一把, 否则每次赋值都漏一块 (账 #118 ②)。
+        //
+        // C30-11 第八十九刀: 同一道语句级中止门也套在这里 (`g = Left("abc",-1)` 报 5 之后
+        // g 旧值不得被抹掉)。fit 出来的那只新串只有序号没变才并进目标, 否则收回。
+        const bool ownedF89 = valueOwned113 || wrapped122;
         const std::string fitFn118 =
-            (valueOwned113 || wrapped122) ? "vb6_LSetFree" : "vb6_LSet";
-        c_.emitLine("vb6_BSTR_AssignMove(&" + target + ", " + fitFn118 + "(" + value
-                    + ", " + fixedLen + "));");
+            ownedF89 ? "vb6_LSetFree" : "vb6_LSet";
+        if (stmtAbortGuard_.empty()) {
+            c_.emitLine("vb6_BSTR_AssignMove(&" + target + ", " + fitFn118 + "(" + value
+                        + ", " + fixedLen + "));");
+        } else {
+            const std::string tmp89f = "_av" + std::to_string(stmtAbortSeq_);
+            c_.emitLine("BSTR " + tmp89f + " = (" + stmtAbortGuard_ + " == vb6_ErrSerial()) ? ("
+                        + fitFn118 + "(" + value + ", " + fixedLen + ")) : NULL;");
+            c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) vb6_BSTR_AssignMove(&"
+                        + target + ", " + tmp89f + "); else vb6_BSTR_Free(" + tmp89f + ");");
+        }
     } else if (valueOwned113 || wrapped122) {
         // C30-11 第七十九刀 (§B227): 语句级中止 —— 本语句里 raise 过就不写目标；
         // RHS 是**自有临时串**，不 move 进去就得自己释放，否则每次中止漏一块。
@@ -3516,6 +3562,42 @@ bool CCodeGen::variantRhsOwnsValue(Expr* rhs, const std::string& rawC) const {
         if (knownVariantVars_.count(Symbol::toLower(
                 static_cast<const IdentifierExpr&>(*rhs).name)) > 0)
             return false;
+    }
+    if (rhs && !exprHasLateBoundComRead(rhs)) {
+        // 判据只认「这确实是一枚 Variant **字段**」, 不认「源码里长得像左值」:
+        //   · 晚绑定成员读 (`at.value`) 交回的是一枚**新造**的 Variant (vb6_VariantFromComResult
+        //     / vb6_ComGet*Prop …), 所有权随这一句转移 —— 那不是槽;
+        //   · On Error 站现造的 `_vsN` 暂存同理 (转移, 不是槽)。
+        // 这两族按槽判会把所有权判反 (cvp_emitc_variant_fallback 与 b251..b255 的形状针钉的
+        // 就是它们那一形)。
+        //
+        // 账 #305 §11.134 (第一百五十三刀): 形④ 的**字段**那一格。
+        //
+        // `V = mV` (类里 `Private mV As Variant`) 以前落进 true 那一支:
+        // `knownVariantVars_` 只登记**本地** Variant, 而类里的字段在 C 里是
+        // `me->mV`、在 AST 里是一枚 IdentifierExpr(不带 `me->`) ⇒ 一眼看上去「自有」
+        // ⇒ 发 `vb6_VariantClear(&ret); ret = vb6_VariantFromValue(me->mV);`，
+        // 而 `vb6_VariantFromValue` 对 vb6_VARIANT 实参是 `vb6_VariantIdentity`
+        // (纯浅拷贝: 不 AddRef、不拷 BSTR) ⇒ 调用方拿到的那一枚与字段**共用**同一个对象。
+        //
+        // 实测 (tests/b153): `Set got = h.V` 之后 `Set got = Nothing` 就把字段还握着的那枚
+        // 实例拆了 (Terminate 发生在持有者出厂**之前**), 字段里留一根悬垂指针。
+        //
+        // 口径: 只要右值是**一枚槽** (本地/形参/字段/UDT 成员，即 inferExprType 答 Variant
+        // 的左值形)，就答 false ⇒ 走 `vb6_VariantAssign`(Clear + 深拷贝)。
+        // 只有**调用**(函数/属性 Get 交回的临时量)才「自有」—— 那不是左值形，不在这里接管。
+        if (rhs->kind == ASTNodeKind::IdentifierExpr) {
+            // 裸名 = 本模块字段 (隐式 me->): 问类成员表, 问不到就是别的什么, 不接管。
+            const std::string nm =
+                Symbol::toLower(static_cast<const IdentifierExpr&>(*rhs).name);
+            if (classVariantMembers_.count(nm) || classVariantMembers_.count("m_" + nm))
+                return false;
+        } else if (rhs->kind == ASTNodeKind::MemberAccessExpr) {
+            // `Me.f` / `<类引用>.f`: 问 driver 注入的工程级字段档表。
+            auto& ma = static_cast<const MemberAccessExpr&>(*rhs);
+            const std::string cls = ma.object ? inferClassTypeOfExpr(*ma.object) : std::string();
+            if (!cls.empty() && classFieldIsVariantSlot(cls, ma.memberName)) return false;
+        }
     }
     // §B167 形⑪ (本刀): 右值是一处借来的串存储。
     return !exprBorrowsBstrStorage(rhs, rawC);

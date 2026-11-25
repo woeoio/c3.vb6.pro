@@ -1,0 +1,6 @@
+Type=Exe
+Name="B129App"
+Module=B129Main; B129Main.bas
+Class=B129Item; B129Item.cls
+Startup="Sub Main"
+ExeName32="B129.exe"

@@ -1,0 +1,7 @@
+Type=Exe
+Name="B144App"
+Module=B144Main; B144Main.bas
+Class=B144Box; B144Box.cls
+Class=B144Item; B144Item.cls
+Startup="Sub Main"
+ExeName32="B144.exe"

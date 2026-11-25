@@ -1,0 +1,6 @@
+Type=Exe
+Name="B140App"
+Module=B140Main; B140Main.bas
+Class=B140Item; B140Item.cls
+Startup="Sub Main"
+ExeName32="B140.exe"

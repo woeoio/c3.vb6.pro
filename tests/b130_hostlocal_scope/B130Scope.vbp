@@ -1,0 +1,7 @@
+Type=Exe
+Name="B130App"
+Module=B130Main; B130Main.bas
+Class=B130Item; B130Item.cls
+Class=B130Box; B130Box.cls
+Startup="Sub Main"
+ExeName32="B130.exe"

@@ -1,0 +1,6 @@
+Type=Exe
+Name="B136App"
+Module=B136Main; B136Main.bas
+Class=B136Item; B136Item.cls
+Startup="Sub Main"
+ExeName32="B136.exe"

@@ -1,0 +1,6 @@
+Type=Exe
+Name="B412App"
+Module=B412Main; B412Main.bas
+Class=B412Item; B412Item.cls
+Startup="Sub Main"
+ExeName32="B412.exe"

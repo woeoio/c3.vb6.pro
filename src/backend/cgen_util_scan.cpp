@@ -8,6 +8,95 @@ namespace vb6c3 {
 
 // --- cgen_util_scan.cpp: AST 扫描辅助 (GoSub / 多维数组 / Resume / OnError) ---
 
+// ============================================================
+// 第一百零一刀 (§11.79): 晚绑定成员读的判据收成一处
+//   第九十八/九十九/一百刀在 cgen_assign.cpp 里写过一遍（那三刀只用于赋值站），条件位
+//   这一刀要问同一问 —— 不再抄第二份，改成成员函数，两边同读。
+//   判据：接收者按**链根**下钻（MemberAccess / IndexOrCall->callee），根是标识符、
+//   是登记过的**变量**（排除同工程函数名 / 本类成员），不在控件数组与伪宿主名单里，
+//   且推断型是 Object（或以 knownObjectVars_ 兵底）。
+// ============================================================
+bool CCodeGen::lateBoundComReadExpr(Expr* e) const {
+    if (!e) return false;
+    Expr* rcv = nullptr;
+    if (e->kind == ASTNodeKind::MemberAccessExpr) {
+        rcv = static_cast<MemberAccessExpr&>(*e).object.get();
+    } else if (e->kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& c = static_cast<IndexOrCallExpr&>(*e);
+        if (c.callee && c.callee->kind == ASTNodeKind::MemberAccessExpr)
+            rcv = static_cast<MemberAccessExpr&>(*c.callee).object.get();
+    }
+    if (!rcv) return false;
+    Expr* root = rcv;
+    while (root) {
+        if (root->kind == ASTNodeKind::MemberAccessExpr)
+            root = static_cast<MemberAccessExpr&>(*root).object.get();
+        else if (root->kind == ASTNodeKind::IndexOrCallExpr
+                 && static_cast<IndexOrCallExpr&>(*root).callee)
+            root = static_cast<IndexOrCallExpr&>(*root).callee.get();
+        else
+            break;
+    }
+    if (!root || root->kind != ASTNodeKind::IdentifierExpr) return false;
+    const std::string rn = Symbol::toLower(static_cast<IdentifierExpr&>(*root).name);
+    static const char* kHost[] = { "printer", "printers", "screen", "app",
+                                  "clipboard", "me", nullptr };
+    if (knownControlArrays_.count(rn)) return false;
+    for (int i = 0; kHost[i]; i++)
+        if (rn == kHost[i]) return false;
+    // 第一百零八刀 (§11.87): 形参（`ByVal o As Object`）只进 knownObjectVars_，
+    // 不进 knownLocalVars_ —— 只认后者的老判据就把「另一个过程里的 w = o.NoSuchProperty」
+    // 放走了（真机 M4）。所以补一条 onlyObject 腿；但 knownObjectVars_ **全程不清空**，
+    // 同名会漏到别的过程（`Thing` 是工程类时也被当 Object ⇒ b190 的第三条针变形 = 假阳），
+    // 因此这一腿要求**接收者的推断型是 Object 或 Unknown**。已知型（工程类/串/数）一律不认。
+    const bool isLocalVar = knownLocalVars_.count(rn) > 0;
+    if (!isLocalVar && !knownObjectVars_.count(rn)) return false;
+    const Vb6Type rcvType = inferExprType(*rcv);
+    if (rcvType == Vb6Type::Object) return true;
+    if (!isLocalVar) {
+        // 接收者能解析出工程类名 ⇒ 它是字段访问，不是晚绑定（列表里那张表跨模块不清空，
+        // 同名会漏进来；b190 的 `Thing->Alpha` 就是这么被误判的）。
+        return inferClassTypeOfExpr(*rcv).empty();
+    }
+    return knownObjectVars_.count(rn) > 0;
+}
+
+bool CCodeGen::exprHasLateBoundComRead(Expr* e) const {
+    if (!e) return false;
+    if (lateBoundComReadExpr(e)) return true;
+    switch (e->kind) {
+        case ASTNodeKind::BinaryExpr: {
+            auto& b = static_cast<BinaryExpr&>(*e);
+            return exprHasLateBoundComRead(b.left.get()) || exprHasLateBoundComRead(b.right.get());
+        }
+        case ASTNodeKind::UnaryExpr:
+            return exprHasLateBoundComRead(static_cast<UnaryExpr&>(*e).operand.get());
+        case ASTNodeKind::MemberAccessExpr:
+            return exprHasLateBoundComRead(static_cast<MemberAccessExpr&>(*e).object.get());
+        case ASTNodeKind::DictionaryAccessExpr:
+            return exprHasLateBoundComRead(static_cast<DictionaryAccessExpr&>(*e).object.get());
+        case ASTNodeKind::IndexOrCallExpr: {
+            auto& c = static_cast<IndexOrCallExpr&>(*e);
+            if (exprHasLateBoundComRead(c.callee.get())) return true;
+            for (auto& a : c.positional)
+                if (exprHasLateBoundComRead(a.get())) return true;
+            for (auto& na : c.named)
+                if (exprHasLateBoundComRead(na.value.get())) return true;
+            return false;
+        }
+        case ASTNodeKind::NewExpr: {
+            auto& nw = static_cast<NewExpr&>(*e);
+            for (auto& a : nw.args)
+                if (exprHasLateBoundComRead(a.get())) return true;
+            return false;
+        }
+        case ASTNodeKind::TypeOfExpr:
+            return exprHasLateBoundComRead(static_cast<TypeOfExpr&>(*e).object.get());
+        default:
+            return false;
+    }
+}
+
 
 // ============================================================
 // AST辅助: 检测语句列表中是否包含GoSubStmt
@@ -195,6 +284,94 @@ bool CCodeGen::hasResumeInStmts(StmtList& stmts) const {
         }
     }
     return false;
+}
+
+// 账 #305 §11.119 (第一百三十九刀): 数过程体里 With 语句的条数 (递归) —— 活载体名册的槽数上界。
+// 为什么要上界而不是精确值: 名册的槽号是**发码顺序**分配的, 而「哪一帧是自有载体」要等发码
+// 才算得出来 (`vb6_NewObject` / `vb6_CreateObject` / 工程函数那一形)。多给的槽没登记就是 0,
+// 落点放手时空判据天然跳过 —— 少给的槽则会溢出。
+int CCodeGen::countWithStmts(StmtList& stmts) const {
+    int n = 0;
+    for (auto& stmt : stmts) {
+        if (!stmt) continue;
+        switch (stmt->kind) {
+            case ASTNodeKind::WithStmt:
+                n += 1 + countWithStmts(static_cast<WithStmt&>(*stmt).body);
+                break;
+            case ASTNodeKind::IfStmt: {
+                auto& ifStmt = static_cast<IfStmt&>(*stmt);
+                n += countWithStmts(ifStmt.thenBody);
+                n += countWithStmts(ifStmt.elseBody);
+                for (auto& elif : ifStmt.elseIfs) n += countWithStmts(elif->body);
+                break;
+            }
+            case ASTNodeKind::ForStmt:
+                n += countWithStmts(static_cast<ForStmt&>(*stmt).body);
+                break;
+            case ASTNodeKind::ForEachStmt:
+                n += countWithStmts(static_cast<ForEachStmt&>(*stmt).body);
+                break;
+            case ASTNodeKind::DoLoopStmt:
+                n += countWithStmts(static_cast<DoLoopStmt&>(*stmt).body);
+                break;
+            case ASTNodeKind::WhileWendStmt:
+                n += countWithStmts(static_cast<WhileWendStmt&>(*stmt).body);
+                break;
+            case ASTNodeKind::SelectCaseStmt: {
+                auto& sel = static_cast<SelectCaseStmt&>(*stmt);
+                for (auto& c : sel.cases) n += countWithStmts(c->body);
+                n += countWithStmts(sel.elseCase);
+                break;
+            }
+            default: break;
+        }
+    }
+    return n;
+}
+
+// 账 #305 §11.116 五 (第一百四十一刀): 扫过程体, 记下每个 `LabelStmt` 定义处所在的 With 层深。
+// 为什么要预先扫: `GoTo` 发码时只知道「现在在第几层 With」, 要知道「目标标签在第几层」才能算出
+// 该退几层 —— 而标签可能定义在 `GoTo` 之后 (向下的跳转最常见), 发码是单趟的。
+// 同一标签在方向拆分的两份循环体里各定义一次, 两处层深相同 (同一段源码), 后写覆盖无妨。
+void CCodeGen::collectLabelWithDepth(StmtList& stmts, int depth,
+                                    std::unordered_map<std::string, int>& out) {
+    for (auto& stmt : stmts) {
+        if (!stmt) continue;
+        switch (stmt->kind) {
+            case ASTNodeKind::LabelStmt:
+                out[Symbol::toLower(static_cast<LabelStmt&>(*stmt).labelName)] = depth;
+                break;
+            case ASTNodeKind::WithStmt:
+                collectLabelWithDepth(static_cast<WithStmt&>(*stmt).body, depth + 1, out);
+                break;
+            case ASTNodeKind::IfStmt: {
+                auto& ifStmt = static_cast<IfStmt&>(*stmt);
+                collectLabelWithDepth(ifStmt.thenBody, depth, out);
+                collectLabelWithDepth(ifStmt.elseBody, depth, out);
+                for (auto& elif : ifStmt.elseIfs) collectLabelWithDepth(elif->body, depth, out);
+                break;
+            }
+            case ASTNodeKind::ForStmt:
+                collectLabelWithDepth(static_cast<ForStmt&>(*stmt).body, depth, out);
+                break;
+            case ASTNodeKind::ForEachStmt:
+                collectLabelWithDepth(static_cast<ForEachStmt&>(*stmt).body, depth, out);
+                break;
+            case ASTNodeKind::DoLoopStmt:
+                collectLabelWithDepth(static_cast<DoLoopStmt&>(*stmt).body, depth, out);
+                break;
+            case ASTNodeKind::WhileWendStmt:
+                collectLabelWithDepth(static_cast<WhileWendStmt&>(*stmt).body, depth, out);
+                break;
+            case ASTNodeKind::SelectCaseStmt: {
+                auto& sel = static_cast<SelectCaseStmt&>(*stmt);
+                for (auto& c : sel.cases) collectLabelWithDepth(c->body, depth, out);
+                collectLabelWithDepth(sel.elseCase, depth, out);
+                break;
+            }
+            default: break;
+        }
+    }
 }
 
 

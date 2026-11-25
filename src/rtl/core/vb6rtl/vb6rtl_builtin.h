@@ -93,6 +93,11 @@ BSTR vb6_LTrimVar(vb6_VARIANT s);
 // 其余实参照旧交给 BSTR 形参 —— 两条路的读数不同, 不能合成一条。
 // ⚠ 头里只留原型, 身子在 vb6rtl_string.c (与 vb6_Trim 同文件): 理由同 IntV/FixV。
 vb6_VARIANT vb6_LenV(vb6_VARIANT v);
+// C30-11 第九十一刀: LenB 的变体位 —— 与 vb6_LenV 同一口径（Null 进 Null 出，
+// Empty 那档按 0），因为 VB6 手册把 Len/LenB 的 Variant 实参都按 String 看。
+// 缺这一枚时 `n = LenB(v)`（v=Null）发的是 vb6_LenB(vb6_VariantToString(v)) ⇒
+// 静默 0、Err 0；真机与 Len 同一条 = 94 且目标不动。
+vb6_VARIANT vb6_LenBV(vb6_VARIANT v);
 vb6_VARIANT vb6_TrimV(vb6_VARIANT v);
 vb6_VARIANT vb6_LTrimV(vb6_VARIANT v);
 vb6_VARIANT vb6_RTrimV(vb6_VARIANT v);
@@ -140,6 +145,11 @@ BSTR vb6_CStrStrict(vb6_VARIANT x);
 // 报 94 且**目标不变** (E6/E7/E8 读数: err=94、s 仍是赋前的值)。单开一枚而不是直接用
 // vb6_CStrStrict: 后者 raise 后交回空串, 赋值方会把空串写进目标 —— 与 VB6 不同。
 void vb6_BSTR_AssignFromVariant(BSTR* target, vb6_VARIANT src);
+// C30-11 第九十刀: 定长串目标 (UDT `String * N` 字段 / 模块级 `String * N`) 收 Variant 右值。
+// 与 vb6_BSTR_AssignFromVariant 同一口径: Null ⇒ 94 且目标一字不动；其余档折成串后
+// 再走定长写侧 (右补空格 / 右截断)。
+void vb6_FixedStrAssignFromVariant(char* buf, int32_t cap, vb6_VARIANT src);
+void vb6_LSetFromVariant(BSTR* target, int32_t cap, vb6_VARIANT src);
 // C30-11 第七十五刀 (§B223): 「String 右值 → Double 目标」。
 // 真 VB6 是隐式 String→Double: 数字串折成数, 其余含空串 ⇒ **13** 且目标不变。
 // 以前把 BSTR 裸交给 double ⇒ 编译期 C2440 (探针 F2 `d = Null & ""` /
@@ -149,6 +159,9 @@ void vb6_Dbl_AssignFromBSTR(double* target, BSTR src);
 // (真机 A2/A4)。与 vb6_BSTR_AssignFromVariant 同一口径。
 void vb6_Bool_AssignFromVariant(int16_t* target, vb6_VARIANT src);
 void vb6_Dbl_AssignFromVariant(double* target, vb6_VARIANT src);
+// C30-11 第九十七刀 (§11.75): Double 目标的严格变体→double 入口（Null ⇒ 94、非数字文本 ⇒ 13）。
+// 只用于「vb6_Int/Fix/Abs(<整只 Variant 槽>) 落 Double 目标」这一形；vb6_VariantToDouble 本身保持宽松。
+double vb6_DblStrict(vb6_VARIANT v);
 // M22: typed CStr overloads
 BSTR vb6_CStrLong(int32_t x);
 BSTR vb6_CStrLongFromVariant(vb6_VARIANT x);   // Fix 158q: _Generic 兜底的 Variant 解包入口
@@ -340,6 +353,11 @@ double vb6_Pow(double base, double exp);
 // 对象操作
 void* vb6_NewObject(const wchar_t* className);
 int32_t vb6_TypeOf(void* obj, const wchar_t* typeName);
+/* 账 #305 §11.103 (第一百二十一... 刀): 项目类实例跨 void* 槽之后的 TypeOf —— 正面判据。
+ * 只认两位现成主人: 包装器自报类名 (vb6_ComObject_ClassNameA, 与 TypeName 同源) 与
+ * 工程类反查表 (vb6_FindProjectClassDesc, 裸实例落进 void* 槽那一格)。
+ * 表外一律 0 (假) —— 不碰 QI 那条腿, 也不把"猜不出"说成"是"。 */
+int32_t vb6_TypeOfProject(void* obj, const wchar_t* typeName);
 void* vb6_DictAccess(void* obj, const wchar_t* key);
 // C30-7: `rst!Field = v`（Recordset 字段写）。vb6_DictAccess 是读侧糖，函数调用
 // 不是左值，赋值必须另走这里（否则 C2106）。实现见 vb6rtl_conv.c。

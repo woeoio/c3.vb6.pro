@@ -44,7 +44,18 @@
                 } else if (clsSym && clsSym->kind == SymbolKind::Class && clsSym->isInterface) {
                     knownIfaceVars_[varLower] = clsSym->name;
                 } else {
-                    knownObjectVars_.insert(varLower);
+                    // 账 #305 §11.108 (第一百二十六刀): 类模块的 Public 字段会被 stage 3.5
+                    // 跨模块注入成 `isExternal=true, sourceModule=<类名>` 的「模块级变量」符号
+                    // (实测 .temp/k125: FBox.cls 的 `Public A/B As Object` 在 FMain7 与 FC 两个
+                    // 消费模块里都成了 a/b)。它们**不是**全局变量 —— 裸名在消费模块里根本不可写,
+                    // 只有 `obj.A` 这种成员访问才成立 —— 让它们进 knownObjectVars_ 就是 §11.104
+                    // 那条「名字表里混着别的类的成员名」的污染源。标准模块的 Public Object 变量
+                    // (Fix 089) 仍走下面这一行。
+                    auto* srcMod = sym->sourceModule.empty() ? nullptr : symTab_.lookup(sym->sourceModule);
+                    const bool srcIsClassModule = srcMod && srcMod->kind == SymbolKind::Class;
+                    if (!srcIsClassModule) {
+                        knownObjectVars_.insert(varLower);
+                    }
                 }
             }
             else if (sym->isArray && sym->type == Vb6Type::UserDefinedType && !sym->variableTypeName.empty()) {

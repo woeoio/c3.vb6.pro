@@ -1,0 +1,7 @@
+Type=Exe
+Name="B153App"
+Module=B153Main; B153Main.bas
+Class=B153Item; B153Item.cls
+Class=B153Holder; B153Holder.cls
+Startup="Sub Main"
+ExeName32="B153.exe"

@@ -16,6 +16,7 @@ vb6_BoolVal|0	0		0	open	BSTR
 vb6_BSTR_Assign|1	0	handoff-reads:vb6_BSTR_FromBSTR	0	open	BSTR
 vb6_BSTR_AssignFromVariant|1	1	store	0	open	VARIANT
 vb6_BSTR_AssignMove|1	1	write	0	open	BSTR
+vb6_BSTR_AssignMoveIfOk|1	1	store	0	open	BSTR
 vb6_BSTR_Concat|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_BSTR_Concat|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_BSTR_ConcatFree|0	0	handoff-reads:vb6_BSTR_Concat	0	open	BSTR
@@ -62,7 +63,8 @@ vb6_DateSet|0	0		0	open	BSTR
 vb6_DateVal|0	0	handoff-reads:vb6_TryDateFromStr	0	open	BSTR
 vb6_DateValue|0	0	handoff-reads:vb6_DateParse	0	open	BSTR
 vb6_Dbl_AssignFromBSTR|1	0		0	open	BSTR
-vb6_Dbl_AssignFromVariant|1	0	handoff-reads:vb6_VariantToDouble	0	open	VARIANT
+vb6_Dbl_AssignFromVariant|1	0	handoff-reads:vb6_Dbl_AssignFromBSTR	0	open	VARIANT
+vb6_DblStrict|0	0	handoff-reads:vb6_Dbl_AssignFromBSTR	0	open	VARIANT
 vb6_Debug_Print|0	0		0	open	BSTR
 vb6_DebugPrint|0	0	handoff-reads:vb6_DebugPrintStr	0	open	BSTR
 vb6_DebugPrintStr|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
@@ -86,6 +88,7 @@ vb6_FileVariantText|0	0	handoff-to-plain:vb6_FileBoolText	0	open	VARIANT
 vb6_Filter|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_FixedStrAssign|2	0	handoff-reads:vb6_BSTR_ToANSI_cap	0	open	BSTR
 vb6_FixedStrAssignFree|2	0	handoff-reads:vb6_FixedStrAssign	0	open	BSTR
+vb6_FixedStrAssignFromVariant|2	0	handoff-reads:vb6_CStr	0	open	VARIANT
 vb6_FixV|0	0	handoff-to-plain:vb6_VariantDouble	0	open	VARIANT
 vb6_Format|0	0		0	open	VARIANT
 vb6_Format|1	0		0	open	BSTR
@@ -108,7 +111,7 @@ vb6_InputBox|2	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_InputBox|5	0		0	open	BSTR
 vb6_InStr|1	0	handoff-reads:vb6_InStrC	0	open	BSTR
 vb6_InStr|2	0	handoff-reads:vb6_InStrC	0	open	BSTR
-vb6_InStrC|1	0	handoff-reads:vb6_TextFind	0	open	BSTR
+vb6_InStrC|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_InStrC|2	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_InStrRev|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_InStrRev|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
@@ -134,6 +137,7 @@ vb6_Left|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_LeftB|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_Len|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_LenB_BSTR|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_LenBV|0	0	handoff-reads:vb6_VariantToString	0	open	VARIANT
 vb6_LenV|0	0	handoff-to-plain:vb6_VariantLong	0	open	VARIANT
 vb6_Like|0	0	handoff-reads:vb6_LikeC	0	open	BSTR
 vb6_Like|1	0	handoff-reads:vb6_LikeC	0	open	BSTR
@@ -147,6 +151,7 @@ vb6_LoadResPicture|1	1	write	0	open	VARIANT
 vb6_LoadResString|0	1	write	0	open	VARIANT
 vb6_LSet|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_LSetFree|0	0	handoff-reads:vb6_LSet	0	open	BSTR
+vb6_LSetFromVariant|2	0	handoff-reads:vb6_CStr	0	open	VARIANT
 vb6_LTrim|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_LTrimV|0	1	store	0	open	VARIANT
 vb6_LTrimVar|0	0	handoff-reads:vb6_LTrim	0	open	VARIANT
@@ -328,6 +333,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_LCase_str BSTR
 [own] vb6_Left BSTR
 [own] vb6_LeftB BSTR
+[own] vb6_LenBV VARIANT
 [own] vb6_LenV VARIANT
 [own] vb6_LineInput BSTR
 [own] vb6_LoadResString VARIANT
@@ -422,6 +428,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 # --- 消费轴（账 #463 §B164 研究新增）：消费者**自己放掉**自己的形参的那几格 ---
 # 字段: 出口名|形参序号 <TAB> 条件性(0/1) <TAB> 放掉它的调用 <TAB> 形参名
 # 条件性=1 ⇒ 放不放**看运行期分支**（IIf 那一族）⇒ 调用方无从知道 ⇒ 不许提名
+vb6_BSTR_AssignMoveIfOk|1	0	vb6_BSTR_Free	source
 vb6_BSTR_ConcatFree|0	0	vb6_BSTR_Free	a
 vb6_BSTR_Free|0	0	SysFreeString	bstr
 vb6_FixedStrAssignFree|2	0	vb6_BSTR_Free	value

@@ -96,6 +96,17 @@ typedef struct vb6_CoClassDesc {
     // 追加让任何"少写一个初始化器"的旧写法自动得 NULL, 不会错位到别的字段上。
     void* (*ifaceThinPtr)(void* instance, const void* riid);  // 接口 IID -> 薄指针 (vb6_ivref_<I>*)
     void  (*instanceClaimRelease)(void* instance);            // 包装器放手: 清 __comObj + 退底座引用
+    // 账 #305 §11.105 (第一百二十三刀): **借用型包装器**的类引用归属。
+    // 病根 (.temp/k122/fieldprobe/FProbe6): 借用型 `ownsInstance=0` 把 `__comObj` 回填进实例后
+    // 既不动类引用计数, 也不负责拆实例; 而 `vb6_cls_<X>_Release` 一见 `__comObj != NULL` 就
+    // `/* wrapper owns teardown */` 直接返回 ⇒ 装箱那一瞬间就把这个实例的退场永久堵死
+    // (读数: 改前 `D2 term=1` + seed=51 Terminate; 装箱后 `D2 term=0` 且永远不拆)。
+    // 现在借用型建的时候取一枚类引用、拆的时候退掉 —— 与 typed 变量那一枚同权:
+    //   槽里还有视图 ⇒ 类不死; 视图拆了而实例另有主人 ⇒ 也不把实例带走。
+    // 追加在结构体**末尾** (同上那条口径): `{0}` 空桩与少写一格的旧写法自动得 NULL,
+    // NULL = 不取不退 (= 改前行为), 存量产物不会因少一格初始化器而错位。
+    void* (*classAddRef)(void* instance);          // vb6_cls_<Name>_AddRef
+    unsigned long (*classRelease)(void* instance); // vb6_cls_<Name>_Release
 } vb6_CoClassDesc;
 
 // IDispatch方法描述
@@ -208,6 +219,11 @@ BSTR vb6_ComObject_ClassNameBStr(void* v);
 // **每迭代一枚**都要问一次类名 ⇒ 那里要的是 desc 里那根现成的 ANSI 名, 不是又一枚 BSTR。
 // 交回的指针归 desc 所有 (静态寿命), 调用方只比名字不释放; 认不出口径与兄弟一字相同 (NULL)。
 const char* vb6_ComObject_ClassNameA(void* v);
+/* 账 #305 §11.103: `TypeOf x Is <项目类>` 要问的那一位 —— 包装器先问 ClassNameA,
+ * 不是包装器 (裸实例指针落进 void* 槽 / 工程内过程交回来的那一枚) 再问 512 格反查表。
+ * 两位主人都在本模块, 不新开表; 表外答 NULL (调用方按"否"处理)。
+ * 不分配、不归调用方释放。 */
+const char* vb6_ComObject_ClassNameOfAny(void* v);
 
 // ExeComBridge 03: 把工程类实例包成"COM 调用实参格式"的 VARIANT* (VT_DISPATCH).
 // cgen 为每个类模块生成 vb6_ComPack_<类名>(void* instance) 包一层本函数; 触发场景

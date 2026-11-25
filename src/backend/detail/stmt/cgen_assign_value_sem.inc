@@ -148,10 +148,68 @@
         const bool fixedTgtIsUdtField = !fixedLenTarget.empty() && node.target
             && (node.target->kind == ASTNodeKind::MemberAccessExpr
                 || node.target->kind == ASTNodeKind::WithMemberExpr);
-        emitBstrSlotStore(target, node.value.get(), value, fixedLenTarget, fixedTgtIsUdtField);
+        // 第九十九刀 (§11.77): 晚绑定成员读交回的 BSTR —— 真机 F6 `s2 = o.NoSuchStringProperty`
+        // ⇒ s2 仍是 keep、err=438。以前报 438 之后照样把 s2 清成 ""（号对了、值被清）。
+        // 只接**动态 String**（定长串的收口是 FixedStrAssign，另一形）；串的所有权由 RTL 出口
+        // 一并处理（序号变了就放掉交回的串）。
+        if (lateBstrCom99_ && fixedLenTarget.empty() && !fixedTgtIsUdtField) {
+            lateBstrCom99_ = false;
+            const std::string sv99 = "_e" + std::to_string(stmtAbortSeq_++);
+            c_.emitLine("const int32_t " + sv99 + " = vb6_ErrSerial();");
+            c_.emitLine("vb6_BSTR_AssignMoveIfOk(&" + target + ", " + value + ", " + sv99 + ");");
+        } else {
+            lateBstrCom99_ = false;
+            emitBstrSlotStore(target, node.value.get(), value, fixedLenTarget, fixedTgtIsUdtField);
+        }
     } else if (targetIsVariant) {
-        // 账 #305 §B169: 装箱 + 所有权 + 槽位语义只住 emitVariantSlotAssign 一处。
-        emitVariantSlotAssign(target, node.value.get(), value, targetIsUdtVariantField232);
+        // 第一百零六刀 (§11.84): 晚绑定成员读**直接**赋给 Variant 槽 —— 真机 K4
+        //   `v = 111 : Err.Clear : v = o.NoSuchProperty` ⇒ `v = 111` / `err = 438`
+        //   （目标一个字都不写）。这一支以前落在守机外面：守机只认 Int/Double/String 目标
+        //   (上面 mayRaise79 那几处)，Variant 目标直接发 `v = vb6_VariantFromComResult(...)`。
+        // 形：先求值进临时量（错就在这一步报 438），再用**同一枚序号**决定写不写 ——
+        //   序号是在求值**之前**抓的，求值里报错 ⇒ 第二句的闸为假 ⇒ 目标不动。
+        // 临时量不 Clear：`target = tmp` 是浅搬，所有权随拷贝交给目标（与
+        // emitVariantSlotStore 的“清旧+接管”同口径）；错误那一支临时量是 Empty，无物可放。
+        // 第一百零六刀只接“顶层就是那次成员读”这一形；表达式内部的
+        //（`v = 1 + o.NoSuchProperty`）与数组元素/UDT 字段槽当时**未量**、只登记不猜
+        // ——**第一百零七刀已由真机 L6–L9 补齐**（见下一段）。
+        // 第一百零七刀 (§11.85): 真机 L6/L7/L8/L9 —— 表达式**内部**的晚绑定读、Variant
+        // **数组元素**目标、UDT 的 **Variant 字段**目标, 也是“目标一个字都不写”(111/438)。
+        // 所以守机不再只认“顶层就是那次成员读”, 判据换成 exprHasLateBoundComRead
+        // (§B 族早就在用的那一枚: 裸读是它的特例, 不会漏掉第一百零六刀那一形)。
+        // 槽形 (数组元素 / UDT 字段 / 解引用) 不能浅搬 —— 那是**借来**的存储:
+        // 一律 vb6_VariantAssign (Clear + 深拷贝), 再把临时量自己放掉 (它自有才放)。
+        if (node.value && exprHasLateBoundComRead(node.value.get())) {
+            const std::string gv107 = "_e" + std::to_string(stmtAbortSeq_++);
+            const std::string tv107 = "_vs" + std::to_string(tempCounter_++);  // _av is taken by scalar temps (cgen_assign.cpp:32), so use a fresh prefix
+            const bool owns107 = variantRhsOwnsValue(node.value.get(), value);
+            const bool slot107 = targetIsUdtVariantField232
+                || target.compare(0, 7, "VB6_SA_") == 0
+                || (!target.empty() && target[0] == '(');
+            if (std::getenv("C3_DBG_VSLOT107"))
+                std::cerr << "[VSLOT107] " << (slot107 ? "slot" : "plain") << " "
+                          << (lateBoundComReadExpr(node.value.get()) ? "bare" : "nested")
+                          << (owns107 ? " own" : " borrow") << " tgt=" << target
+                          << std::endl;
+            c_.emitLine("const int32_t " + gv107 + " = vb6_ErrSerial();");
+            c_.emitLine("vb6_VARIANT " + tv107 + " = vb6_VariantEmpty();");
+            c_.emitLine("if (" + gv107 + " == vb6_ErrSerial()) { " + tv107 + " = "
+                        + wrapVariantValue(node.value.get(), value) + "; }");
+            if (slot107) {
+                c_.emitLine("if (" + gv107 + " == vb6_ErrSerial()) { vb6_VariantAssign(&"
+                            + target + ", " + tv107 + "); }");
+                if (owns107) c_.emitLine("vb6_VariantClear(&" + tv107 + ");");
+            } else if (owns107) {
+                c_.emitLine("if (" + gv107 + " == vb6_ErrSerial()) { vb6_VariantClear(&" + target
+                            + "); " + target + " = " + tv107 + "; }");
+            } else {
+                c_.emitLine("if (" + gv107 + " == vb6_ErrSerial()) { vb6_VariantAssign(&" + target
+                            + ", " + tv107 + "); }");
+            }
+        } else {
+            // 账 #305 §B169: 装箱 + 所有权 + 槽位语义只住 emitVariantSlotAssign 一处。
+            emitVariantSlotAssign(target, node.value.get(), value, targetIsUdtVariantField232);
+        }
     } else if (target.compare(0, 10, "vb6_PA_Get") == 0) {
         // Fix 091c: ParamArray 元素赋值 OutVars(i) = value — vb6_PA_GetXxx 是取值
         // 函数 (右值), 直接赋值 → C2106 "左操作数必须为左值" (cToolsArray.c 130);
@@ -406,6 +464,21 @@
             // 目标类型未知 (void*/对象等) → 不动, 维持原赋值路径.
         }
         if (valueIsVariant) {
+            // 账 #305 §11.139 (第一百五十七刀): **读口已经交回标量** 时不再拆箱。
+            //
+            // 撞见的形态 (`.temp/k158/p1`, 工程类 `Property Get V() As Variant`):
+            //     n = o.V   →   vb6_ChkLong(vb6_VariantToLong(vb6_ComGetIntProp(o, L"V")))
+            //     → **C2440**: int32_t 转不成 vb6_VARIANT (整份工程编不过)。
+            // 晚绑定读口是按**目标**档发的 (这里发了 IntProp, RTL 内已做
+            // VariantChangeType + VarClear); 而这一支是按**声明**档 (属性声明是 Variant)
+            // 又套一层拆箱 —— 那一层的入参要的是 vb6_VARIANT。
+            // 判据只看**已经发出来的那一段文本** (与 §11.137 同一条纪律: 信发生过的事,
+            // 不信对它的描述), 且只认型别已经够用的三种数值档:
+            // 能走到这里的以前一律是 C2440, 故对今天能编译的赋值零影响。
+            if (isScalarComReadText(value)) {
+                c_.emitLine(target + " = " + value + ";");
+                return;
+            }
             // C30-11 第七十六刀 (§B224): Null 落到 Boolean / Double 目标时按 VB6 口径
             // 「报 94 且目标不变」(真机 NullExtProbe: A2 `d` 仍 1.5 / err=94, A4 `b` 仍 True /
             // err=94)。以前发 `target = vb6_VariantToLong/VariantToDouble(...)`，raise 之后
@@ -653,6 +726,18 @@
                     tgtDbl75 = (knownDoubleVars_.count(t75) != 0);
                 }
                 if (tgtDbl75) {
+                    // 账 #305 §11.140 (第一百五十八刀): 右值已经是**裸 double** 时不再走 BSTR 那一支。
+                    //
+                    // 撞见的形态 (`.temp/k159/p1`, `Property Get S() As String` = "101"):
+                    //     d = o.S  →  vb6_Dbl_AssignFromBSTR(&d, vb6_ComGetDoubleProp(o, L"S"))
+                    //     → **C2440**: double 转不成 BSTR。
+                    // 两支各说一套: 读口按**目标**档 (Double) 发 DoubleProp，而这一支按**声明**档
+                    // (String) 把值当 BSTR 准备去折。与 §11.139 同一条纪律: 判据只认已经发出来的
+                    // 那一段文本（真实类型），不信"它应该是什么"。
+                    if (isScalarComReadText(value)) {
+                        c_.emitLine(target + " = " + value + ";");
+                        return;
+                    }
                     c_.emitLine("vb6_Dbl_AssignFromBSTR(&" + target + ", " + value + ");");
                     return;
                 }

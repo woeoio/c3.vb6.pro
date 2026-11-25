@@ -319,6 +319,31 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                 }
                 if (!isProjectClassVar) {
                     knownObjectVars_.insert(lower);
+                    // 账 #305 §11.109 (第一百二十七刀): 腿④ 的第四档 —— 局部泛对象槽在正常
+                    // 出口放手。修前这一格不在 slotsToRelease_ 里 (只有接口 / 工程类 / 载体),
+                    // 于是 `Dim o As Object` 握着的包装器与它那一枚类引用一起漏掉
+                    // (实测: 过程里现造现丢, 循环三次一枚 Terminate 都不打)。
+                    // 只认声明名就是 `Object` 的那一档 (窗体/控件/类实例另有主人); Static
+                    // 那一格跨调用活着 (C 侧 static 存储), 出口放手 = 下次进来读已释放块。
+                    bool isPlainObject = false;
+                    bool isHostClassLocal = false;
+                    if (var.asType && var.asType->kind == ASTNodeKind::SimpleTypeRef) {
+                        const std::string declName = Symbol::toLower(
+                            static_cast<SimpleTypeRef&>(*var.asType).name);
+                        isPlainObject = (declName == "object");
+                        /* 账 #305 §11.112 (第一百三十刀): 腿④ 扩到**宿主类局部** ——
+                           内建 Collection 的载体从第一百二十九刀起自己计数 (New 时 1,
+                           Set 那对出口一问), 但出口那一句 `vb6_ReleaseObject` 只发给
+                           `As Object` ⇒ `Dim c As New Collection` 出作用域仍不退,
+                           载体与元素一起漏 (实测 .temp/k129 A2 = 0)。
+                           只收这两个名字: 它们的 C 侧槽是 void*、且是我们自己实现的宿主类
+                           (Dictionary 是**类型化接口** vb6_ComIface_IDictionary*, 不走这一
+                           臂, 在册下一刀)。 */
+                        isHostClassLocal = (declName == "collection");
+                    }
+                    if ((isPlainObject || isHostClassLocal) && !var.isStatic && !inStaticProc_ && !var.isWithEvents) {
+                        trackLateObjSlotForRelease(cIdent(var.name));
+                    }
                 }
             }
 
@@ -348,6 +373,24 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                     knownTypedComVars_[lower] = comSym;
                     // 从后期绑定集合中移除 (优先前期绑定)
                     knownObjectVars_.erase(lower);
+                    // 账 #305 §11.113 (第一百三十一刀) / §11.114 (第一百三十二刀): 腿④ 宿主类
+                    // 局部档第二格 —— 类型化 COM 接口槽 (`vb6_ComIface_I<X>*`), 不经过上面
+                    // void* 那条臂 (§11.112 那一格只收到 Collection)。
+                    //
+                    // 第一百三十一刀只收了内建 Dictionary 一个名字; 本刀放开到**所有类型化 COM
+                    // 接口 / ComClass 局部**: 三条赋值路 (`Set x = New …`、`Set x = CreateObject(…)`、
+                    // `Set x = <字段/对象途径>` 与调用返回) 在发码里都是**取所有权或 AddRef**
+                    // (实测 .temp/k132: New 发 vb6_NewObject、CreateObject 发 vb6_ComCreateTyped、
+                    // 字段取发 vb6_ComAddRefDispatch), 所以出口放手成对。
+                    // 出口那一发与泛对象档同一形状 (vb6_ReleaseObject((void**)&x)): Set 那一站
+                    // 退旧值用的就是它, 实参类型对得上; 真是 IDispatch 才 Release
+                    // (vb6_ComIsDispatchable 那一问把关)。
+                    // 同一条闸: Static / Static Sub 里那一格跨调用活着, 出口放手 = 下次进来读已释放块。
+                    // 在册例外 (与泛对象档同一条边界): 这一格的**地址**交给外部 Declare 那一格 ——
+                    // 写它的一站在计数系统外面, 出口那发就是无对价的退。
+                    if (!var.isStatic && !inStaticProc_ && !var.isWithEvents) {
+                        trackLateObjSlotForRelease(cIdent(var.name));
+                    }
                     }
                 }
             }

@@ -49,6 +49,17 @@
     // ⇒ cl C2374「重定义；多次初始化」。这一枚计数器给的是「同一模块内第几条多维 ReDim」,
     // 与 tempCounter_ 同生同灭 (同处复位), 使名字在同一过程内必然唯一。
     int ndBoundsSeq_ = 0;             // 多维 ReDim 界数组临时量的序号
+    // 账 #305 §11.103 (第一百二十一刀): Set 兜底那条「取引用 + 退旧值」的临时量序号。
+    // 刻意**不**占 tempCounter_ —— 那个号是全站共用的, 新占一个就把同函数里后排
+    // 所有 _vs/_e/_ag/_fe_var 的**序号**整体后移, 十几枚发码形状针会一起红,
+    // 而它们的形状一字未改。独立计数 = 新站点自己可数, 存量形状零移动。
+    int refClaimSeq_ = 0;            // Set 取引用临时量 (_vrefN) 的序号
+    // 账 #305 §11.131 (第一百五十刀): 链写接收者临时量 (_rcvN) 的序号。
+    // 与 refClaimSeq_ 同一条理由独立计数: 不占 tempCounter_, 存量形状零移动。
+    int setRefRecvSeq_ = 0;          // 链写接收者临时量 (_rcvN) 的序号
+    // 账 #305 §11.132 (第一百五十一刀): 链读接收者临时量 (_rrvN) 的序号。
+    // 同一条理由独立计数: 不占 tempCounter_, 存量形状零移动。
+    int comRecvTempSeq_ = 0;         // 链读接收者临时量 (_rrvN) 的序号
 
     // 表达式求值结果 (累加器模式: 每个emitExpr调用设置lastExpr_)
     std::string lastExpr_;           // 最近一次表达式生成的C代码字符串
@@ -85,6 +96,19 @@
         // 记下控件名 —— 类实例档解析不到的成员 (Width/Height/Top/Left/Visible …) 是 VB6 的
         // **Extender(控件)属性**, 必须改走 form_pseudo 读表并取 vb6_hwnd_<控件名> 宿主槽.
         std::string designerCtrlName;
+        // 账 #305 §11.115/§11.116 (第一百三十三/三十四刀): 这一帧的 With 临时量是不是
+        // 「自己造的那一份」(发码里那句初始化器就是 vb6_NewObject / vb6_CreateObject)。
+        // 块尾那一发由 cgen_with 自己发; 体内 `Exit Sub/Function/Property` 那几条
+        // goto 口由 cgen_jumps 接着发 (载体是块内局部, 出了块就没人再问)。
+        bool ownsCarrier = false;
+        // 账 #305 §11.119 (第一百三十九刀): 这一帧的载体在本过程那张活载体名册里的槽号
+        // (`void** _vb6_own[N]` 的下标)；-1 = 没登记 (借用型 / 工程类 / 本过程未启用名册)。
+        // 块尾与 Exit 两处放手之后要把槽位清 0 —— 否则栈槽被后续块复用时，落点会拿到
+        // 一个悬空地址去 Release。
+        int ownerSlot = -1;
+        // 账 #305 §11.117 (第一百三十五刀): 「With New <工程类>」的载体归类自己的 _Release
+        // (与腿④ 工程类那一档同一个出口); 空串 = 不是这一类。
+        std::string carrierClass;
     };
     std::vector<WithObjInfo> withObjectInfoStack_;
     bool suppressDefaultProp_ = false;  // P17.1: With对象表达式时抑制默认属性读取
@@ -407,6 +431,27 @@
     // 跨模块 UDT 查不到 (符号表按模块隔离, 同 udtFieldObjCType 的既有边界)。
     std::unordered_map<std::string, std::unordered_map<std::string, std::string>> udtFixedStrFieldLen_;
 
+    // C30-11 第九十六刀: UDT 的**声明布局**（按成员顺序）—— 真机 `Len`/`LenB(<整枚 UDT>)`
+    // 是按成员逐段算出来的，**不是 sizeof**。
+    //   读数 (.temp/k93/vb6probe/RealMachineProbe.bas 真机输出):
+    //     A7  Len ({String*5})        = 5     A8  LenB = 10
+    //     A9  Len ({String*5, Long})  = 9     A10 LenB = 16
+    //   规则（由 A8/A9/A10 三格反推）:
+    //     Len  = Σ 成员 Len（定长串按 **N 字符**、数值按字节）  ⇒ 5 / 5+4=9
+    //     LenB = Σ 成员 LenB（定长串按 **2N**）、成员之间按自然对齐（上限 4）对齐、
+    //            **尾部不补齐**                                  ⇒ 10 / 10→对齐12+4=16
+    // 键 = 结构体的 C 类型名（小写，`vb6_type_x` 形，与 knownUdtVars_/udtFixedStrFieldLen_ 同形）。
+    // 任一成员算不出来（动态数组/对象/动态 String/Variant/未知类型/嵌套未知）⇒ **整枚不登
+    // 记**，Len/LenB 退回原来的 sizeof 那一支（宁可不变）。
+    struct UdtMemberLayout {
+        int64_t len = 0;    // 本成员的 Len 贡献
+        int64_t lenB = 0;   // 本成员的 LenB 贡献（定长串 = 2N）
+        int64_t align = 1;  // 自然对齐（定长串 2、数值 min(宽度,4)）
+    };
+    std::unordered_map<std::string, std::vector<UdtMemberLayout>> udtLayout_;
+    // 布局求和；false = 该 UDT 没有可用布局（调用方退回 sizeof）。
+    bool udtLayoutSum(const std::string& ctype, int64_t& lenOut, int64_t& lenBOut) const;
+
     // 账 #118: **模块级**定长串的持久副本 (小写变量名 → 长度表达式)。knownFixedStringLen_
     // 在每个过程入口 clear (cgen_decl_func.cpp / cgen_decl_proc.cpp / cgen_decl_prop.cpp),
     // 而模块级 `Private gT As String * 5` 是在 declaration 阶段登记的 —— 于是第一个过程
@@ -654,6 +699,10 @@
         bool isCarrier = false;
         bool freeCarrier = false;  // 只有载体档用: 出口除逐枚交回之外还销毁载体
         std::string arrayName; // 只有载体档带带数组名
+        // 账 #305 §11.109 (第一百二十七刀): 第四档「泛对象槽」(局部 `As Object`, C 侧 void*)。
+        // 出口发 vb6_ReleaseObject((void**)&x) —— 判据与语句站那三步同一个 (Fix 191 的
+        // vb6_ComIsDispatchable 也在这条入口上, 裸工程实例 / HWND 一律只清槽不越权)。
+        bool isLateObj = false;
     };
     std::vector<SlotRelease> slotsToRelease_;
     // 账 #305 §B218 (甲) 第一百五十六刀: 「这一档局部数组的载体有没有在本过程里被整体用掉」
@@ -684,6 +733,18 @@
 
     // P14.1.2: Resume dispatch switch支持 (每个过程独立)
     bool hasResume_ = false;            // 当前过程使用了Resume/Resume Next
+    // 账 #305 §11.119 (第一百三十九刀): 活载体名册。
+    //   只有「本过程一句 `Resume` 都没有」时才启用 —— 那种 handler 无论如何回不到块内,
+    //   错误落点就可以把已登记的载体逐枚放掉 (`Resume` 可能回块内的那些一律不动,
+    //   宁少退不多退)。
+    bool hoistOwnActive_ = false;       // 本过程是否启用名册
+    int hoistOwnN_ = 0;                 // 名册槽数 = 过程体里 With 语句的条数 (上界)
+    int hoistOwnNext_ = 0;              // 已登记的槽数
+    // 账 #305 §11.116 五 (第一百四十一刀): 本过程里每个标签定义处的 With 层深。
+    // `GoTo` 跳出 With 块时要按「跳出去几层」逐层退载体 —— 进入 `With` 之前先扫一遍过程体
+    // 填好这张表 (标签名小写), 发码到 `GoTo` 时直接查。查不到 (标签在别处/本表未填) 一律
+    // 不发 ── 宁可少退不多退。
+    std::unordered_map<std::string, int> labelWithDepth_;
     bool inProtectedBlock_ = false;     // 在On Error GoTo和错误处理器标签之间
     int resumePointCounter_ = 0;        // 当前resume点索引
     std::vector<int> dispatchPoints_;   // 已生成的resume点索引列表
@@ -765,6 +826,56 @@
     // 「先把右值算进临时量、再拿序号判是否写目标」，与真机「报错就不赋值」同形。
     bool stmtAbortTmp_ = false;
     std::string stmtAbortTmpType_;
+    // C30-11 第九十五刀: 本语句的右值顶层是 Int/Fix/Abs 且实参是**整只 Variant 槽**、目标又是整型
+    // 标量 —— 这一形要在发码站改道（Int(VariantToDouble(x)) ⇒ VariantToLong(IntV(x))），
+    // 因为 vb6_VariantToDouble 宽松（Null → 0.0、不报错），守卫与临时量都白设。
+    // 只在本条赋值语句内有效，由 StmtAbortScope 统一清除。
+    bool nullFamIntTarget_ = false;
+    // C30-11 第九十七刀 (§11.75): 同上那一形，但目标是 Double —— 真机读数（E1–E3）也是 94 +
+    // 目标不动，只是改道目标得保留小数语义：`vb6_Int(vb6_DblStrict(x))`（IntV 那条整型路会把
+    // Abs(-1.5) 弄成 2）。void 型返回的严格入口只负责 raise，写入由守卫/临时量挡住。
+    bool nullFamDblTarget_ = false;
+    // 第九十九刀 (§11.77): 同上那一形但目标是**动态 String**（BSTR 槽）—— 真机 F6 是
+    // 「438 + 目标不动」。BSTR 目标不能套标量那套临时量（所有权要转手），改由
+    // vb6_BSTR_AssignMoveIfOk 一枚出口收口：序号变了就放掉交回的串、目标不写。
+    bool lateBstrCom99_ = false;
+    // 第一百零二刀 (§11.80): 语句位置的调用实参 —— 真机 I 族量到「命中即整句中止」:
+    // I1 `Call GTouch2(o.Bad, GFn())` = gHit=0 gN=0（坏实参之后那枚根本没求值）,
+    // I2 `Call GTouch2(GFn(), o.Bad)` = gHit=0 gN=1（前面的照常求值）。
+    // C 的实参求值顺序未定义，做不到「前一枚先求、后一枚不求」，故把首枚命中之前的实参
+    // （含命中那枚）逐枚提升成临时量，每枚求值前比一次序号；调用本身包在同一个守卫里。
+    // 空串 = 本语句无守卫。
+    std::string stmtCallArgSerial_;
+    bool stmtCallArgEmitted_ = false;
+    int stmtCallArgFirstLate_ = -1;
+    // 第一百零五刀 (§11.83): 聚合体（Variant）实参位提升出来的临时量。
+    // 聚合体不能像标量那样 `= 0` 起手，但 C 里 `vb6_VARIANT _ag = vb6_VariantEmpty();`
+    // 是**可声明**的 —— 于是「落不到可声明档」这一条并不成立，代价只是所有权：
+    // 必须用深拷贝 vb6_VariantCopy 拿自己那份，调用后 vb6_VariantClear 归还。
+    // 空 = 本语句没提升过聚合实参。
+    std::vector<std::string> stmtCallArgVarTemps_;
+    // 账 #305 §11.147 (第一百六十五刀) / §11.148 (第一百六十六刀): 语句位置「属性读当
+    // ByRef 实参」的读-改-写。真 VB6 不递属性本身 (属性没有地址)，而是「拷临时量 →
+    // 递地址 → 调用回来经 Let 写回」。★账只住这一处，两个发射器 (晚绑定 comByRefArgExpr /
+    // 早绑定复合字面量那一族) 都往这里登记，收尾只在 visit(CallStmt) 那一处。
+    // 不登记的情形: 属性读出现在**表达式上下文** (赋值右值 / 内建函数实参 / Debug.Print
+    // 实参) —— 那几处没有“调用之后”这个位置。在册。
+    struct ComPropWriteBack {
+        std::string decl;     // `<C型> _pbN = <get>(<base>);`
+        std::string setter;   // `<let>(<base>, _pbN);`
+        // 账 #305 §11.149 (第一百六十七刀): 临时量自己占的东西怎么退。
+        // 空 = 标量五档, 值语义, 没有可退的。非空只出现在 String 那一档:
+        // prop_get 交回的是**新分配**的 BSTR (BSTR_Assign 拷一份), 而 prop_let
+        // 也是拷一份进去 —— 两头都不接手所有权，所以这一枚得调用方退。
+        std::string release;  // `vb6_BSTR_Free(_pbN);`
+    };
+    std::vector<ComPropWriteBack> comPropWrites_;
+    // 只在 visit(CallStmt) 发「被调方那一棵表达式树」的窗口里为真 (上面那条的闸)。
+    bool comPropWriteWindow_ = false;
+    // 第一百零五刀 (§11.83): IndexOrCallExpr 的嵌套深度。实参位提升只算**最外层**那一个
+    // 调用（=1）—— 嵌套调用的实参是外层语句的一部分，不是它自己的实参位
+    // （`ObjPtr(CurrControl)` 就是这样被误提升的）。
+    int argNestDepth_ = 0;
     void emitGuardedStore(const std::string& line);
 
     // C29-7: 原生复刻的 ListView 控件 (登记裸控件名, 如 "ListView1")。

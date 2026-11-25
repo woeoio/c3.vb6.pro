@@ -78,6 +78,48 @@
                     }
                 }
             }
+            // 账 #305 §11.136 (第一百五十五刀): `Set <工程类>.Prop = Nothing` —— 置空也是**写**。
+            // 改前这里直接落到下面 `emitExpr(*node.target)` + 对求值结果 Release 的通用路：
+            //   Set box.Item = Nothing
+            //     → vb6_ReleaseObject((void**)(&(void*){vb6_B154Box_prop_get_Item(box)}))
+            // 拿 **getter** 的返回值去 Release —— `prop_set_Item` 一次都没调，属性根本没被清空
+            // (实测 .temp/k154/p1: `B0-cleared=False` 一直是 False)。
+            // Fix 056b 那条改写只认 `prop_set_`/`prop_let_` 前缀，而 emitExpr 给属性左值
+            // 发的是 `prop_get_Item(box)` ⇒ 前缀对不上。
+            // 判据只问**符号**（与上面 Set 值那一支同一张表），不问文本；接收者那几道闸
+            // (窗体控件 / 宿主伪对象 / UDT / 晚绑定) 与那一支同源，命中才发 setter。
+            if (node.target->kind == ASTNodeKind::MemberAccessExpr) {
+                auto& maN = static_cast<MemberAccessExpr&>(*node.target);
+                Symbol* psN = symTab_.lookupModuleByKind(maN.memberName, SymbolKind::PropertySet);
+                if (psN && maN.object) {
+                    const std::string objClsN = inferClassTypeOfExpr(*maN.object);
+                    bool okN = !objClsN.empty();
+                    // 墓碑接收者不是工程类 (同一道闸: 控件 / 宿主伪对象 / UDT 链)
+                    if (okN && maN.object->kind == ASTNodeKind::IdentifierExpr) {
+                        const std::string oidN = Symbol::toLower(
+                            static_cast<IdentifierExpr&>(*maN.object).name);
+                        if (knownFormControls_.count(oidN) || hostPseudoIsObject(oidN)) okN = false;
+                    }
+                    if (okN && !inferUdtTypeOfExpr(*maN.object).empty()) okN = false;
+                    // 外部同名符号: 只有属性确实属于接收者那个类才直发
+                    if (okN && psN->isExternal
+                        && Symbol::toLower(psN->sourceModule) != Symbol::toLower(objClsN))
+                        okN = false;
+                    if (okN) {
+                        const bool savedVirtN = suppressVirtDispatch_;
+                        suppressVirtDispatch_ = true;
+                        emitExpr(*maN.object);
+                        suppressVirtDispatch_ = savedVirtN;
+                        std::string objN = std::move(lastExpr_);
+                        if (isComMarker_) objN = resolveComValue("Object");
+                        const std::string fnN =
+                            cProcName("prop_set_" + maN.memberName, psN->access, objClsN);
+                        c_.emitLine(fnN + "(" + objN +
+                                    ", NULL);  /* Set Nothing (property setter) */");
+                        return;
+                    }
+                }
+            }
             // 左值求值期间关掉虚表派发 (ai/022 B08e-4 站点⑭: Pattern C/D2 要对这段文本做
                 // `prop_get_` -> `prop_let_` 的字符串级改写, 派发表达式会被换成表里不存在的槽字段)
             const bool savedVirtLhs = suppressVirtDispatch_;
@@ -426,15 +468,25 @@
             // 后两者在 knownObjectVars_ 里也有登记, 但它们有静态类面 (Fix 160-E 那条
             // `vb6_UC_InstanceOf` 直发) 必须保留。
             bool _lateBoundRecv = false;
-            if (_objClass.empty() && _ma.object
-                && _ma.object->kind == ASTNodeKind::IdentifierExpr) {
-                const std::string _oidLB = Symbol::toLower(
-                    static_cast<IdentifierExpr&>(*_ma.object).name);
-                const bool _isCtrlLB = knownFormControls_.count(_oidLB) > 0
-                    || knownUserControlCtrlVars_.count(_oidLB) > 0;
-                _lateBoundRecv = !_isCtrlLB
-                    && (procObjectFormals_.count(_oidLB) || knownVariantVars_.count(_oidLB)
-                        || knownObjectVars_.count(_oidLB));
+            if (_objClass.empty() && _ma.object) {
+                /* 账 #305 §11.130 (第一百四十九刀): 接收者不限于**裸标识符** ——
+                 * `Set <晚绑定 o>.<Child>.<Prop> = it` 的接收者是一条成员链，根才是晚绑定的
+                 * 那枚 `o`。原先只认 IdentifierExpr ⇒ 链式接收者漏网 ⇒ 走下面早绑定直呼，
+                 * 把运行期从 `o.Child` 取回的 IDispatch* 当 `vb6_cls_<Cls>*` 递进去。
+                 * 判据改成：沿 MemberAccess 一路走到根，问同一张晚绑定表。 */
+                const ASTNode* _recvRoot = _ma.object.get();
+                while (_recvRoot && _recvRoot->kind == ASTNodeKind::MemberAccessExpr) {
+                    _recvRoot = static_cast<const MemberAccessExpr&>(*_recvRoot).object.get();
+                }
+                if (_recvRoot && _recvRoot->kind == ASTNodeKind::IdentifierExpr) {
+                    const std::string _oidLB = Symbol::toLower(
+                        static_cast<const IdentifierExpr&>(*_recvRoot).name);
+                    const bool _isCtrlLB = knownFormControls_.count(_oidLB) > 0
+                        || knownUserControlCtrlVars_.count(_oidLB) > 0;
+                    _lateBoundRecv = !_isCtrlLB
+                        && (procObjectFormals_.count(_oidLB) || knownVariantVars_.count(_oidLB)
+                            || knownObjectVars_.count(_oidLB));
+                }
             }
             // Fix 084g-2: 外部注入的跨类属性符号 — 对象类型无法从符号表推断
             // (cgen阶段访问不到过程作用域局部变量) 时, 由外部符号提供 sourceModule.
@@ -455,6 +507,14 @@
                 std::string _fn = cProcName(_verb + _ma.memberName, _psSym->access, _src);
                 emitExpr(*_ma.object);
                 std::string _objE = std::move(lastExpr_);
+                /* 账 #305 §11.130 (第一百四十九刀): 接收者自身是**晚绑定成员读** (`o.Child`) 时,
+                 * emitExpr 只交出基础对象并把成员名挂在 comMemberName_ 上，不消费就漏进下一次
+                 * 求值 —— 实测值槽因此拿到 `vb6_ComGetObjectProp(o, L"Child")`，而接收者只剩裸
+                 * `o`：两槽双双串位（`Set o.Child.Held = it` → `prop_set_Held(o, GetObjectProp(o,
+                 * "Child"))`）。这里就地把它交成完整的对象表达式。 */
+                if (isComMarker_) {
+                    _objE = resolveComValue("Object");
+                }
                 // Fix 160-E: 与 cgen_assign_com_prop.inc:249-266 (Fix 152c) 同一条规则,
                 // 但 Set/Let 属性写分支此前**没有**套用。放在窗体上的 UserControl 实例
                 // (VBFlexGrid1) 裸 emitExpr 只发出控件名, C 里无此声明 → C2065:
@@ -680,23 +740,43 @@
             value = "vb6_VariantToObjectVal(" + value + ")";
         }
     }
+        /* 账 #305 §11.131 (第一百五十刀): 接收者是从**链上取回**的一枚引用
+         * (`vb6_ComGetObjectProp` 交回来就归调用方, §11.126) —— 这一站只拿它递一次派发,
+         * 没人放 ⇒ 每发链写漏一枚, 中间那枚对象永不 Terminate。
+         * 实测 (.temp/k150/p2, 累计 Terminate): A 只取一次又放回 = 2 (干净);
+         * B 走一发链写 = 3 (多一枚)。落成临时量、派发完即放。
+         * 不占 tempCounter_: 名字用独立的 _rcvN 序, 存量形状零移动 (§11.103 同一条理由)。 */
+        const bool rcvOwnedChain = objExpr.rfind("vb6_ComGetObjectProp(", 0) == 0
+            || objExpr.rfind("vb6_ComCallObject(", 0) == 0;
+        std::string rcvTmp;
+        if (rcvOwnedChain) {
+            rcvTmp = "_rcv" + std::to_string(setRefRecvSeq_++);
+            c_.emitLine("void* " + rcvTmp + " = " + objExpr
+                        + ";  /* 链上中间那一枚 (§11.131) */");
+        }
+        const std::string objCall = rcvOwnedChain ? rcvTmp : objExpr;
+        const std::string rcvDrop = rcvOwnedChain
+            ? ("vb6_ReleaseObject((void**)&" + rcvTmp + ");") : std::string();
         // 第一百八十五刀: 同一枚写读者 (putref_ 档), 与 Let 那条同一口径。
         const std::string vSetView = legacyViewSetterCallExpr(
-            objExpr, memberName, value, "void*", ProcKind::PropertySet);
+            objCall, memberName, value, "void*", ProcKind::PropertySet);
         if (!vSetView.empty()) {
             c_.emitLine(vSetView + ";  /* Property Set (视图直槽) */");
+            if (!rcvDrop.empty()) c_.emitLine(rcvDrop);
             return;
         }
         // 账 #305 (R4 收口): With 载体是新式视图时同一问 (临时量已登记 knownIvrefVars_)。
         {
             const std::string vSetViewR4 = ivrefViewSetterCallExpr(
-                objExpr, memberName, value, ProcKind::PropertySet, {}, node.value.get());
+                objCall, memberName, value, ProcKind::PropertySet, {}, node.value.get());
             if (!vSetViewR4.empty()) {
                 c_.emitLine(vSetViewR4 + ";  /* Property Set (视图直槽) */");
+                if (!rcvDrop.empty()) c_.emitLine(rcvDrop);
                 return;
             }
         }
-        c_.emitLine("vb6_ComSetRef(" + objExpr + ", L\"" + memberName + "\", " + value + ");  /* COM SetRef */");
+        c_.emitLine("vb6_ComSetRef(" + objCall + ", L\"" + memberName + "\", " + value + ");  /* COM SetRef */");
+        if (!rcvDrop.empty()) c_.emitLine(rcvDrop);
         return;
     }
 

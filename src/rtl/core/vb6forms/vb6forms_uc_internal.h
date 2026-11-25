@@ -206,6 +206,7 @@ typedef struct vb6_HostObjRec {
     void*   extDragIcon;
     int32_t index;        // 控件数组下标 (-1=非数组)
     void*   instance;     // 工程 UserControl 实例, 否则 NULL
+    void*   fontProxy;    // 第一百一十七刀 (§11.99): 晚绑定 `.Font` 交出去的那一枚 (每对象一份)
 } vb6_HostObjRec;
 
 // 合成对象: Controls 集合
@@ -219,6 +220,10 @@ typedef struct vb6_UCFontRec {
     int32_t tag;          // VB6_UC_FONT_TAG
     void*  font;          // vb6_ComIface_Font*
     struct vb6_UCFontRec* next;
+    /* 第一百一十七刀 (§11.99): 挂着这枚字体的宿主窗口; NULL = 独立字体 (设计期块 /
+       PropertyBag 里那枚)。有主人时读写都回落到 vb6_Get/SetControlFont* 那六位既有主人,
+       于是 `.Font.Size` 读回控件设计期字号、写回落盘到窗口。 */
+    void*  owner;
 } vb6_UCFontRec;
 
 

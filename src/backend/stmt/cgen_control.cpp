@@ -235,6 +235,9 @@ void CCodeGen::visit(ForEachStmt& node) {
 
     std::string var = cIdent(node.varName);
     int tmpIdx = tempCounter_++;
+    // 账 #305 §11.109 (第一百二十七刀): 循环变量每一轮由循环自己写 (元素那一枚归容器/迭代器),
+    // 出口放手 = 无对价的退 ⇒ 撤掉腿④ 泛对象档那条登记。
+    dropLateObjSlotRelease(var);
 
     // Fix 022: ForEach 循环变量若为类成员必须以 me->var 形式 emit (同 ForStmt).
     // 原 Fix 010o 无差别注册循环变量到 knownLocalVars_, 类成员场景会导致 C2065

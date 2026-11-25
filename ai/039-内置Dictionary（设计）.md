@@ -1,4 +1,4 @@
-# 039 - 内置 Dictionary（设计）
+﻿# 039 - 内置 Dictionary（设计）
 
 > 状态：**S1/S2/S3 已完成**（设计 + 基准 + 实现 + 对照全绿）。S4（三条入口的 New 那一半）已在实现里做了，剩 S5 门禁登记与 S6 收口。
 > 当前读数：`PASS dict_native 用例=54 行`（1 行 VB6-SEM 手工期望，5 行已知 C3 缺口剔除，明细见 §9）。
@@ -3243,3 +3243,6507 @@ T1/T2 是本刀的行为面，T4/T5/T6 是零回归护栏。
   两例 PASS，`missing=[] odd=0`。
 - 同片另有几行 `[GUI] ... pixels: PASS ...` 被标注机制打成 `::error::`（读数以 png 路径收尾，
   不是 PASS/SKIP 收尾）——`Results: FAIL=1` 里不含它们，属注解口径噪声，不是用例红。
+
+### 11.62 第八十四刀：整型目标的嵌套 Asc 形也吃临时量（`n = CLng(Asc(""))` 一族）
+
+#### 一、病
+
+第八十一刀只认**顶层就是** Asc 的形（`n = Asc("")`）。右值外套一层转换函数或运算符时，
+顶层判据看不见它，语句照样把 0 写进目标：
+
+- `n = CLng(Asc(""))`
+- `n = Asc("") + 0`
+- `n2 = Len(CStr(Asc("")))`
+
+真机三种都是「报 5 + 目标不动」。第八十三刀把树扫描扩到了 String 目标，整型这一半当时留着
+（`ascInRhs83` 前面挂了 `tgtT79 == String`）。
+
+#### 二、改法
+
+1. `ascInRhs83` → `ascInRhs84`，判据从「String 目标」扩到 `tgtInt79 || tgtT79 == String`。
+2. 整型目标必须**显式**打开 `stmtAbortTmp_` / `stmtAbortTmpType_`：`emitGuardedStore` 只有打开它才发
+   `int32_t _avN = (<守卫> == vb6_ErrSerial()) ? (<右值>) : (int32_t)0;` + `if (...) t = _avN;`；
+   否则只发 `if (ok) t = <右值>;` —— 而序号是 store 那一行才变的，挡不住右值自己 raise。
+   这一档**复用第八十一刀的整型临时量出口**，不新造形状。
+
+#### 三、读数（`.temp/k84/inttarget.bas`，x64，改前 = 第八十三刀那枚 `.build/C3.exe`）
+
+| 格 | 源 | 改前 | 改后 | 真机 |
+|---|---|---|---|---|
+| T1 | `n = CLng(Asc(""))` | `n=0 err=5` | `n=-1 err=5` | -1, 5 |
+| T2 | `n = Asc("") + 0` | `n=0 err=5` | `n=-1 err=5` | -1, 5 |
+| T3 | `n = CLng(Asc("A"))` | `n=65 err=0` | `n=65 err=0` | 65, 0 |
+| T4 | `n = Asc("")`（第八十一刀那格） | `n=-1 err=5` | `n=-1 err=5` | -1, 5 |
+| T5 | `n2 = Len(CStr(Asc("")))` | `n2=1 err=5` | `n2=-1 err=5` | -1, 5 |
+| T6 | `s = CStr(Asc(""))`（第八十三刀那格） | `s=keep err=5` | `s=keep err=5` | keep, 5 |
+
+#### 四、门
+
+- `-Category syntax`：**227/227**。
+- 静态门 9 枚全 PASS（含 `manifest_coverage` 750/750、`rtl_proto_arity` 1780 对）。
+- 本机 `-Category vbp -VbpShard 9`：55 PASS / 2 FAIL / 1 SKIP；两红是本机已知
+  （`c29listview` 本机 OCX、`iface_multi_incomplete_negcontrol` 争用），同一 HEAD 上 CI 是 PASS。
+- `run_tests.ps1` 里**没有任何形状针引用 `vb6_Asc*`** ⇒ 本刀不动针。
+
+#### 五、登记（发码清单）
+
+候选集不从全语料猜：本刀的触发面 = 右值树里有 Asc 族且目标是整型标量/String，所以取**清单里
+源文件正文出现 `Asc(` / `AscB(` / `AscW(` 的 7 份**逐份重发。实际变动 **2 行**：
+`tests/VbQRCodegen-master/src/mdQRCodegen.bas` 与 `tests/VbQRCodegen-master/test/Project1.vbp`。
+发码逐字看过（`.temp/k84/md_old.c` vs `md_new.c`）：两处 `lDigit = vb6_ChkInt((int32_t)(vb6_Asc(_own_N)) - 48);`
+变成临时量形，同一文件后面两处 `_e17/_e18` 顺移到 `_e19/_e20`（守卫序号按语句顺序发，不重排）。
+
+⚠ 第一次只登记了 1 行，CI 的形状门回来打脸：`tests/VbQRCodegen-master/test/Project1.vbp` 也是红。
+原因是我那份候选集只 grep 了 `.vbp` **文件自己的正文** —— 工程的模块（`mdQRCodegen.bas`）不在里面，
+所以含 Asc 的工程整份漏掉了。下次扫工程得把它的模块一起看，别只读 `.vbp` 本体。
+
+### 11.63 第八十五刀：除零也是「本语句内 raise」—— `n = 10 \ 0` 不再把 0 写进目标
+
+#### 一、病
+
+探针 `.temp/k85/raisefam.bas` 把「不是 Asc 族、但本语句内会 raise」的形扫了一遍，结果分两类：
+
+1. **错误已经报了，目标还是被写**（本刀的对象）：
+   `n = 10 \ 0` → `n=0 err=11`、`s = CStr(10 \ 0)` → `s=0 err=11`。真机都是「11 + 目标不动」。
+2. **RTL 压根没报错**（另一条经，本刀不碰）：`Trim(CStr(Null))`、`Len(CStr(Null))` 读 `err=0`；
+   `Mid("abc", 0, 1)`、`Chr(-1)` 也都不报错。那是「内置函数自己该 raise 而没 raise」的缺口，
+   与语句级中止不是一个轴 —— 已记在待办里，别当成这刀做完了。
+
+#### 二、改法
+
+`ascCallInTree` → `raiseInTree85`，认两族：① Asc/AscB/AscW（第八十三/八十四刀）；
+② `Div` / `IntDiv` / `Mod` 三枚除法算符。
+**除数能静态看出是非零字面量时不算**（`l = 7 / 2` 不可能 raise）—— 这一条是补上的：
+第一版不分字面量，语法门里 `f2lng_round` 直接红（它钉的 `l = vb6_ChkLong(...vb6_Num_Div((double)(7), (double)(2)))`
+被套上了临时量）。整型目标走 `stmtAbortTmp_`，String 目标走 `emitBstrSlotStore` 的借用/自有两支，
+与第八十三/八十四刀同一套出口，没有新形状。
+
+#### 三、读数（`.temp/k85/raisefam.bas`，x64，改前 = 第八十四刀那枚二进制）
+
+| 格 | 源 | 改前 | 改后 | 真机 |
+|---|---|---|---|---|
+| T7 | `n = 10 \ 0` | `n=0 err=11` | `n=-1 err=11` | -1, 11 |
+| T8 | `s = CStr(10 \ 0)` | `s=0 err=11` | `s=keep err=11` | keep, 11 |
+| T1–T6 | `Trim(CStr(Null))` / `Mid(...,0)` / `Chr(-1)` 族 | `err=0` | `err=0`（未动） | 94 / 5 |
+
+#### 四、门
+
+- `-Category syntax`：**227/227**（第一版宽松判据下曾 226/227，红的是 `f2lng_round`；
+  补「非零字面量不发守卫」后恢复）。
+- 静态门 9 枚全 PASS（含 `manifest_coverage` 750/750、`rtl_proto_arity` 1780 对）。
+- 本机没跑 vbp 分片，交给 CI —— 形状针里只有 `f2lng_round` 一处引用除法发码，已在语法门里验过。
+
+#### 五、登记（发码清单）
+
+本刀的触发面是「右值里有除法算符」——语料里到处都是，候选集法不再够用，所以这刀**本机全量重算**：
+`.temp/k85/full_rehash85.ps1` 把 750 行逐份重发（跳过 5 行机器侧差），归一化口径与 CI 同源。
+净变 **17 行**（宽松版曾 28 行，补字面量判据后有 9 行回到原值）。
+
+### 11.64 第八十六刀：`Chr(-1)` / `Left(s,-1)` / `Mid(s,0)` 该报 5 却静默
+
+#### 一、病（`.temp/k86/builtin.bas`，x64）
+
+| 格 | 源 | 改前 | 真机 |
+|---|---|---|---|
+| T2 | `s = Chr(-1)` | `s=\uFFFF err=0` | 5，s 不动 |
+| T3 | `s = Chr(70000)` | `s=<乱码> err=0` | 5，s 不动 |
+| T5 | `s = Mid("abc", 0, 1)` | `s="" err=0` | 5，s 不动 |
+| T7 | `s = Left("abc", -1)` | `s="" err=0` | 5，s 不动 |
+| T8 | `s = Right("abc", -1)` | `s="" err=0` | 5，s 不动 |
+| T9 | `n = InStr(0, "abc", "b")` | `n=2 err=0` | 5，n 不动（**本刀不做**） |
+
+T1(`CStr(Null)`⇒94)、T4(`Chr(65)`)、T6(`Mid(...,2,1)`)、T10 本来就对，作护栏。
+
+#### 二、改法
+
+1. RTL（`vb6rtl_string.c`）：`vb6_Chr` 码点越界（<0 或 >65535）⇒ 5；`vb6_Left`/`vb6_Right`
+   （含 B 族）负长度 ⇒ 5，0 仍是空串；`vb6_Mid`/`vb6_MidB` 起点 < 1 ⇒ 5（`len < 0` 仍是 cgen
+   对「省略 length」的哨兵，不当错误）。
+2. 发射侧：`raiseInTree85` 的白名单从 Asc 族扩到 `chr/chrw/chrb`、`left/leftb`、`right/rightb`、
+   `mid/midb`（含 `$` 后缀）。**不扩的话 RTL 报 5 之后目标还是被写成空串** —— raise 与中止
+   是两半，缺一不可。
+
+#### 三、读数（改后）
+
+T2/T3/T5/T7/T8 全部变成 `keep / 5`；T1/T4/T6/T9/T10 一格未动。
+
+#### 四、门
+
+- `-Category syntax`：**227/227**（白名单扩了 10 个名字，形状针一枚没红）。
+- 静态门 9 枚全 PASS（含 `rtl_embedded` 138 枚资源与磁盘一致、`rtl_proto_arity` 1780 对）。
+
+#### 五、登记（发码清单）
+
+白名单一类改动的触发面比「除法」还宽（`Left/Mid/Right` 满地都是），继续全量重算 750 行：
+净变 **23 行**（跳过 5 行机器侧差）。
+
+#### 六、本刀没做的
+
+- `InStr(<起点<1>, …)` 仍 clamp 到 1（真机报 5）—— 它不在 `VBA.Strings` 的取子串族里，
+  单独一刀再动（要同时看 `InStrB`/`InStrRev` 的口径）。
+- 定长串目标（`udtFixedField`/`fixedLen`）仍无守卫；`Len` 两档仍是 backlog。
+
+#### 七、CI 回执（run 44699767997，红两份）
+
+- `[RUN] test_joinfilter`：`JF-nullmid=5`（期望 94）。成因与本刀同形：`Mid("abc", <Null>)` 的
+  起点走 `vb6_VariantToLong` 报 94，随后 Mid 自己的 5 又把它盖了。修法：`vb6_VariantToLong`
+  的 Null 分支也打 `vb6_ConvFailMark()`，并新增 `vb6_ArgConvertFailed()`（标记仍等于当前序号 =
+  本语句刚有一次实参转换失败）—— Mid/Left/Right/Chr（含 B 族）raise 前先问它，是就不报 5。
+- `[EMITC-SHAPE] k3060_set_variant_shape`：`bt = CByte("&H" & Mid(hx,1,2))` 的右值里有 Mid，
+  现在走整型临时量形 —— 针按前几刀的办法拆两截重钉。
+- 本机复现：`test_joinfilter` 87/87 行全对（`missing=0 extra=0`）、K3060 四条针全在场；
+  `-Category syntax` 仍 227/227；静态门 9 枚全 PASS。
+
+### 11.65 第八十七刀：`InStr(0,…)` / `InStrRev(…,0)` 该报 5 却把起点悄悄夹成 1
+
+#### 一、病（`.temp/k87/instr.bas`，x64，改前 = 第八十六刀那枚二进制）
+
+| 格 | 源 | 改前 | 改后 | 真机 |
+|---|---|---|---|---|
+| T1 | `n = InStr(0, "abc", "b")` | `n=2 err=0` | `n=-1 err=5` | -1, 5 |
+| T2 | `n = InStr(-1, "abc", "b")` | `n=2 err=0` | `n=-1 err=5` | -1, 5 |
+| T5 | `n = InStr(0, "abc", "")` | `n=0 err=0` | `n=-1 err=5` | -1, 5 |
+| T6 | `n = InStrRev("abc", "b", 0)` | `n=2 err=0` | `n=-1 err=5` | -1, 5 |
+| T8 | `n = InStrRev("abc", "b", -2)` | `n=2 err=0` | `n=-1 err=5` | -1, 5 |
+| T10 | `n = InStrB(0, a, b)` | `n=2 err=0` | `n=-1 err=5` | 5 |
+
+对照格（T3 `InStr(1,…)`⇒2、T4 `InStr(4,…)`⇒0、T7 `InStrRev(-1)`⇒2、T9 省略⇒2、T11 `InStrB(1,…)`⇒2）
+改后逐字不变；T12（String 目标 `s = CStr(InStr(0,…))`）⇒ `keep/5`，T13（起点是 Null）⇒ `n=-1 err=94`
+（起点转换的 94 不被 5 盖掉，走第八十六刀那枚 `vb6_ArgConvertFailed`）。
+
+真机读数是 `.temp/k87/oracle_instr.vbs`（VBScript 的 `InStr`/`InStrRev` 与 VB6 同一套 VBA 字符串运行时；
+`InStrB` 只有 VB6 有，按 InStr 同口径推）。
+
+#### 二、改法
+
+1. RTL（`vb6rtl_string.c`）：
+   - `vb6_InStrC` 起点 < 1 ⇒ 5（`return 0`）。**校验顺序按真机**：先校起点，再判空 needle
+     —— 真机 `InStr(0,"abc","")` 也是 5，不是 0。
+   - `vb6_InStrB`（Byte 数组形与 BSTR 形公用入口）同一道门。
+   - `vb6_InStrRev`：`-1` 是「从尾部」的合法档（等同省略）⇒ 夹成 `hLen`；其余 < 1（0、-2…）⇒ 5。
+2. 发射侧：`raiseInTree85` 白名单再加 `instr/instrb/instrrev`。**raise 与中止是两半**：
+   不登记的话 RTL 报了 5，`n = …` 照样把目标写成 0/2。
+
+#### 三、登记（发码清单）
+
+触发面同为「右值里有内建调用」，仍走本机全量重发（`.temp/k85/full_rehash85.ps1`，750 行、跳过 5 行机器侧差）：
+净变 **13 行**（`ucSegmentedControl`、`ucSlider_2022` 等含 `InStr` 赋值的模块）。
+
+#### 四、门
+
+- `-Category syntax`：**227/227**。
+- 静态门 9 枚全 PASS（`manifest_coverage` 750/750、`rtl_proto_arity` 1781 对、
+  `rtl_embedded` 138 份字节一致）。
+
+#### 五、本刀没做的
+
+- `InStrRev` 的 `start > hLen`：真机答 0（oracle I 格），C3 仍夹成 `hLen` 后照样查找。
+  这是**另一条**口径（不是本刀的 < 1），单列 backlog。
+- `InStrB` 的「起点是 Null」以及 Byte 数组的越界档没有真机对照（VBScript 无 InStrB），只按 InStr 同口径推。
+- 定长串目标（`udtFixedField`/`fixedLen`）、`Len` 两档仍在 backlog。
+
+### 11.66 第八十八刀：`InStr` 的空 needle / `InStrRev` 的 `start > Len` 答错
+
+#### 一、病（`.temp/k88/edge.bas`，x64，改前 = 第八十七刀那枚二进制）
+
+| 格 | 源 | 改前 | 改后 | 真机 |
+|---|---|---|---|---|
+| E1 | `InStr(4, "abc", "")` | `4` | `0` | 0 |
+| E2 | `InStr(3, "abc", "")` | `3` | `3` | 3 |
+| E4 | `InStrRev("abc", "", 2)` | `3` | `2` | 2 |
+| E5 | `InStrRev("abc", "", 4)` | `3` | `0` | 0 |
+| E6 | `InStrRev("abc", "b", 4)` | `2` | `0` | 0 |
+| E7 | `InStrRev("abc", "b", 99)` | `2` | `0` | 0 |
+| E9 | `InStrRev("", "", 1)` | `0` | `0` | 0 |
+| E3/E8/E10 | `InStr(1,"abc","")` / `InStrRev("abc","b",3)` / `InStrRev("abc","")` | 1 / 2 / 3 | 不变 | 1 / 2 / 3 |
+
+真机读数：`.temp/k88/oracle_instr_edge.vbs`（E1/E2）、`oracle_rev2.vbs`（rev 4/99/空 needle）、
+`oracle_rev3.vbs`（`InStrRev("abc","",2)`⇒2、`("abc","",1)`⇒1 —— 空 needle 交回的是**起点**，不是 Len）。
+
+#### 二、改法（纯 RTL，不动发射侧）
+
+`vb6rtl_string.c`：
+
+1. `vb6_InStrC`：空 needle 交回 `start`，但 `start > Len` 时交 0
+   （`return (start > vb6_BSTR_Len(haystack)) ? 0 : start;`）。旧写法无条件 `return start`。
+2. `vb6_InStrB`：Byte 数组形与 BSTR 形同口径（无真机对照，按 InStr 同族推）。
+3. `vb6_InStrRev`：
+   - 空 needle ⇒ `return start`（旧写法交 `hLen`）；
+   - `start > hLen` ⇒ **先于空 needle** 判 `return 0`（旧写法夹成 `hLen` 继续查）。
+
+#### 三、读数（`.temp/k88/edge.bas` 改后）
+
+E1–E10 逐格与真机一致（见上表「改后」列）。第八十七刀的 13 格探针
+（`.temp/k87/instr.bas`，`start < 1` 那一族）在改后二进制上逐字不变。
+
+#### 四、门
+
+- `-Category syntax`：**227/227**。
+- 静态门 9 枚全 PASS。**发码清单不变**（本刀只改 RTL 行为，不改任何语句的发射形状）。
+- `check_owned_temp_keeps`（CI 的 `[STATIC]` 那一格）：首轮红一枚 `~vb6_InStrC|1`。
+  归因：空 needle 分支多读一次 `vb6_BSTR_Len(haystack)`，表里那一行的「代表读目标」
+  于是从 `vb6_TextFind` 换成 `vb6_BSTR_Len`；指针轴仍是 `keeps_pointer=0`（形参不外逃），
+  与快照逐列对过后 `-Bless` 登记（净变 1 行）。
+
+#### 五、本刀没做的
+
+- `InStrB` 的空 needle / 越界两格没有真机对照（VBScript 无 InStrB）。
+- 定长串目标（`udtFixedField`/`fixedLen`）、`Len` 两档仍在 backlog。
+
+### 11.67 第八十九刀：定长串目标（UDT `String * N` 字段 / 模块级 `String * N`）没有语句级中止
+
+#### 一、病（`.temp/k89/fixed.bas`，x64，改前 = 第八十八刀那枚二进制）
+
+| 格 | 源 | 改前 | 改后 | 真机 |
+|---|---|---|---|---|
+| T1 | `u.f = Left("abc", -1)`（UDT 定长字段） | `f=[     ] err=5` | `f=[keep ] err=5` | keep, 5 |
+| T2 | `g = Left("abc", -1)`（模块级 `String * 5`） | `g=[     ] err=5` | `g=[keep ] err=5` | keep, 5 |
+| T5 | `u.f = Chr(-1)` | `f=[     ] err=5` | `f=[keep ] err=5` | keep, 5 |
+| T6 | `g = Chr(-1)` | `g=[     ] err=5` | `g=[keep ] err=5` | keep, 5 |
+| T3/T4 | 对照 `"hi"` | `hi   ` | 不变 | `hi   ` |
+| T9/T10 | 对照 截断/补空格 | `abcde` / `ab   ` len=5 | 不变 | 同 |
+
+成因：守卫**已经发了**（`const int32_t _e0 = vb6_ErrSerial();`），但定长串那两条发码支根本不看它 ——
+`vb6_FixedStrAssignFree(u.f, 5, vb6_Left(...))` / `vb6_BSTR_AssignMove(&g, vb6_LSetFree(..., 5))`
+照写，于是「报 5 + 目标被抹成空格」。普通 BSTR 槽（第七十九/八十三刀）早就两半齐全，定长串这一档漏了。
+
+#### 二、改法（`emitBstrSlotStore`，`cgen_util_ctrl.cpp`）
+
+两条定长串分支各补一道与普通槽**同构**的门：右值**只算一次**进临时量，再拿算完之后的序号决定写不写。
+
+- UDT 定长字段：`BSTR _avN = (guard == vb6_ErrSerial()) ? (rhs) : NULL;` +
+  `if (…) vb6_FixedStrAssignFree/Assign(u.f, N, _avN); [else vb6_BSTR_Free(_avN);]`
+  （自有串那一支要 else 收回，借来的没有可回收的东西）
+- 模块级定长串：`BSTR _avN = (…) ? (vb6_LSet(Free)(rhs, N)) : NULL;` +
+  `if (…) vb6_BSTR_AssignMove(&g, _avN); else vb6_BSTR_Free(_avN);`
+
+#### 三、登记（发码清单）
+
+全量重算 750 行，净变 **1 行**（`tests/Charts 2020/ucTreeMaps/Proyecto1.vbp`）——
+语料里「定长串目标 + 会 raise 的右值」本来就少。
+
+#### 四、门
+
+- `-Category syntax`：**227/227**。
+- 静态门 9 枚全 PASS；`check_owned_temp_keeps` PASS（本刀不动 RTL，K5 无漂移）。
+
+#### 五、本刀没做的
+
+- T7/T8：`u.f = CStr(Null)` / `g = CStr(Null)` 改前改后都是 `[     ] err=0` —— 定长串目标上
+  Variant → String 仍走**宽松**的 `vb6_CStr`（Null 折成空串），raise 压根没发生，所以守卫也无从生效。
+  真机是 `94 + 目标不动`。这是**转换口径**那一刀，另列 backlog。
+- `Len` 两档仍在 backlog。
+
+### 11.68 第九十刀：定长串目标上的 `94`（Variant → String 走的是宽松口）
+
+#### 一、病（`.temp/k90/strict.bas` + `.temp/k89/fixed.bas`，x64，改前 = 第八十九刀那枚二进制）
+
+| 格 | 源 | 改前 | 改后 | 真机 |
+|---|---|---|---|---|
+| T1 | `u.f = CStr(Null)`（UDT `String * 5` 字段） | `f=[     ] err=0` | `f=[keep ] err=94` | keep, 94 |
+| T2 | `g = CStr(Null)`（模块级 `String * 5`） | `g=[     ] err=0` | `g=[keep ] err=94` | keep, 94 |
+| T3 | `u.f = v`（v = Null） | `f=[     ] err=0` | `f=[keep ] err=94` | keep, 94 |
+| T4 | `g = v`（v = Null） | `g=[     ] err=0` | `g=[keep ] err=94` | keep, 94 |
+| T5 | `v = 42; u.f = v / g = v` | `42   `（err=0） | `42   ` | `42   ` |
+| T7 | `v = "abc"; u.f = v` | `abc  ` | `abc  ` | `abc  ` |
+| T8 | `v = 7; u.f = CStr(v) / g = CStr(v)` | `7    ` | `7    ` | `7    ` |
+| T9 | `v = "abcdefg"; u.f = v` | `abcde` | `abcde` | `abcde` |
+
+成因：严格赋值站（第七十三刀 `valueIsVariant` / 第七十四刀 `s = CStr(<Variant>)`）两处都带
+`fixedLen.empty()` 的前提，定长串目标因此整档绕开 —— 走的是宽松 `vb6_CStr` / `vb6_VariantToString`
+（`Null` 折成空串），所以 **raise 压根没发生**，第八十九刀那道中止门也就无从生效。
+
+#### 二、改法
+
+1. RTL（`vb6rtl_string.c` + `vb6rtl_builtin.h`）新增两枚**原子**出口，口径与
+   `vb6_BSTR_AssignFromVariant` 一致（Null ⇒ 94、目标一字不动）：
+   - `vb6_FixedStrAssignFromVariant(char* buf, int32_t cap, vb6_VARIANT src)` —— UDT 内联 `char[N]`；
+   - `vb6_LSetFromVariant(BSTR* target, int32_t cap, vb6_VARIANT src)` —— 模块级 `String * N`（BSTR 模型）。
+   两枚内部都是「Null 先拦 → 否则 `vb6_CStr` 折串 → 既有定长写侧（右补空格 / 右截断）→ 收回折串临时」。
+2. 发射侧（`emitBstrSlotStore`）：① 第七十四刀那条 `CStr(<Variant>)` 识别去掉 `fixedLen.empty()`
+   前提；② 严格赋值站之后补一条定长串分支，按 UDT 字段 / 裸槽分别发上面两枚出口。
+   守卫那行（`_eN`）照旧发，但这两枚出口自己是原子的（raise 即返回），所以中止不依赖它。
+
+#### 三、读数
+
+`.temp/k90/strict.bas` 九格全对（见上表）；第八十九刀的 `.temp/k89/fixed.bas` 十三格复跑：
+T7/T8 由 `err=0` 变 `err=94`（目标仍 `keep`），T1/T2/T5/T6 仍是 `keep/5`，对照格不变。
+
+#### 四、登记
+
+- 发码清单全量重算 750 行，净变 **1 行**（`tests/GifcontrolSource/prjNewAniGif.vbp`）。
+- `check_owned_temp_keeps`：新增两枚 RTL 出口 ⇒ 快照 +2 行
+  （`+vb6_FixedStrAssignFromVariant|2`、`+vb6_LSetFromVariant|2`，两行都是 `keeps_pointer=0`、
+  `handoff-reads:vb6_CStr`）—— 归因后 `-Bless`；`rtl_proto_arity` 由 1781 变 1783 对。
+
+#### 五、门
+
+- `-Category syntax`：**227/227**；静态门 9 枚全 PASS。
+
+#### 六、本刀没做的
+
+- `Len` 两档仍在 backlog。
+
+### 11.69 第九十一刀：`Len` / `LenB` 收 `Null` 的位置（94 落到整型目标那一瞬）与 `LenB` 缺变体位
+
+#### 一、真机口径（`.temp/k91/oracle_len.vbs`，VBScript／同一套 VBA 串运行期）
+
+```
+A Len(v=Null)      val=(Null) tn=Null  err=0     ← Len 本身把 Null 原样交回
+B Len(Null)        val=(Null) tn=Null  err=0
+C Len(Empty)=0     D Len("abc")=3    E Len(42)=2    F Len(v="hello")=5    G Len(True)=4
+```
+
+⇒ `Len(<Null>)` **不 raise**，答 **Null**；落到整型目标那一瞬才报 **94**、目标不动
+（与第七十九刀那批 `W4b/W5b/W6b` 同一条口径）。`LenB` 那半没有 VBScript 入口，
+按手册同一句（「Variant 一律按 String 看」）与 `Len` 同族推：`n = LenB(v)`（v=Null）也是 **94 + 目标不动**。
+
+#### 二、病（`.temp/k91/len.bas`，x64，改前 = 第九十刀那枚二进制）
+
+| 格 | 源 | 改前 | 改后 | 真机 |
+|---|---|---|---|---|
+| T1 | `n = Len(v)`（v = Null） | `n=0 err=94` | **`n=-1 err=94`** | 目标不动, 94 |
+| T12 | `n = LenB(v)`（v = Null） | `n=0 err=0` | **`n=-1 err=94`** | 同 T1 |
+| T2 | `vv = Len(v)`（v = Null，Variant 目标） | `isnull=True vt=1` | 同（本来就对） | Null |
+| T3–T7 | `Len(v="hello")` / `Len("abc")` / `Len(模块级 String * 5)` / `Len(u.f)` / `LenB(模块级 String * 5)` | 5 / 3 / 5 / 5 / 10 | 同 | 同 |
+| T11 | `Len(v=Empty)` | 0 | 0 | 0 |
+| T13 | `LenB("")` | 0 | 0 | 0 |
+
+两处成因分得很开：
+
+1. **T1 是「守卫发了、临时量没发」**。第七十九刀那条判据（右值是一枚调用、某实参静态类型是
+   Variant）本来就看得到这一形，于是发了 `const int32_t _e0 = vb6_ErrSerial();`
+   —— 但守卫形是 `if (_e0 == vb6_ErrSerial()) n = <RHS>;`，序号在**条件求值那一步**还没变，
+   RHS 里的 `vb6_VariantToLong(vb6_LenV(v))` 就在条件之后把 94 报出来、语句照样把 0 写进目标。
+   只有 Asc 族（第八十一/八十三刀）和除零（第八十五刀）打开了 `stmtAbortTmp_`，Len 这一族一直没打开。
+2. **T12 是 `LenB` 压根没有变体位**。`vb6_LenV` 是第七十一刀给 `Len` 造的（Null 进 Null 出），
+   `LenB` 没有对应出口 ⇒ 实参落到运行时签名表那一站，按 `BSTR` 折成
+   `vb6_LenB(vb6_VariantToString(v))`（宽松折串，Null → 空串）⇒ 静默 0 / Err 0。
+
+#### 三、改法（三半，缺一不可）
+
+1. **发码侧打开临时量**（`stmt/cgen_assign.cpp`，在原来那个 `lit79 || 变体档` 的循环里）：
+   整型标量目标 + 本刀的两枚（`len` / `lenb`）+ 实参是**真的整只 Variant 槽** ⇒ `stmtAbortTmp_`。
+   ⚠ 两个**不许放宽**的方向，都用 750 行清单量过：
+   - 不许按 `inferExprType` 认变体档：它对 UDT / 数组 / 属性读一律回退成 Variant ⇒
+     `LenB(<UDT>)`（发的是 `sizeof`）、`UBound(arr, 1)` 这些**不可能 raise** 的右值全被套上 `_av`
+     （第一版就是这么放的，当场 **54 行**变动）。改成与发码站同一问 `isDefinitelyVariantExpr` + 不用 `isArr` 那档。
+   - 也不许一宽到「所有内建 + 整型目标」：那样仍有 **25 行**，其中 `n = VarType(v)`（根本不会 raise）与
+     `n = UBound(vb6_VariantToSafeArray1DStrict(v), 1)` 这类**口径没量过**的右值也被套上 `_av`。
+     本刀的判据只做到这两枚有真机读数的地方 —— 那一族见第六节的待办。
+2. **RTL 补 `vb6_LenBV`**（`vb6rtl_string.c` + `vb6rtl_builtin.h`）：Null ⇒ Null；否则
+   `vb6_LenB_BSTR(vb6_VariantToString(v))` 并把折出来的那枚串就地放掉。**不许**走 `vb6_LenB` 那个
+   `_Generic` 宏 —— 它对非 BSTR 实参走 `default: sizeof(x)`，拿它答 Variant 槽会给 24/20。
+3. **两处改道口都要认它**：`nullFamilyVExitCName` 表 +`{"lenb","vb6_LenBV"}`；
+   并且 `cgen_expr_call_arg_variant.inc` 里 `rtParamType == "BSTR"` 那一站也要问一遍
+   （`LenB` 在**运行时 C 签名表**里那一格写的是宏的第一臂，不是内置函数的形参档 ⇒ 它不走
+   `paramBase == String` 那条改道口；只改表不改这一站，实测发出来还是 `vb6_LenB(VariantToString(v))`）。
+   `scripts/gen_variant_slot_prefixes.ps1` 重跑：60 → **61 名**（`+ vb6_LenBV`）。
+
+#### 四、读数（改后，本机 x64）
+
+```
+T1 n=-1 err=94    T2 isnull=True vt=1 err=0    T3 n=5    T4 n=3    T5 n=5
+T6 n=5            T7 n=10                       T8 n=10   T11 n=0   T12 n=-1 err=94   T13 n=0
+```
+
+#### 五、登记
+
+- 发码清单全量重算 750 行（跳过机器侧 5 行），净变 **3 行**：`tests/vb6probe/NullOpsProbe.bas`、
+  `tests/test_joinfilter.bas`、`tests/VBFlexGridDemo/VBFlexGridDemo.vbp` —— 三行都是同一形状
+  `if (_eN == serial) i = …(LenV(槽));` → `int32_t _avN = (_eN == serial) ? (…) : 0; if (_eN == serial) i = _avN;`。
+- `check_owned_temp_keeps`：新增一枚 RTL 出口 ⇒ ① 手写名单 `src/common/owned_temp_keeps.hpp`
+  两处 +`vb6_LenBV`（K13/K13c 双向对账的那一侧，**脚本不许改写**）；② 推导快照 `-Bless` **+1 行**
+  （`+vb6_LenBV|0`）。`rtl_proto_arity` 1783 → 1784 对。
+
+#### 六、本刀没做的（都已量过、登在这里）
+
+1. **`LenB(<UDT 定长字段>)` 答 10，真机口径未量**：UDT 字段在本仓是内联 `char[N]`（ANSI），
+   发的是 `vb6_LenB(vb6_FixedStrToBSTR(u.f, 5))` = 宽字符 ×2 = 10；真机是 5 还是 10 **没有读数**
+   （VBScript 不支持定长串，采不到），本刀按「不猜」留原样，等真机采一次再定。
+2. **`n = CLng(v)` / `CInt(v)` / `UBound(v)` 这一族**（Variant 实参 + 整型目标）同样有「94/13 报出来、
+   目标被写 0」的形状，本机 750 行清单的宽度已量到 **25 行**；本刀刻意只做到 Len/LenB，
+   泛化留给下一刀（判据要能分开「会 raise 的转换」与 `VarType` 这种不会 raise 的）。
+
+### 11.70 第九十二刀：整型目标上「整只 Variant 槽 → 非 Variant 形参」那一族（`CLng` / `CInt` / `UBound` …）
+
+#### 一、真机口径（`.temp/k92/oracle_conv.vbs`，VBScript／同一套 VBA 运行期）
+
+```
+A vv = CLng(v=Null)  → vv=Empty, err=94        B n = CLng(Null)  → n 不动, 94
+C n = CInt(Null)     → n 不动, 94              D n = CLng(Empty) → 0
+E n = UBound(v=1)    → n 不动, 13（非数组）     F n = UBound(a)   → 1
+G/H n = VarType(v)   → 2 / 1, err=0（不转换）   I n = CLng("abc") → n 不动, 13
+J n = Int(Null)      → Null（err 0，Null 传播族）
+```
+
+⇒ 与第九十一刀同一句，只是不限于 `Len`：**整只槽交给一个「非 Variant」形参**时，那一步的转换
+（`VariantToDouble` / `NumVal` / `VariantToSafeArray1DStrict` / `VariantToLong`）会 raise 94 或 13，
+raise 之后 RHS 仍会交回 0 —— 目标不该被写。`VarType` 是这条判据的反面：它的形参**本来就是** `VARIANT`，
+没有转换，所以那一格只该多一枚无害局部量、值一行不许变。
+
+#### 二、病（`.temp/k92/conv.bas`，x64，改前 = 第九十一刀那枚二进制）
+
+| 格 | 源 | 改前 | 改后 | 真机 |
+|---|---|---|---|---|
+| U1 | `n = CLng(v)`（v = Null） | `n=0 err=94` | **`n=-1 err=94`** | 目标不动, 94 |
+| U2 | `n = CInt(v)`（v = Null） | `n=0 err=94` | **`n=-1 err=94`** | 目标不动, 94 |
+| U3 | `n = CLng(v)`（v = "abc"） | `n=0 err=13` | `n=0 err=13` ✗ | 目标不动, 13 |
+| U4 | `n = UBound(v)`（v = 1，非数组） | `n=-1 err=13` | 同（本来就对） | 目标不动, 13 |
+| U5 | `n = VarType(v)`（v = Null） | 1 / err 0 | 同 | 1 / err 0 |
+| U6 | `n = CLng(Empty)` | 0 | 0 | 0 |
+| U7 | `n = CLng("42")` | 42 | 42 | 42 |
+
+第九十一刀的判据按 callee 名分族（只认 `len` / `lenb`）⇒ U1/U2 那两枚不在族里，一条也不 fire。
+
+#### 三、改法（一处，判据收成一句）
+
+`stmt/cgen_assign.cpp`：把第九十一刀那个 `lenFam91` 的族别去掉 —— 判据回到
+**整型标量目标 + 右值顶层是调用 + 该调用某个实参是「真的整只 Variant 槽」（或 Null/Empty 字面量）**。
+
+- 「真的整只槽」仍只问 `isDefinitelyVariantExpr` + 剔掉数组本体（`inferExprType` 那一半的坑见 §11.69）。
+- 两个「不许放宽」的方向原样保留（按 `inferExprType` 认变体档 ⇒ 54 行噪声；这一条已写死在注释里）。
+
+#### 四、这刀的代价（宽度先量后写）
+
+750 行清单全量重算，净变 **24 行**、`_av` 格 **57 个**（`.temp/k92/census3.ps1` 逐格归因）：
+
+| callee | 格数 | 性质 |
+|---|---|---|
+| `vb6_UBound` / `vb6_LBound` | 17 / 10 | 形参是 `SafeArray1D*`，实参是槽 ⇒ 会报 13；U4 那一格已证明 |
+| `vb6_CLngV` / `vb6_CIntV` / `vb6_ChkLong` | 6 / 1 / 1 | 94 那一族（U1/U2） |
+| Declare `SelectObject` / 工程内过程（6 枚） | 2 / 6 | 形参有具体档，实参是槽 ⇒ 会 raise |
+| `vb6_VarType` | 6 | **无害**：形参就是 `VARIANT`，值一格没变（U5） |
+| Declare `DispCallFunc` | 8 | **无害**：C 侧不 raise，只是多一枚局部量 |
+
+⇒ 57 格里 14 格是「多一枚无害局部量」，43 格是真口径。
+
+#### 五、本刀没修的：13 那条路守卫看不见（已量，下一刀）
+
+U3（`n = CLng("abc")`）改后仍是 `n=0 err=13`。根因不在赋值站，而在 RTL 有两枚 raise 出口：
+
+- `vb6_ErrRaise(errNum, source, description)` —— **`++vb6_err_serial`**（守卫看得见）；
+- `vb6_RaiseError(errNum, description)` —— **不打序列**（守卫看不见）。
+
+`vb6_NumVal` 的「文本认不出」走的正是后者（`vb6rtl_string.c:462`）。全仓 `vb6_RaiseError(` **34 处 / 15 份文件**
+（`vb6com.c` 429/438、`vb6com_invoke.c`、`vb6com_fso.c` …），凡是走它报出来的错误，第九十一/九十二刀这两道
+守卫一律无效 —— 这一族是下一刀的入口，**不许**在这一刀里顺手改 raise 管线（那是另一条轴，要逐枚读「该不该让守卫看见」）。
+
+#### 六、登记与门
+
+- 发码清单：24 行（列表见 `.temp/k92/rehash92.log`），无机器侧 5 行。
+- `check_owned_temp_keeps`：本刀不动 RTL ⇒ 253 行不变，全绿。
+- 静态门 9 枚全 PASS（`rtl_proto_arity` 1784 对）；`-Category syntax` **227/227**。
+
+### 11.71 第九十三刀：`vb6_RaiseError` 不打错误序号 —— 34 处报错对语句级守卫全是隐形的
+
+#### 一、病（`.temp/k93/vb6probe/RealMachineProbe.bas`，C3 侧读数，改前 = 第九十二刀那枚二进制）
+
+```
+C5 | CLng(v=abc) into Long = [0]  err=13      ← 目标被写 0
+```
+
+真机口径（同族，第九十二刀 `.temp/k92/oracle_conv.vbs` E/I 两格）：**13 报出来、目标一字不动**。
+
+根因不在赋值站，而在 RTL 有**两枚**报错出口，对「错误序号」的态度不一致：
+
+| 出口 | 打 `vb6_err_serial` | 用它的地方 |
+|---|---|---|
+| `vb6_ErrRaise(errNum, source, description)` | **打**（`++vb6_err_serial`） | 第九十一/九十二刀那两族转换失败（94 等） |
+| `vb6_RaiseError(errNum, description)` | **不打** | 全仓 34 处 / 15 份文件：COM `429`/`438`（`vb6com.c`、`vb6com_invoke.c`）、`vb6com_fso.c`、`vb6_NumVal` 的文本 13（`vb6rtl_string.c:462`）… |
+
+赋值站的语句级守卫判的是「序号变没变」（第七十九刀），所以凡走第二枚报出来的错误，守卫**一律看不见** ⇒
+语句接着把转换失败交回的 0 / 空串写进目标。CBool/CLng 那条文本档（`vb6_NumVal`）是最常见的门面，
+但同一族还盖着 COM 的 429/438 —— 那一半今天也同样是「报错 + 目标被写」。
+
+#### 二、改法（一处，一行）
+
+`vb6rtl.c` 的 `vb6_RaiseError` 开头补 `++vb6_err_serial;`，与 `vb6_ErrRaise` 同一句「**报错就要动序号**」。
+两枚出口的其余行为（`vb6_err_resume_next` 早退、`On Error GoTo` 的 longjmp、未处理时打 stderr/弹框）一字未动。
+
+#### 三、读数（C3 侧，改后）
+
+```
+C5 | CLng(v=abc) into Long = [-1]  err=13      ← 修好：目标不动
+B3/B4 Len/LenB(Null) = [-1] err=94 ; C1/C2 CLng/CInt(Null) = [-1] err=94 ; C6 UBound(非数组) = [-1] err=13
+D1..D3/D5 不变（Asc 94 / Mid 5 / Left 5 / InStr 5，目标都不动）
+```
+
+同一枚探针还量到两处**本轮不修**的洞（真机读数一到就开下一刀）：
+
+1. `n = Int(v=Null)` / `n = Abs(v=Null)` ⇒ 本仓 `[0] err=0`。发的是
+   `vb6_ChkLong(vb6_FltToLng(vb6_Int(vb6_VariantToDouble(v))))` —— `vb6_VariantToDouble` 是**宽松**口
+   （Null → 0.0、不报错），而 `Int`/`Abs` 的 Variant 档在 VB6 是 **Null 进 Null 出**（`.temp/k92` J 格：
+   `n = Int(Null)` ⇒ Null、err 0），落到整型目标才 94。宽严两档的选择在这一族还没量过。
+2. `TypeName(<UDT 的 String*N 字段>)` ⇒ 本仓答 `Object`（应为 `String`）：固定长度字段是 `char[N]`，
+   `vb6_TypeName` 只认 BSTR 槽。已登在 §11.72 之下的待办清单。
+
+#### 四、登记与门
+
+- 发码清单全量重算 750 行：**净变 0 行**（本刀只动 RTL 运行期语义，一个字都不在发码面上）。
+- `check_owned_temp_keeps`：253 行不变（没有新出口、没有改签名），K13/K14 全绿。
+- 静态门 9 枚全 PASS（`rtl_proto_arity` 1784 对；`rtl_embedded` 138 份资源与应用内嵌逐字节相同）。
+- `-Category syntax`：**227/227**。
+
+#### 五、下一刀的两笔（都已量、等真机）
+
+- **真机探针已出**：`.temp/k93/vb6probe/RealMachineProbe.bas`（一行一格，`LABEL | what = [value] err=N`；
+  A 段定长串 `Len`/`LenB`（模块/局部/UDT 字段/整枚 UDT）、B 段 Variant 各档、C 段转换族、D 段串内建边界）。
+  它在 C3 侧已经跑通，读数留在 `.temp/k93/vb6probe/probe_out.txt` —— 真机读数回来后逐格对表。
+- 待办：`LenB(<定长串>)` 的 10/5（A2/A4/A6）、`LenB(<整枚 UDT>)`（A8 本仓 5 而 A10 12）、
+  `TypeName(<UDT 定长字段>)`（A12 本仓 `Object`）、`Int/Abs(<Null>)`（C3/C4）。
+
+### 11.72 真机读数回来了：34 格逐格对表（`LenB` 定长串结案，`TypeName` 定长串修好，UDT 尺寸 / Int·Abs 两族开账）
+
+真机输出 = `.temp/k93/vb6probe/RealMachineProbe.bas` 在真 VB6 上跑出来的一整段（A/B/C/D 四段 34 格），
+C3 侧基线 = 同文件在 `C3.exe` 下跑出来的 `probe_out.txt`（第九十三刀那枚二进制）。
+
+#### 一、对表（真机 vs 改前 C3）
+
+| 格 | 真机 | 改前 C3 | 判 |
+|---|---|---|---|
+| A1 `Len(模块 String*5="ab")` | 5 | 5 | ✓ |
+| A2 `LenB(模块 String*5)` | **10** | 10 | ✓ |
+| A3/A4 `Len`/`LenB`(局部 String*5) | 5 / **10** | 5 / 10 | ✓ |
+| A5/A6 `Len`/`LenB`(UDT 字段 String*5) | 5 / **10** | 5 / 10 | ✓ |
+| A7 `Len(整枚 UDT {String*5})` | 5 | 5 | ✓ |
+| A8 `LenB(整枚 UDT {String*5})` | **10** | **5** | ✗ |
+| A9 `Len(整枚 UDT {String*5, Long})` | **9** | **12** | ✗ |
+| A10 `LenB(整枚 UDT {String*5, Long})` | **16** | **12** | ✗ |
+| A11 `TypeName(模块 String*5)` | **String** | **Object** | ✗→本刀修 |
+| A12 `TypeName(UDT 字段 String*5)` | **String** | **Object** | ✗→本刀修 |
+| A14 `Len(越界赋值 "abcdefgh" 后)` | 5 | 5 | ✓ |
+| A15 `LenB(同 A14)` | **10** | 10 | ✓ |
+| A16 越界赋值后内容 | `<abcde>` | `<abcde>` | ✓ |
+| B1–B10 `Len`/`LenB` 收 Variant（Null/Empty/123/"abc"） | `Null`/1/0/0/0 各格 | 逐格同 | ✓ |
+| B3/B4 `Len`/`LenB(v=Null)` 落 Long | **-1 / 94** | -1 / 94 | ✓ |
+| C1/C2 `CLng`/`CInt(Null)` 落 Long | **-1 / 94** | -1 / 94 | ✓ |
+| C3/C4 `Int`/`Abs(v=Null)` 落 Long | **-1 / 94** | **0 / 0** | ✗ |
+| C5 `CLng("abc")` 落 Long | **-1 / 13** | -1 / 13 | ✓（第九十三刀修好） |
+| C6 `UBound(非数组)` 落 Long | **-1 / 13** | -1 / 13 | ✓ |
+| C7/C8 `VarType(Null)` / `CLng(Empty)` | 1 / 0，err 0 | 同 | ✓ |
+| D1 `Asc(Null)` | **-1 / 94** | -1 / 94 | ✓ |
+| D2/D3 `Mid(_,0,1)` / `Left(_,-1)` | 目标不动 / 5 | 同 | ✓ |
+| D4 `Chr(0)` | len=1，err 0 | 同 | ✓ |
+| D5 `InStr(0,…)` | **-1 / 5** | -1 / 5 | ✓ |
+
+**§11.69 那条悬案结案**：`LenB(<定长串>)` 真机就是 **10**（UTF-16 口径：5 字符 × 2 字节），
+本仓第九十一刀那一版**本来就对** —— 当初"5 vs 10"的疑点是拿 ANSI `char[N]` 的内联尺寸当答案猜出来的，
+真机一量即消。`Len` = 5、`LenB` = 10 两条一起立住。
+
+#### 二、第九十四刀：`TypeName(<定长串>)` ⇒ `"String"`
+
+- 病：定长串在 C 侧是内联 `char[N]`，装槽时退化成 `char*` ⇒ `vb6_VariantFromValue` 只认 BSTR 槽、
+  指针按对象包 ⇒ `vb6_TypeName` 答 `Object`。
+- 改：`cgen_expr_call_builtin_pre.inc` 的 TypeName 折叠区（与 `TypeName(Me)` / `TypeName(类变量)` 同一形）
+  加一条闸：实参 `fixedStrLenOfExpr` 非空 ⇒ 编译期折成 `vb6_BSTR_FromStr(L"String")`。
+  真机上这答案是**声明档常量**（A14/A16 越界赋值后仍是 String），绕运行期那问没有意义。
+- 读数：A11 `Object` → `String`、A12 `Object` → `String`，其余 32 格逐字不变。
+- 发码清单 750 行全量重算 **净变 0 行**（真语料 9949 份里没有 `TypeName(<定长串>)` 这一形）。
+
+#### 三、本刀登记、不修的三笔（都有真机数，档已齐）
+
+**① `Len`/`LenB(<整枚 UDT>)` 走的是 `sizeof`，而真机是"按成员逐段算"**
+
+```
+真机: Len ({String*5})       = 5    LenB = 10     Len ({String*5,Long})       = 9    LenB = 16
+本仓: 5（sizeof char[5] 巧合对）      5            12（sizeof 结构体）                 12
+```
+
+由 A8/A9/A10 三格反推出来的真机规则：
+
+- `Len(<UDT>)` = **各成员 Len 之和**（定长串按 N 字符算、Long 按 4）⇒ 5+4 = **9**。
+- `LenB(<UDT>)` = **各成员 LenB 之和，成员之间按 4 字节对齐、尾部不补齐**
+  ⇒ `{String*5}`：10（不补齐 ⇒ 不是 12）；`{String*5, Long}`：10 + 补 2 + 4 = **16**。
+- 本仓现在发 `sizeof(<C 结构体>)`。两边的**内存布局本来就不同**（C3 定长串内联 ANSI `char[N]`，
+  VB6 存 UTF-16），所以这一格不能"改成 sizeof 的另一种算法"，得在发码侧按**声明档**逐成员求值
+  —— 与 `udtFixedStrFieldLen_` 那张表同一个来源，但要连数值成员一起走一遍布局。
+  这一刀牵到 `Len` 的 UDT 兜底、`LenB` 的 UDT 兜底两处，单独开。
+
+**② `Int`/`Abs`(/`Fix`) 收 Null：本仓 `0 / err 0`，真机 `-1 / 94`**
+
+发的是 `vb6_ChkLong(vb6_FltToLng(vb6_Int(vb6_VariantToDouble(v))))` —— `vb6_VariantToDouble` 是**宽松**口
+（Null → 0.0、不报错），所以"Null 进 Null 出"这条语义在中途就被抹平了。
+第六十四刀那张 `mathNullFamilyV` 表（`vb6_IntV`/`vb6_AbsV`/`vb6_FixV`）只在**变体上下文**两站生效
+（`wrapVariantValue` 存储站 / `boxToVariant` 实参站）；落到**整型目标**的赋值站没有这道改道口。
+下一刀要在这条路上补一个出口：实参是整枚 Variant 槽 ⇒ 走 `vb6_IntV(v)` 再 `VariantToLong` 落到整数，
+与 Len/LenB 那一形（`vb6_LenV(v)` → `vb6_VariantToLong` → `vb6_ChkLong`）完全同构。
+
+**③ `vb6_RaiseError` 那 34 处虽已打序号（第九十三刀），但"报错 + 目标被写"的另一半要逐族验**
+
+第九十三刀只把**可见性**接上了；每一族"报错之后目标动不动"还得像 C 段这样逐格量。
+今天量到的是干净的两格（C5 = -1/13、C6 = -1/13），COM 429/438 那两族**还没有探针格**。
+
+### 11.73 第九十五刀：`Int`/`Fix`/`Abs`(<整只 Variant 槽>) 落整型目标 —— 真机 94、本仓 0
+
+#### 一、病（真机 C3/C4 vs 改前本仓）
+
+```
+真机: C3 Int(v=Null) into Long = [-1] err=94    C4 Abs(v=Null) = [-1] err=94
+改前: C3 = [0] err=0                            C4 = [0] err=0
+```
+
+发的是 `vb6_ChkLong(vb6_FltToLng(vb6_Int(vb6_VariantToDouble(v))))`。赋值站的守卫与临时量
+（第七十九/八十一/九十二刀那套）其实**已经全在**——问题是 RHS **一声不响**：`vb6_VariantToDouble`
+是宽松口（Null → 0.0、不报错、不动序号），"Null 进 Null 出"这条语义在中途就被抹平了，
+到了守卫那里序号没变 ⇒ 照样把 0 写进目标。
+
+第六十四刀那张 `mathNullFamilyV` 表（`vb6_IntV`/`vb6_AbsV`/`vb6_FixV`）只在**变体上下文**两站生效
+（`wrapVariantValue` 存储站 / `boxToVariant` 实参站）；落到**整型标量目标**的这条路上没有改道口。
+
+#### 二、改法（三处，各一句话）
+
+1. `cgen_state.inc`：新增 `bool nullFamIntTarget_`（本语句域，由 `StmtAbortScope` 统一清除）。
+2. `cgen_assign.cpp`：整型目标 + 右值顶层调用是 `int`/`fix`/`abs` + 实参是**整只 Variant 槽**
+   （`isDefinitelyVariantExpr && !isArr`，与第九十二刀同一问）⇒ 置位。
+   —— 只有赋值站知道"目标是整型标量"，所以标一声。
+3. `cgen_expr_call_builtin_pre.inc`：置位时改道成
+   `vb6_VariantToLong(vb6_IntV(x))`（`fix`→`vb6_FixV`、`abs`→`vb6_AbsV`）。
+   `IntV` 把 Null 原样带出来，`VariantToLong` 那一站报 94 —— 与 Len/LenB 那一形
+   （`vb6_LenV` → `VariantToLong` → `ChkLong`）完全同构；外层的 `ChkLong`/`FltToLng` 一字未动。
+   只改道一次（右值顶层那一枚），嵌套复用不会重入。
+
+#### 三、读数与登记
+
+```
+改后 C1..C8 逐格与真机一致: C1/C2 -1/94, C3/C4 -1/94(本刀), C5 -1/13, C6 -1/13, C7 1/err0, C8 0/err0
+```
+
+- 发码清单 750 行全量重算：**净变 0 行**（真语料里没有"整只 Variant 槽喂 Int/Fix/Abs 再落整型目标"这一形）。
+- 静态门 9 枚全 PASS；`check_owned_temp_keeps` 253 行不变（无新出口、无签名改动）；`-Category syntax` **227/227**。
+- 本刀只认 `Integer`/`Long`/`Byte` 目标。`Double` 目标的同一格（`d = Int(Null)`）**还没量**，
+  要动它得先决定"整条 `vb6_VariantToDouble` 是否转严格"——那是另一个面，已登记。
+
+#### 四、剩下三笔待办（§11.72 起就已带数）
+
+1. `Len`/`LenB(<整枚 UDT>)`：真机按成员逐段算（Len 5/9，LenB 10/16），本仓发 `sizeof`（5/12）。
+2. `vb6_VariantToDouble` 的宽松面：`d = Int(Null)` / 其它双精度目标同族还没量。
+3. COM 429/438 那两族"报错后目标动不动"还没有探针格。
+
+### 11.74 第九十六刀：`Len(<整枚 UDT>)` 按声明档逐成员算；`LenB(<整枚 UDT>)` 刻意留 `sizeof`
+
+#### 一、真机读数（A7..A10）
+
+```
+A7  Len ({String*5})        = 5     A8  LenB ({String*5})        = 10
+A9  Len ({String*5, Long})  = 9     A10 LenB ({String*5, Long})  = 16
+```
+
+本仓改前两枚都发 `sizeof(<C 结构体>)` ⇒ `5 / 5 / 12 / 12`。由 A8/A9/A10 反推出的规则：
+
+- `Len(<UDT>)`  = **Σ 成员 Len**（定长串按 N **字符**、数值按字节）⇒ 5 / 5+4 = 9
+- `LenB(<UDT>)` = Σ 成员 LenB（定长串按 **2N**）、成员之间按自然对齐（上限 4）、**尾部不补齐** ⇒ 10 / 16
+
+#### 二、改法
+
+- `visit(TypeDecl&)` 边发结构体边留一份**声明布局** `udtLayout_`（成员顺序 + 三项：`len` / `lenB` / `align`）。
+  成员认不出的档（动态数组、对象、动态 String、Variant、未知 C 类型、嵌套未登记）⇒ **整枚不进表**，
+  两枚函数退回原来的 `sizeof` 那一支（宁可不变）。静态数组成员同样不进表（保守）。
+- `udtLayoutSum()` 求和（`cgen_util_classtype.cpp`）。
+- `Len(<整枚 UDT>)`：有布局就折成常量、且**不发实参**（避开副作用）；否则维持 `sizeof`。
+
+#### 三、`LenB(<整枚 UDT>)` 为什么**不折**
+
+折成 16 在真机上是对的 —— 真机的 UDT 实打实就是 16 字节（定长串 UTF-16）。但 C3 的 UDT 定长串是
+**按 ANSI 内联**存的（`char f[N]`，见 `visit(TypeDecl&)` 那条 "VB6 ABI: ANSI 内联" 的注：SHFILEINFO
+真机 `Len = 352` 走的也是这条）。真机报 692 是安全的（对象真有 692 字节），C3 报 2N 会让
+`cbSize = LenB(u)` 这类 Idiom **越过自己的对象底**。
+
+语法钉 `tests/test_declare_shadows_builtin.bas` 抓到的正是这一形（`GetObjectA` 的 cbSize）——
+这是本刀第一版把 `LenB` 也折了之后唯一翻红的一格。所以这一格选择"**与自己的存储一致**"：
+`LenB(<整枚 UDT>)` 继续发 `sizeof`，真机 10/16 与本仓 5/12 的差异**登记为刻意的 ABI 分歧**，
+不是待修缺陷。要真正对齐，得先把 UDT 定长串改成 UTF-16 存储（另一刀，牵所有 Declare 的封送）。
+
+#### 四、读数与登记
+
+- 探针：A7 = 5 ✓、A9 = 9 ✓（与真机一致）；A8 = 5、A10 = 12（刻意保留，见第三节）；其余 30 格逐字不变。
+- 发码清单 750 行全量重算：**6 行**变动（VBFlexGrid 4 行、VbQRCodegen 2 行）。
+  抽一行核对（`tests/guisample/Definitions.bas`）：`sizeof(osVersion)` → `((int32_t)148)` ——
+  正是 VB6 那句经典 `dwOSVersionInfoSize = Len(osVersion)`（OSVERSIONINFO：5×4 + String*128 = 148）。
+- 语法钉 `declare_shadows_builtin` 的期望同步为 `((int32_t)24)`（BITMAP 全是有宽成员，24 **等于**原来的
+  `sizeof(bmp)`，数值不变、只是不再写 `sizeof`）。
+- 静态门 9 枚全 PASS；`check_owned_temp_keeps` 253 行不变；`-Category syntax` **227/227**。
+
+### 11.75 第九十七刀：Double 目标上的 Null 族与文本档 —— 真机 94/13、本仓 0/0
+
+#### 一、真机读数（E1..E10）
+
+```
+E1 Int(v=Null) -> Double  -1/94    E2 Abs(v=Null) -> Double  -1/94
+E3 Fix(v=Null) -> Double  -1/94    E4 CLng(v=Null) -> Double -1/94
+E5 d = v (Null)           -1/94    E6 d = v + 1 (Null)       -1/94
+E7 d = v * 2 (Null)       -1/94    E8 d = v (Empty)          0/0
+E9 d = v ("abc")          -1/13    E10 Int(2.7)              2/0
+```
+
+改前本仓：E1–E3 **0/err0**、E4 **0/err94**（错误号对了、值被写）、E9 **0/err0**。
+E5–E8、E10 本来就对 —— 也就是说 `d = <整只 Variant 槽>` 走的是 `vb6_Dbl_AssignFromVariant`，
+Null 一档它自己会报 94 且不动目标；漏的只有两处：**文本档**（那时落到宽松的
+`vb6_VariantToDouble`，"abc" ⇒ 0.0 不报错）和 **内建函数把 Null 吃掉**那一族。
+
+#### 二、三处改动
+
+1. `vb6_Dbl_AssignFromVariant` 的 BSTR 档改走 `vb6_Dbl_AssignFromBSTR`（同一口径：严格折数、
+   末尾有垃圾字符 ⇒ 13、目标一字不动）⇒ E9。
+2. 新增 `vb6_DblStrict(vb6_VARIANT)`：Null ⇒ 94、非数字文本 ⇒ 13，其余 `vb6_VariantToDouble`。
+   不复用 `vb6_VariantToDouble` 本身：它**必须**保持宽松（`Val` 那一族靠它，
+   `check_conv_strict_parse.ps1` 的 `val-still-lenient=1` 钉的就是这一条）。
+3. 赋值站把「Double 目标 + 顶层调用 + 整只 Variant 槽实参」这一形纳入守卫/临时量
+   （原先只给 Integer/Long/Byte 发）⇒ E4（`d = CLng(v)`：CLngV 报 94，序号一变就不写）。
+   同时 Int/Fix/Abs 那一形改道成 `vb6_Int(vb6_DblStrict(x))`（新旗 `nullFamDblTarget_`）——
+   **不能**照第九十五刀那样走 `IntV`/`VariantToLong`：整型那条路会把 `Abs(-1.5)` 弄成 2。
+
+#### 三、为什么 Double 与 Integer 目标要两条改道
+
+| 目标 | 改道形态 | 理由 |
+|---|---|---|
+| Integer/Long/Byte | `vb6_VariantToLong(vb6_IntV(x))` | 目标是整数，`VariantToLong` 自己会报 94/13，且截断正是语义 |
+| Double | `vb6_Int(vb6_DblStrict(x))` + 守卫/临时量 | 小数位要保留；raise 由 `DblStrict` 负责，写入由序号守卫挡 |
+
+#### 四、登记
+
+- 探针 44 格（A–F）：E1–E4、E9 五格翻绿且逐字对上真机；A–D 与 E5–E8/E10 一字不变。
+- 发码清单 750 行全量重算：**3 行**变动（`tests/ucTreeView/Proyecto1.vbp` +72B、
+  `tests/vb6probe/NullOpsProbe.bas` +130B、`tests/vb6probe/NullFamilyProbe.bas` +42B）。
+  抽形核对：`NullOpsProbe` 里 `d = Abs(nv)` → `double _av4 = (_e3 == vb6_ErrSerial()) ? (vb6_Abs(vb6_DblStrict(nv))) : (double)0;`
+- `check_owned_temp_keeps` 漂 2 行，**归因**：`vb6_Dbl_AssignFromVariant` 1 → 0（新 BSTR 支把目标指针
+  转手给 `vb6_Dbl_AssignFromBSTR`，下游 KEEPS=0 ⇒ 这一枚可证 0，不再"证不出"）、新增
+  `vb6_DblStrict` 0（无指针形参）。表 254 行、锚点 15 枚、提名面 203 行不变。
+- 静态门 9 枚全 PASS（`proto_arity` 1785 对签名）；`-Category syntax` **227/227**。
+
+### 11.76 第九十八刀：晚绑定缺成员要报 438；标量目标按真机「语句中止、目标不动」
+
+#### 一、真机读数（F1..F6）
+
+```
+F1 Set o = CreateObject("No.Such.ProgID")   Nothing / 429
+F3 n  = o.NoSuchProperty                    -1 / 438
+F4 Call o.NoSuchMethod                      -1 / 438
+F5 o.NoSuchProperty = 5                          438
+F6 s2 = o.NoSuchStringProperty              keep / 438
+```
+
+改前本仓：F1/F4 已对（429 / 438），**F3/F5/F6 全静默** —— `n` 被写成 0、`s2` 被写成 ""、
+`o.NoSuchProperty = 5` 当成功且 `Err.Number = 0`。
+
+#### 二、(a) RTL：五个 miss 分支补 438
+
+`vb6com_invoke.c` 里晚绑定成员查不到时只打一行 stderr 就 `return NULL/void` 的五个分支
+（`vb6_ComGetProp`、`vb6_ComGetPropArg`、`vb6_ComSetProp`、`vb6_ComSetPropArg`、`vb6_ComSetRef`）
+现在与第八刀（`vb6_ComCall` 的 miss）同一口径：
+
+```c
+g_com_438_dangling = 1;
+vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+```
+
+抛完仍交空值让 `On Error Resume Next` 继续，并立起「刚抛过 438」的标记吸收链尾那一次 miss。
+方法调用那条路本来就有默认成员兜底 + 438，不动。**这一步发码零变动。**
+
+#### 三、(b) cgen：标量目标上的语句级守卫
+
+只有 raise 还不够——真机要的是「语句中止 + 目标不动」。赋值站新增一条判据：
+
+> 目标 ∈ {Integer, Long, Byte, Double} ∧ 右值顶层是**成员读/调用** ∧ 接收者是**晚绑定对象变量**
+
+⇒ 复用既有守卫 + 临时量（与第七十九/八十四/九十七刀同一套），raise 之后不写目标。
+
+三条排除（都是「不是 COM 派发」的接收者，套守卫纯属噪声，且会翻红三条精确文本钉）：
+
+- 控件数组名（`cboUpdates.UBound` ⇒ `vb6_CtrlArr_UBound`）；
+- 内建伪宿主 `Printer/Printers/Screen/App/Clipboard`（成员表直接应答）；
+- `Me` 与**同工程的函数名**（`Clone.ScaleFactor(3#)` 这种编译期直调）。
+
+#### 四、churn（先量后改）
+
+只读测量（不改编译器，对 750 行逐行生成 C 数形）：含 COM 成员读/调用的工程 **206/745**，
+语句 5,999（普通赋值 1,475 / BSTR 目标 179 / 裸语句 2,859 / 表达式内位置 1,486）。
+据此把 (b) 收窄到「标量数值目标 + 普通赋值」这一族：
+
+| 版本 | 清单变动 |
+|---|---|
+| 初版（无排除） | 70 行 |
+| 排除控件数组 / 伪宿主 / 同工程函数名后 | **48 行** |
+
+#### 五、仍挂着的两笔（登记，不混刀）
+
+1. **BSTR 目标**（真机 F6 `s2` 应保持 `keep`）：清单上 179 句。保存/恢复要连所有权一起算
+   （与第八十三刀同一条纪律），现在 C3 是 `""` + 438 —— 错误号对了、串被清。
+2. **表达式内位置**（`If o.X = 1 Then`、实参、二元运算）：1,486 句，守卫机制插不进去，
+   要另开一种形；真机读数也还缺（G 段 6 格）。
+
+#### 六、门
+
+- 探针 44 格：F3/F4/F5 与真机逐字对上；F1/F2 不变；F6 见第五节（已知缺口）。
+- 发码清单 750 行：**48 行**变动（登记在册）。
+- 静态门 9 枚 PASS（`proto_arity` 1785）；`owned_temp_keeps` 254 行不变；`-Category syntax` **227/227**。
+
+
+### 11.77 第九十九刀：BSTR 目标上的语句中止（晚绑定缺成员）
+
+#### 一、读数（探针 F6，真机在 `.temp/k93/vb6probe`）
+
+真机 `s2 = o.NoSuchStringProperty`（`o` 是晚绑定 Object，属性不存在）：
+
+| 站 | 真机 | 第九十八刀之后 | 现在 |
+|---|---|---|---|
+| `s2` 的值 | **keep**（原值不动） | `""`（被清空） | **keep** |
+| `Err.Number` | 438 | 438 | 438 |
+
+第九十八刀 (a) 让 COM 那五枚 `DISPID_UNKNOWN` 分支报 438，错误号对了；但赋值站照样把
+`vb6_ComGetStringProp` 交回的（空）串写进目标 ⇒ **号对了、值被清**。这一刀补上值那一半。
+
+#### 二、形
+
+标量目标那一套（守卫 + 临时量）搬不过来：BSTR 交回的是**一枚要转手的块**，中止时既不写
+目标、又不能漏（否则每中止一次漏一块）。收成 RTL 一枚出口，所有权随出口一起答：
+
+```c
+static inline void vb6_BSTR_AssignMoveIfOk(BSTR* target, BSTR source, int32_t serialBefore) {
+    if (serialBefore == vb6_ErrSerial()) { vb6_BSTR_AssignMove(target, source); return; }
+    if (source) vb6_BSTR_Free(source);      /* 语句已中止：目标一字不动 */
+}
+```
+
+发码站（`cgen_assign_value_sem.inc` 的 `targetIsBstr` 那一支）：
+
+```c
+const int32_t _eN = vb6_ErrSerial();
+vb6_BSTR_AssignMoveIfOk(&s2, vb6_ComGetStringProp(o, L"NoSuchStringProperty"), _eN);
+```
+
+判据与第九十八刀 (b) 同一枚谓词（接收者链根是晚绑定 Object 变量、且不是控件数组 / 伪宿主 /
+`Me` / 同工程函数名），只把目标档从「Integer/Long/Byte/Double」换成「动态 String」。定长串
+目标不在此列（那一支的收口是 `FixedStrAssignFree`，另一形，未量）。
+
+#### 三、踩到的两处
+
+1. **接收者要按链根判**。初版只认裸标识符接收者，`s = Printers(0).DeviceName` 的接收者是
+   `Printers.Item(0)`（调用形态）⇒ 伪宿主没被排除、被套上守卫，`pd_printer_data_props`
+   那条发码针翻红（期望 `vb6_BSTR_Assign(&s, vb6_Printers_Item((int32_t)(0)).DeviceName);`）。
+   改成沿 `MemberAccess / IndexOrCall->callee` 下钻取**链根**再比对排除名单。
+2. **RTL 出口的两条静态轴要能自证**。第一版写成「失败先放、成功再转手」，`owned_temp_keeps`
+   的推导在函数体里先撞见 `vb6_BSTR_Free(source)` ⇒ 判成 `handoff-reads`（keeps=0），
+   与发码侧登记的例外行对不上（K12/K13d 双红）。把成功路提到前面（先 `AssignMove` 再
+   `if (source) Free`）⇒ 推导读到 `handoff-keeps`（keeps=1）、消费轴读到那一格 ⇒ 两轴都自证。
+   表 255 行（新增 1 行，`keeps_pointer=1` 38 行）。
+
+#### 四、churn
+
+清单 750 行：**25 行**变动（第八十八/九十八刀之后的新增；BSTR 目标这一族与标量那一族
+共 179 + 1,475 句里落在普通赋值站的这部分）。`tests/ctrltabstrip/TabApp.vbp` 是机器侧行 ——
+本机值与 CI 值不同，登记值以 CI 的 `emit-manifest` 工件为准。
+
+#### 五、门
+
+- 探针 F1–F6 六格与真机逐字对上（F6 `keep/438`）。
+- 静态门 9 枚 PASS（`proto_arity` 1785；`rtl_embedded` R1..R3 138 件逐字节）。
+- `owned_temp_keeps` **255 行**（+1 例外行、+1 消费格）；`-Category syntax` **227/227**。
+
+#### 六、仍挂着的一笔
+
+**表达式内位置**（`If o.X = 1 Then`、实参、二元运算）：1,486 句。守卫机制插不进去，要另开
+一种形；真机读数也还缺（G 段 6 格：`n = 1 + o.NoSuchProp`、`If o.NoSuchProp = 1 Then`、
+`n = Abs(o.NoSuchProp)`、`Call f(o.NoSuchProp)`、`n = o.NoSuchProp * 2`、
+`s = "x" & o.NoSuchProp`）。
+
+---
+
+#### §11.76 补：438 只对真 IDispatch 报
+
+第九十八刀 (a) 初版对五枚 `DISPID_UNKNOWN` 分支**无条件**报 438，CI 上
+`b190_object_formal_scope(_x86)` 运行崩（本机复现）。那一格打的是账 #412：Object 槽里装的是
+工程类实例指针、从没包成 IDispatch —— VB6 那边本来有对象，无条件报 438 把这些能跑的语句打崩。
+改成 `if (vb6_ComIsDispatchable(disp))` 才报，其余维持静默 + `C3_LATEBIND_MISS` 追踪
+（那是实现缺口，不是 VB6 语义）。本机 `B190.vbp` 恢复 `run rc=0`，五条针全在。
+
+### 11.78 第一百刀：成员读落在表达式内（值位置）
+
+#### 一、读数（探针 G 段，真机 + 本仓）
+
+| 格 | 语句 | 真机 | 改前 C3 | 现在 C3 |
+|---|---|---|---|---|
+| G1 | `n = 1 + o.NoSuchProperty` | -1 / 438 | 1 / 438 | **-1 / 438** |
+| G2 | `n = o.NoSuchProperty * 2` | -1 / 438 | 0 / 438 | **-1 / 438** |
+| G3 | `n = Abs(o.NoSuchProperty)` | -1 / 438 | 0 / 438 | **-1 / 438** |
+| G4 | `Call GTouch(o.NoSuchProperty)` | 被调方**不跑**（0）/ 438 | 跑了（1） | 1（未接，下一刀） |
+| G5 | `If o.NoSuchProperty = 1 Then n = 7` | **n = 7** / 438 | -1 | -1（未接，见第五节） |
+| G6 | `s = "x" & o.NoSuchStringProperty` | keep / 438 | "x" | **keep / 438** |
+
+结论：**整句中止** —— 目标不动、被调方不跑。C3 改前是"缺成员读当空值继续算"。
+
+#### 二、机制：不用改写子表达式
+
+守卫 + 临时量那条机制本来就能罩住**整条右值**，只是以前只在「顶层就是那次读」时才打开：
+
+```c
+const int32_t _e1 = vb6_ErrSerial();
+int32_t _t1 = (_e1 == vb6_ErrSerial()) ? (1 + vb6_ComGetIntProp(o, L"NoSuchProperty")) : 0;
+if (_e1 == vb6_ErrSerial()) n = _t1;
+```
+
+右值里那次 438 发生在 `_t1` 的计算里 ⇒ 目标那一步不写。String 目标的临时量与中止时的
+**释放**由 `emitBstrSlotStore` 的守卫支自己发（第八十三刀那条纪律，这里不碰所有权）。
+
+判据 = 右值树里**任一节点**经 `lateRead100` 命中（接收者判据与第九十八刀同一枚：链根是
+晚绑定 Object 变量，且不是控件数组 / 伪宿主 / `Me` / 同工程函数名），且**顶层本身不是**
+那次读（顶层两形已由 98/99 各自接掉）。遍历只走表达式节点：`Binary / Unary /
+MemberAccess.object / DictionaryAccess.object / IndexOrCall{callee, 位置实参, 命名实参} /
+New.args / TypeOf.object`。
+
+只接**标量数值 + 动态 String** 目标（与 98/99 同一张面）；Variant / UDT / 数组元素目标
+未量，不在册。
+
+#### 三、churn
+
+清单 750 行：**13 行**变动（G 段这一族落在普通赋值站的部分）。其中 `test_late_cond.bas`
+就是这条判据的现成样本。
+
+#### 四、门
+
+- 探针 F1–F6、G1/G2/G3/G6 与真机逐字对上。
+- 静态门 9 枚 PASS（`proto_arity` 1785、`rtl_embedded` 138 件）；`owned_temp_keeps` 255 行不变。
+- `-Category syntax` **227/227**。
+
+#### 五、仍挂着的两笔
+
+1. **G4：实参位置（调用语句）**。真机 `Call GTouch(o.NoSuchProperty)` 里被调方**根本没跑**；
+   C3 现在是「先把实参算完（报 438）再照常调」。要接就得把实参先提到调用前、判完序号再决定
+   调不调 —— 与赋值站不同形（那支是 `if (ok) call(...)`，实参仍在 call 里）。
+2. **G5：单行 If 的条件位置**。真机读数反直觉：条件报 438 之后 **Then 分支照样执行**
+   （n=7）。这不是"整句中止"，是 VB6 单行 If 的错误续行语义（`Resume Next` 落在 Then 那句
+   上）。要先补两格探针（多行 If 块的条件报错 / `ElseIf`）把边界量清楚，再决定要不要模仿
+   —— 现在 C3 是 -1（不执行），与真机不一致，**已登记为差异**。
+
+### 11.79 第一百零一刀：条件位报错 ⇒ 按真
+
+#### 一、读数（探针 H 段，真机 + 本仓）
+
+| 格 | 语句 | 真机 | 改前 C3 | 现在 C3 |
+|---|---|---|---|---|
+| G5 | `If o.NoSuchProperty = 1 Then n = 7` | 7 / 438 | -1 | **7 / 438** |
+| H1 | 单行 If（同上，基线） | 7 / 438 | -1 | **7** |
+| H2 | 单行 `Then n = 7 Else n = 8` | **7**（走 Then） | 8（走 Else） | **7** |
+| H3 | 多行 `If … Then / n = 7 / End If` | **7** | -1 | **7** |
+| H4 | `ElseIf o.NoSuchProperty = 1`（前面 `1=2`） | **7** | 8 | **7** |
+| H5 | `Do While o.NoSuchProperty = 1` | **7**（进一次） | -1 | **7** |
+| H6 | `n = GPick(o.NoSuchProperty)` | -1 / 438 | -1 | -1（百刀已盖） |
+| H7 | `Call GTouch2(1, o.NoSuchProperty)` | 被调方不跑 | 跑 | 跑（未接，下一刀） |
+
+结论与赋值站**相反**：值位置是「整句中止」，条件位是「**报错按真**」——单行/多行/ElseIf/Do While
+四种条件位一致。H2 说明不是「当假走 Else」：真机走的是 Then。
+
+#### 二、形
+
+RTL 一枚出口，把「序号变了 ⇒ 真」收口：
+
+```c
+static inline int32_t vb6_CondIfErr(int32_t serialBefore, int32_t value) {
+    return (serialBefore != vb6_ErrSerial()) ? 1 : (value != 0);
+}
+```
+
+发码站（`guardCondLateRead`，住在 `cgen_util_type.cpp`，紧跟 `conditionTruthExpr`）：
+
+```c
+const int32_t _c1 = vb6_ErrSerial();
+if (vb6_CondIfErr(_c1, (<原条件>))) {
+```
+
+序号必须在**求条件之前**捕下，所以是两行；条件不含晚绑定读时**逐字节不变**（直接交回原文本）。
+接的站：`If`、`ElseIf`、`Do While`、`While … Wend`。`Do Until` / `Loop Until` 未量（H 段没覆盖
+取反那一档），**不接**，登记为缺口。
+
+#### 三、顺手收口
+
+第九十八/九十九/一百刀在 `cgen_assign.cpp` 里内联过两枚 lambda（接收者判据 + 树扫描）。条件位要问
+同一问，于是升成成员函数 `lateBoundComReadExpr` / `exprHasLateBoundComRead`（`cgen_util_scan.cpp`），
+赋值站与条件位同读一处；`cgen_assign.cpp` 里那份复本删掉。
+
+#### 四、churn
+
+清单 750 行：**23 行**变动（条件位这一族落在语料上的部分；`regexp_native/ReMain.bas` 也在此列）。
+
+#### 五、门
+
+- 探针 G5 + H1–H5 六格与真机逐字一致；H6 不变；G4/H7 见第六节。
+- 静态门 9 枚 PASS（`proto_arity` 1785、`rtl_embedded` 138 件）；`owned_temp_keeps` 255 行不变。
+- `-Category syntax` **227/227**。
+
+#### 六、仍挂着
+
+1. **G4 / H7：调用语句实参位**。真机两只都是「被调方不跑」（H7 里第一枚实参正常也不影响结论）。
+   这一族在语料里 **3,068 句**（最大的块），要先提实参、再按序号决定调不调，且需要被调形参的档。
+2. **`Do Until` / `Loop Until`** 的条件位未量（取反语义不在 H 段里）。
+
+
+### 11.80 第一百零二刀：实参位的报错 ⇒ 整句中止
+
+前两刀把「值位置」与「条件位置」收了，剩下**调用实参位**这一族没量。真机 I 族 15 格
+（`.temp/k93/vb6probe/RealMachineProbe.bas`）把口径量死了：
+
+| 格 | 真机读数 | 口径 |
+|---|---|---|
+| I1 `Call GTouch2(o.NoSuchProperty, GFn())` | `gHit=0 gN=0` | 坏实参**之后**那枚不再求值 |
+| I2 `Call GTouch2(GFn(), o.NoSuchProperty)` | `gHit=0 gN=1` | 坏实参**之前**的照常求值 |
+| I3 `Call o.NoSuchMethod(GFn())` | `gN=1` | 实参先求、被调成员后解析 |
+| I4 `n = o.NoSuchProperty(GFn())` | `gN=1 n=-1` | 同一顺序，目标不动（值位那刀已覆盖） |
+| I5–I13 | `gHit=0` | String / 无括号 / 具名 / Object / Variant / 表达式实参 / 嵌套 / 双坏一律跳过调用 |
+| I14 / I15 | `n=42` / `gHit=1 gN=2` | 下一句照跑；两枚实参都正常时全部求值 |
+
+也就是「命中即整句中止」，与值位置同族，但与条件位（报错按真）相反。
+
+#### 一、发码形
+
+C 的实参求值顺序**未定义**（MSVC 从右向左），所以不能把守卫塞进实参表。做法是把
+「首枚命中之前的实参（含命中那枚）」逐枚提升成临时量，每枚求值前比一次序号：
+
+```c
+const int32_t _eg0 = vb6_ErrSerial();
+int32_t _ag1 = 0;
+if (_eg0 == vb6_ErrSerial()) { _ag1 = <原实参>; }
+if (_eg0 == vb6_ErrSerial()) {
+vb6_GTouch(_ag1);
+}
+```
+
+- 命中 ⇒ 后面几枚的 `if` 条件已不成立 ⇒ 不求值；调用同理跳过（I1 的 `gN=0`）
+- 命中之前的那几枚早已按序求过值（I2 的 `gN=1`）
+- 地址实参（`&x`）求值无副作用也不会报错，直接留在调用里，不提升
+- 落不到标量 / 串 / 对象档的实参（Variant、UDT）暂不提升 —— 见第五节缺口
+
+实参提升站在 `cgen_expr_call_arg_variant.inc` 的 `args.push_back` 之前（ByRef 取址、
+optional 补位、ParamArray 打包都在它之后，故不动既有逻辑）；守卫声明与整句包裹在
+`visit(CallStmt&)` 里，落在 `CallArgScope102` 作用域内统一清除。
+
+#### 二、语料量（严格口径）
+
+744 个工程、9 个工程命中、**50 条语句**：`VBFlexGridDemo` 12、`GifcontrolSource` 12、
+`ucTreeView` 7、`Charts 2020` 5+4、`VBFlexGridDemo/Common` 4+4、`VbQRCodegen` 1+1；
+其中被调方本身晚绑定的 **0 条**。上一刀报的 3,068 是**松口径**（按行文本算，把表达式
+续行、`(void)` 强转行也算进去了），以本刀这组数为准。
+
+#### 三、夹具与针
+
+- `tests/test_late_arg.bas`（新增，I 族五形）
+- 正向针 `b102_late_arg_guard_shape`：六段发码形（`_eg0` 声明、两枚 `_ag` 提升、两处调用）
+- 反面针 `b102_late_arg_lesion`：改前三行原样（实参内联、报错后照调）一条都不许出现
+- 本地真跑：G4、H7、I1–I15 共 17 格与真机**逐字一致**
+
+#### 四、门
+
+- 静态门 9 枚 PASS（`proto_arity` 1785、`manifest_coverage` 751 = 750+新夹具）
+- `owned_temp_keeps` 255 行不变；`_own_` 提名闸不受影响（提升只搬实参文本，不动所有权表）
+- manifest：6 行重算（`VBFlexGridDemo` ×2、`b171_slotarg`、`ucTreeView`、`dict_native` ×2）+ 新夹具 1 行
+
+#### 五、仍挂着
+
+1. **Variant / UDT 形参位**：落不到可声明临时量的档，暂不提升（`mapType` 交 `vb6_VARIANT`）。
+2. **`Do Until` / `Loop Until`** 条件位仍未量（取反语义不在 H 段里）。
+3. **`LenB(<UDT>)`** 仍挂账。
+
+### 11.81 第一百零三刀：条件位报错 ⇒ 从该语句的下一条继续
+
+第一百零一刀把条件位按「报错 ⇒ 按真」接了 `If` / `ElseIf` / `Do While` / `While…Wend`，
+`Do Until` / `Loop While` / `Loop Until` 三站当时**故意没接**（取反语义没量）。真机 J 族
+（`.temp/k93/vb6probe/RealMachineProbe.bas`）量完，口径要改一次说法：
+
+| 格 | 写法 | 真机读数 | 说明 |
+|---|---|---|---|
+| J1 | `Do Until o.Bad = 1` | `n=4` | 报错 ⇒ **进循环体**（撞防死循环闸） |
+| J2 | `Do … Loop Until o.Bad = 1` | `n=1` | 报错 ⇒ **出循环** |
+| J3 / J4 | `Do Until Not o.Bad` / `Loop Until Not o.Bad` | `n=4` / `n=1` | 与有没有 `Not` 无关 |
+| J5 | `Do While Not o.Bad` | `n=4` | 前测同向，进体（与 H5 同源） |
+| J6 | `Do … Loop While o.Bad = 1` | `n=1` | 后测同向，出循环 |
+| J7 / J8 | 控制格 | `n=4` / `n=1` | 闸本身没问题 |
+| J9 / J10 | 裸值形 | `n=4` / `n=1` | 见第五节（解析面病灶） |
+
+所以真口径不是「按真/按假」，而是 **`On Error Resume Next` 的「从下一条继续」**：
+前测循环的「下一条」就是循环体 ⇒ 进体；后测循环的「下一条」在 `Loop` 之后 ⇒ 出循环。
+这与单行 `If` 落 `Then` 分支（H1/H2）、多行 `If` 进块（H3）、`ElseIf` 进它自己的 `Then`（H4）
+是同一条规则，**与极性无关**。第一百零一刀那枚 `vb6_CondIfErr`（错 ⇒ 1）在 `If` /
+`Do While` / `While` 恰好等价，但取反站与后测站会反过来。
+
+#### 一、发码形
+
+新增一枚入口（`vb6rtl_array.h`，紧跟 `vb6_CondIfErr`）：
+
+```c
+static inline int32_t vb6_CondIfNoErr(int32_t serialBefore, int32_t value) {
+    return (serialBefore == vb6_ErrSerial()) ? value : 0;   /* 错 ⇒ 0 */
+}
+```
+
+| 站 | 发码形 | 报错时的走向 |
+|---|---|---|
+| `Do Until` | `if (vb6_CondIfNoErr(_cN, (cond))) goto exit;` | 0 ⇒ 不退出 ⇒ 进体（J1/J3） |
+| `Loop While` | `if (!(vb6_CondIfNoErr(_cN, (cond)))) break;` | 0 ⇒ `break`（J6） |
+| `Loop Until` | `if (vb6_CondIfErr(_cN, (cond))) break;` | 1 ⇒ `break`（J2/J4） |
+| `Do While` / `While` | `if (!(vb6_CondIfErr(_cN, (cond)))) goto exit;` | 1 ⇒ 不退出 ⇒ 进体（H5） |
+
+后测两站注意：守卫的序号声明必须算进「物化」判定（`c_.size()/hasPending()`），否则声明落在
+`do` 体内、而 `} while (…)` 在体外 ⇒ C2065（实测 J2/J6 四处）。把 `materialized` 的判定挪到
+守卫之后，两站统一走 `} while (1);` + `break;` 的形。
+
+#### 二、语料量
+
+745 个工程里，循环条件位出现晚绑定读的只有 **8 条**：前测同向 6（早接过）、后测取反 2
+（`tests/test_late_cond.bas` 的 `K-LOOPUNTIL` 两臂）、`Do Until` 与 `Loop While` 各 0。
+所以这一刀的语料面**零变化**，manifest 只动夹具那一行。
+
+#### 三、夹具与针
+
+- 夹具复用 `tests/test_late_cond.bas`（本来就有 `K-DOUNTIL` / `K-LOOPWHILE` / `K-LOOPUNTIL` 三臂）
+- `b244_cond_truth_shape` 七条针按新发码重钉（三臂翻面 + 因守卫编号平移重钉 `K-WHILE` 的 `_c12`）
+- 反面针 `b244_cond_truth_lesion` 未变：改前那七形（无守卫）一条都不许再出现
+- 本地真跑 J1–J10：9 格与真机逐字一致；J9/J10 见下
+
+#### 四、门
+
+- 静态门 9 枚 PASS（`proto_arity` 1785、`rtl_embedded` 138、`manifest_coverage` 751）
+- `owned_temp_keeps` 255 行不变
+- manifest：1 行（`tests/test_late_cond.bas`）
+
+#### 五、新发现的病灶（本刀不修，登记）
+
+**裸值条件把读变成写**：`Do Until o.NoSuchProperty` 单独成行、下一行是赋值时，解析出的条件
+AST 只有 `o`，成员名被下一句吞掉 —— 最小复现：
+
+```vb
+Do Until o.NoSuchProperty
+    n = n + 1
+Loop
+```
+
+发成 `if (… (o)) goto exit;` + `vb6_ComSetProp(o, L"NoSuchProperty", vb6_ComPackInt((n + 1)));`
+（读变写、`n = n + 1` 整句消失）。真机 J9/J10 是 `err=438`、循环体按「进体」走。这一条在
+解析面（`parseDoLoopStmt` 的 `condition = parseExpression()` 之后），与条件守卫无关，单独立账。
+
+仍挂着：Variant / UDT 形参位、`LenB(<UDT>)`、上面这条裸值条件解析。
+
+### 11.82 第一百零四刀：裸成员条件不许把「读」变成「写」
+
+§11.81 第五节把这一条记成了「解析面病灶：裸值条件把读变成写」。**记错了**。探针量完，
+解析是对的，病灶在发码面 —— 而且比原以为是解析问题还严重：它会**静默改写循环体**。
+
+#### 一、症状
+
+```vb
+Do Until o.NoSuchProperty
+    n = n + 1
+Loop
+```
+
+修前发成：
+
+```c
+const int32_t _c0 = vb6_ErrSerial();
+if (vb6_CondIfNoErr(_c0, (o))) goto vb6_loop_exit_0;          /* 条件只剩对象 */
+    vb6_ComSetProp(o, L"NoSuchProperty", vb6_ComPackInt((n + 1)));  /* 体首语句被吞 */
+```
+
+`n = n + 1` 整句消失，变成对 `o.NoSuchProperty` 的**写**；体首换成 `GTouch 1` 时则变成
+`vb6_ComCall(o, L"NoSuchProperty", (void*[]){vb6_ComPackInt(1)}, 1)` —— `GTouch` 也没了。
+这是「改写程序语义」级别的缺陷，不是报错级别。
+
+#### 二、定位过程（先排除解析）
+
+给解析器加临时探针（`parseDoLoopStmt` 打印条件节点种类），四格读数全是
+`cond=MemberAccessExpr curT=NewLine` —— 条件节点是对的，`.NoSuchProperty` 也确实在
+条件里。再给发射器加探针（打印体首语句节点）：
+
+| 格 | 夹具原句 | 体首节点 |
+|---|---|---|
+| T6 | `n = 1` | `AssignmentStmt target=IdentifierExpr`（对） |
+| T7 | `GTouch 1` | `CallStmt callee=IndexOrCallExpr`（对） |
+
+AST 两侧都对 ⇒ 病灶在发码。对照两站源码，差别只有一句：
+
+```c
+emitExpr(*node.condition);
+if (isComMarker_) resolveComValue("Int");   // ← If / Do While 有，另四站没有
+```
+
+`resolveComValue` 是 COM 取值标记的**唯一收口**：成员读在表达式层只挂标记（`lastExpr_`
+暂留对象名），由收口这一句把 `vb6_ComGetIntProp(obj, L"成员")` 拼出来并清标记。不收口，
+标记就悬在空中，被**下一条语句**当成"这条语句的操作对象"消费掉 —— 赋值目标 / 调用接收者
+于是指向那个成员，值/实参来自原语句。四站全中：`Do Until`、`Loop While`、`Loop Until`、
+`While…Wend`。
+
+免疫的格子正是能自己解标记的：条件里有运算符（`= 1`、`Not x`）时 `BinaryExpr` /
+`UnaryExpr` 内部各有一处 `resolveComValue`；`If` / `ElseIf` / `Do While` 三站在语句层已经
+收口（`cgen_stmt.cpp:188`、`cgen_loop.cpp:54`）。
+
+#### 三、修
+
+四站各补一句（与 `Do While` 同一收口、同一 unpack 档 `Int`）：
+
+```c
+emitExpr(*node.condition);
+if (isComMarker_) resolveComValue("Int");
+```
+
+#### 四、对账
+
+真机 J9/J10 是这一形的实测（裸成员条件）：J9 `Do Until` = `n=4 err=438`、J10
+`Loop Until` = `n=1 err=438`。修后本地 J1–J10 **十格逐字一致**（含 err）。语料侧 745 个
+工程 **0 行变化** —— 裸成员做循环条件这一形在真实工程里确实罕见，但一旦出现就是上面
+那种静默改语义。
+
+#### 五、夹具与针
+
+- 新夹具 `tests/test_late_barecond.bas`（四站各一格，局部 `Dim o As Object` + `CreateObject`，
+  与 J9/J10 探针同形）
+- `b248_bare_cond_shape` 四条针钉四站的守卫形（`vb6_CondIfNoErr`/`vb6_CondIfErr` +
+  `vb6_ComGetIntProp`）
+- `b248_bare_cond_lesion` 五条反面针（四条 `(o)` 条件形 + 那条 `vb6_ComSetProp`）—— 取自
+  **撤掉修复的构建**的逐字发射，不是照形推的
+
+#### 六、门
+
+- 静态门 9 枚 PASS（`manifest_coverage` inputs=752 / registered=752、`proto_arity` 1785、
+  `rtl_embedded` 138）
+- `owned_temp_keeps` 255 行不变
+- manifest：新增 1 行（`tests/test_late_barecond.bas`），其余 0 变化
+
+### 11.83 第一百零五刀：Variant 槽的实参位（聚合体也能有临时量）
+
+第一百零二刀在实参位提升那儿留了一句跳过：
+
+```cpp
+// 落不到标量/串/对象类型的（Variant / UDT）不提升，留着当登记缺口。
+if (gtyp102 != "vb6_VARIANT") { ...提升... }
+```
+
+这一刀把这一档量掉、补上。
+
+#### 一、真机刻度（K 族）
+
+| 格 | 写法 | 真机读数 |
+|---|---|---|
+| K1 | `Call GVar(o.NoSuchProperty)`（ByVal Variant，单实参） | `gHit=0` err=438 |
+| K2 | `Call GVar2(GFn(), o.NoSuchProperty)` | `gHit=0 gN=1` err=438 |
+| K3 | `Call GVar2(o.NoSuchProperty, GFn())` | `gHit=0 gN=0` err=438 |
+| K4 | `v = o.NoSuchProperty`（`v As Variant` 先置 111） | `v=111` err=438 |
+| K5 | `Call GVarRef(o.NoSuchProperty)`（ByRef Variant） | `gHit=0` err=438 |
+| K7/K8 | 控制格 | `gHit=1`、err=0 |
+
+结论：**Variant 槽与 Long 槽同一条规则**（I 族那条）：命中即整句中止 —— 坏实参之后的不再求值、
+之前的照常求值、被调方不跑。K4 是另一处（赋值目标不许被写），本刀不动，另记。
+
+修前本地读数：K1 `gHit=1`、K2 `gHit=1 gN=1`、K5 `gHit=1`、K3 已对、K4 `v=""`（被写空）。
+
+#### 二、「落不到可声明临时量」其实不成立
+
+聚合体不能像标量那样 `= 0` 起手，但 **C 里 `vb6_VARIANT` 本来就是可声明的**。真正的顾虑不是
+可声明性，而是**所有权**：浅拷贝会让临时量与源共用同一只 BSTR，随后两边各 `Clear` 一次 =
+过度释放。RTL 已经有对的那一枚：
+
+```c
+void vb6_VariantCopy(vb6_VARIANT* dst, const vb6_VARIANT* src);  /* 深拷贝: BSTR 另分配 / Dispatch AddRef */
+```
+
+于是发码形（ByVal 槽）：
+
+```c
+const int32_t _eg0 = vb6_ErrSerial();
+vb6_VARIANT _ag1 = vb6_VariantEmpty();
+if (_eg0 == vb6_ErrSerial()) { vb6_VARIANT _as2 = <实参表达式>; vb6_VariantCopy(&_ag1, &_as2); }
+if (_eg0 == vb6_ErrSerial()) { vb6_GVar(_ag1); }
+vb6_VariantClear(&_ag1);
+```
+
+ByRef 槽（实参本来就是 `(&(vb6_VARIANT){...})` 临时量）直接拷贝、改交 `&_agN`：
+
+```c
+if (_eg7 == vb6_ErrSerial()) { vb6_VariantCopy(&_ag8, (&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=...})); }
+if (_eg7 == vb6_ErrSerial()) { vb6_GVarRef(&_ag8); }
+vb6_VariantClear(&_ag8);
+```
+
+三处要点：
+
+1. **`_as2` 那枚局部量不是多余的** —— 实参表达式本身就是 `vb6_VARIANT` 值，写成
+   `&(vb6_VARIANT){<argVal>}` 会被当成复合字面量的**首成员**（`vt`，uint16_t）初始化，
+   MSVC 直接 C2440（实测 k.c(52)/(67)）。接一手再拷，同时也把「求值发生在守卫内」钉死
+   （K2 `gN=1` / K3 `gN=0` 就靠这个）。
+2. **只清自己那份**：`vb6_VariantCopy` 是深拷贝，`vb6_VariantClear(&_agN)` 释放的是副本的
+   BSTR/Dispatch 引用；源临时量的处置与改前一致（不管），不引入新的双重释放。
+3. **守卫没放行时 `_agN` 还是空的**，`Clear` 空转，故无条件发。
+
+#### 三、语料
+
+修前全量扫（752 输入）：**110 处、5 个文件**落在这一档，**真实语料 0 处**（全是自家夹具：
+`dict_native` 45、`b171_slotarg` 2、`ucTreeView` 2、`VBFlexGridDemo` 2 等）。
+修后 rehash：首版（`376a11ff`）报了 **6 行**（`VBFlexGridDemo`×2、`b171_slotarg`、`ucTreeView`、
+`dict_native`×2）。修完下面第六节那两枚闸后 `ucTreeView` 回退、`VisualStyles.bas` 现身，
+净 **5 行**变化（`VisualStyles.bas`、`VBFlexGridDemo.vbp`、`b171_slotarg`、`dict_native`×2）。
+
+#### 四、夹具与针
+
+- 新夹具 `tests/test_late_vararg.bas`（K1/K2/K5 + 控制格）
+- `b250_vararg_guard_shape` 七条针：序号声明、`_as` 深拷贝那一句、`GVar(_ag1)`、`Clear`、
+  K2 的 `_ag4 = vb6_GFn()`、`GVar2(_ag4, _ag5)`、K5 的 ByRef 形
+- `b250_vararg_guard_lesion` 两条反面针（取自未接提升时的逐字发射）
+  （首版曾名 `b249_…`；`b249` 前缀已被另一本账的判据面占用 ——
+  `check_com_value_twin_authority.ps1` 的 R6 明令整工程级 `Test-EmitcShape "b249` = 0，故改名）
+
+#### 五、门
+
+- 静态门 9 枚 PASS（`manifest_coverage` inputs=753 / registered=753）
+- `owned_temp_keeps` 255 行不变
+- manifest：新增 1 行（`tests/test_late_vararg.bas`）+ 6 行重算（修后为 5 行，见第六节）
+
+#### 六、CI 红与「嵌套调用」那一修（第105刀-修）
+
+`376a11ff` 的 `Tests (compile #2)` 红在 `FlexGridX86`（x86 编 `tests/VBFlexGridDemo`）。
+本机复现出的 MSVC 真错（job 日志里连 `error C` 行都没带，是回头在 `c3-error.log` 里拿到的）：
+
+- `VisualStyles.c(162)/(195)/(197)`: `error C2440: 无法从 void* 转换为 vb6_VARIANT`
+- `VisualStyles.c(164)/(199)`: `error C2172: vb6_ObjPtr 实参不是指针`
+
+两处是同一条**过度提升**：`SetWindowSubclass(h, thunk, ObjPtr(CurrControl), 0)` 的第三格是内建
+`ObjPtr`，它的形参表答 Variant，而提升只看「形参是不是 Variant」⇒ 把 `CurrControl`（`void*`）
+包进 `vb6_VARIANT _ag6`，再原样交给 `vb6_ObjPtr(_ag6)`。补两枚闸：
+
+1. `argNestDepth_`（`cgen_state.inc`；在 `visit(IndexOrCallExpr)` 入口 RAII 增减）：实参位提升
+   只对**最外层**调用（`== 1`）成立 —— 嵌套调用的实参是外层语句的一部分，不是它自己的实参位。
+2. 提升判据改用**实参自身**的 C 档 `mapType(inferExprType(*node.positional[i])) == "vb6_VARIANT"`，
+   不再拿形参声明的档当判据（`ObjPtr` 那格形参答 Variant，实参却是 `void*`）。
+
+本机复验：`C3.exe tests\VBFlexGridDemo\VBFlexGridDemo.vbp --arch x86` 编过、无 `c3-error.log`；
+K1/K2/K3/K5/K7/K8 与真机逐格同值，**K4 仍差**（`v = o.NoSuchProperty` 是赋值位，另立一刀）。
+
+#### 七、GUISample 那三行（CI 环境行）
+
+`Emit manifest (shape oracle)` 在 `376a11ff` / `365e4d6a` / `6b536561` 三次都红在这三格：
+`tests/guisample/GUISample.vbp`、`.../vb6ref/src/vc6/GUISample.vbp`、`.../vb6ref/src/vs2015/GUISample.vbp`
+（每格固定 +3475 字节，`rc=0`；三者共享模块，所以增量相同）。这三行本来就在
+`full_rehash85.ps1` 的 `$machineDiff` 里（本机与 CI 的机器状态不同，本地 rehash 跳过不写）。
+
+归因用的三条证据：
+
+1. **编译器不是成因**：把 CI 那次跑出来的 `c3-exe` 工件（run 44905446854）拉到本机，在仓根跑
+   `GUISample.vbp --emit-c`，输出与本机构建**逐字节相同**（307655 字节）。
+2. **本刀碰不到它**：同目录下用 `798b057b`（本刀前）与本刀两枚 `C3.exe` 各跑一遍，
+   GUISample 输出 **delta=0**；`--no-auto-typelib` 也是 0；原因是该项目里**没有任何
+   `As Variant` 形参**，`_ag/_as` 站点数 = 0。
+3. 三次 CI 里这三格的值彼此**完全一致**，与本刀那 5 格的变化不重合。
+
+结论：这三格随 CI 运行机的类型库/OCX 状态漂移，不是本刀的发码形状变化。按脚本自己印的路子
+（`rebless_emit_manifest.ps1 -Bless`，吃 CI 那台二进制交回来的清单）登记 3 行。
+
+⚠ 登记之后这三格仍是 CI 侧读数：本机不写、也不能写。下次再漂，先按上面第 1 条（同一枚 exe
+在本机复跑）区分「编译器」与「机器」。
+
+#### 八、仍挂着
+
+- **K4**：`v = o.NoSuchProperty` 目标被写（真机 `v=111`）。这是赋值位的守卫，不在实参位这条线上
+  —— 第一百零六刀（§11.84）接掉。
+- **UDT 槽**：这一族语料里没量到「UDT 形参 + 晚绑定读」的自然形（UDT 不能承接晚绑定读），
+  等出现再立账。
+- **`VT_BYREF` 写穿**：`Sub f(ByRef v As Variant)` 传标量左值时，真机是
+  `VarType(v)=16387` + 写穿；我们目前是装箱。这一条独立，别与本刀混。
+
+### 11.84 第一百零六刀：Variant 槽的赋值位（目标一个字都不写）
+
+§11.83 末尾把 K4 记成缺口：
+
+> **K4**：`v = o.NoSuchProperty` 目标被写（真机 `v=111`）。这是赋值位的守卫，不在实参位这条线上。
+
+这一刀补上。它不在实参位那条线上 —— 病在 `visit(AssignmentStmt&)` 的 `targetIsVariant` 那一支：
+守卫机制（`mayRaise79` / `stmtAbortTmp_`）只认 **Int / Double / String** 目标，Variant 目标整支落在外面，
+于是 438 之后照样把交回来的值写进 `v`（实测未修前 K4 读 `v=` 空、err=438）。
+
+#### 一、刻度（L 族）
+
+| 格 | 写法 | 读数 |
+|---|---|---|
+| L1 | `v = 111 : Err.Clear : v = o.NoSuchProperty` | `v=111` err=438 ← **真机 K4 实测**；修前本机是 `v=` 空 |
+| L2 | `v = 111 : Err.Clear : v = o.Count` | `v=1` err=0 ← 本机控制格 |
+| L3 | 先 `o.Count` 再 `o.NoSuchProperty` | `v=1` err=438 ← 本机控制格（失败那次不写） |
+| L4 | `v = o.Item("k")` | `v=vv` err=0 ← 本机控制格（串值同样到手） |
+| L5 | 连报两次 | `v=111` err=438 ← 本机控制格 |
+
+L1 是唯一上过真机的那一格（K4）；L2–L5 是守卫不误伤的**本机**控制格 —— 它们走的语义与
+未守卫那一支相同（只是把写的那一步挪到闸后），在真机上量会得到同一组数；这里不把
+未量当已量，故分开标。
+
+#### 二、发码形（§B169 的口径，不自抄）
+
+```c
+const int32_t _e0 = vb6_ErrSerial();
+vb6_VARIANT _av0 = vb6_VariantEmpty();
+if (_e0 == vb6_ErrSerial()) { _av0 = vb6_VariantFromComResult(vb6_ComCall(o, L"NoSuchProperty", NULL, 0)); }
+if (_e0 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _av0; }
+```
+
+- 序号在**求值之前**抓；438 发生在第一句的求值里 ⇒ 第二句的闸为假 ⇒ 目标一个字都不写。
+- 为什么不能只写一句 `if (_e == vb6_ErrSerial()) { ... }` 把整句包起来：序号在进入 if 时
+  还没变，求值把序号推走之后**仍在 if 体内** ⇒ 会把值写进去（与 §11.80 那条同形的坑）。
+- 写回那一句照 `emitVariantSlotStore` 的口径分两支：自有 ⇒ `Clear + 浅搬`（所有权随拷贝交给目标）；
+  借来 ⇒ `vb6_VariantAssign`（Clear + 深拷贝）。这问问的是 `variantRhsOwnsValue`，站点不自己答。
+
+#### 三、范围（只接量到的形）
+
+接的形：**顶层就是那一次晚绑定成员读**（`lateBoundComReadExpr`），目标是非数组/非 UDT 字段的
+Variant 槽。改前全量扫（753 输入）：**23 处 / 11 个输入**，全在 `tests/` 内
+（`dict_native` 5+5、`VBFlexGridDemo` 2、`b190_memberarray` 2、`b612/b613/b614` 各 1–2、
+`czUI` 1、`ucTreeView` 1、`urlpic` 1、`E438App` 2）。外部真实语料 0 处。
+
+**未量、登记不猜**：
+
+- `v = 1 + o.NoSuchProperty`（晚绑定读在表达式**内部**）；
+- Variant **数组元素** / **UDT 的 Variant 字段**做目标（`VB6_SA_*` / `udtFieldSlot`）；
+- `v = Me.rtfText`（`tests/guisample/err438/E438.frm` 2 处）—— 接收者是窗体上的控件
+  （发码是 `vb6_ComCall(vb6_hwnd_E438, …)`），不是 Object 变量，`lateBoundComReadExpr`
+  不答它；真机没量过这一形的目标写不写，所以不动。
+
+这几形已经写成真机探针（`RealMachineProbe.bas` 的 L6–L9 + L11/L12，L10 即上一条的
+`Form1.NoSuchFormMember`，默认注掉 —— 它在 VB6 里可能根本编不过，编不过本身也是答案）。
+本机 C3 读数（同一份探针）：`L6 v=1` / `L7 v=x` / `L8 va(0)=空` / `L9 uv.f=空`，err 都是 438 ——
+即四形现在都会写目标。**真机值回来再决定要不要扩守卫**；在那之前不猜。
+
+#### 四、夹具与针
+
+- 新夹具 `tests/test_late_varslot.bas`（L1/L2/L3/L4 四段：缺读、存在读、先成功后失败、串值）
+- `b251_varslot_guard_shape` 五条针：`_av0` 起手、缺读那一句、写回那一句、控制格 `Count` 那一句、
+  L3 的 `_av3` 写回
+- `b251_varslot_guard_lesion` 一条反面针：修复前的 `v = vb6_VariantFromComResult(vb6_ComCall(o, L"NoSuchProperty", NULL, 0));`
+
+#### 五、门
+
+- 静态门 9 枚 PASS（`manifest_coverage` inputs=754 / registered=754）
+- `owned_temp_keeps` 255 行不变
+- manifest：新增 1 行（`tests/test_late_varslot.bas`）+ 受影响的存量行重算
+- 受影响的工程本机逐个编过：`B612/B613/B614/B190/DictApp/E438App`（x86 那份由 CI 的 `FlexGridX86` 盯）
+
+---
+
+## §11.85 第一百零七刀：Variant 槽赋值位的四形补齐（表达式内部 / 数组元素 / UDT 字段）
+
+### 一、真机（L6–L9，一格一句，目标先置 111）
+
+- `L6  v = 1 + o.NoSuchProperty` ⇒ `v=111` err=438
+- `L7  v = "x" & o.NoSuchProperty` ⇒ `v=111` err=438
+- `L8  va(0) = o.NoSuchProperty` ⇒ `va(0)=111` err=438
+- `L9  uv.f = o.NoSuchProperty` ⇒ `uv.f=111` err=438
+- 控制格：`L11  v = o.Count` ⇒ `v=1` err=0；`L12  v = o.Item("k")` ⇒ `v=vv` err=0
+
+结论：438 一出，目标一个字都不写 —— 与第一百零六刀 K4 同一条规则，换成**表达式内部**、
+**Variant 数组元素**、**UDT 的 Variant 字段**做目标也照样成立。第一百零六刀当时把这三形
+登记为“未量不猜”，这一刀由探针补齐。
+
+### 二、改法
+
+`cgen_assign_value_sem.inc` 那一支的判据从 `lateBoundComReadExpr`（顶层裸读）换成
+`exprHasLateBoundComRead`（§B 族早就在用的那一枚，裸读是它的特例 ⇒ 第一百零六刀那一形不会漏）。
+
+写回分两档：
+
+- 普通 lvalue（`v` / `(*p)`）：自有 ⇒ 清旧 + 浅搬（与第一百零六刀逐字节同形）；借来 ⇒ `vb6_VariantAssign`。
+- 槽形（`VB6_SA_*` 数组元素 / UDT 的 Variant 字段 / 解引用）：一律 `vb6_VariantAssign`（Clear + 深拷贝），
+  自有时再把临时量自己 `vb6_VariantClear` 放掉 —— 槽是**借来**的存储，浅搬会把临时量的所有权塞进别人的槽。
+
+临时量前缀从 `_av` 换成 `_vs`：`_av` 已被标量临时量占用（`cgen_assign.cpp:32` 等），扩面后
+同一输入里会撞出 `C2371 重定义`（`rmp107.c(926)` 复现过）。`C3_DBG_VSLOT107=1` 可打印每个站点的形
+（plain/slot × bare/nested × own/borrow）用于 census。
+
+### 三、量（改前 census，755 输入）
+
+- 命中 28 处 / 10 个输入，全在 `tests/`：dict_native 5+5、ucTreeView 5、test_late_varslot 5、
+  b190 2、b613 2、b612/b614/urlpic/NullFamilyProbe 各 1。
+- 其中 **nested 3 处**（ucTreeView 2、NullFamilyProbe 1）是这一刀新收的；bare 25 处第一百零六刀已覆盖。
+- 槽形（数组元素 / UDT 字段）在存量语料里 **0 处**，只由新夹具覆盖。
+- 实编 churn：manifest 10 行变动，其余 0（裸读那一形的发射逐字节不变）。
+
+#### 四、夹具与针
+
+- `tests/test_late_varslot2.bas`（L6–L9 + 控制格 L11/L12 + L8b/L9b 正常赋值）
+- `b252_varslot2_shape` 七条针：`_vs0` 起手、算术内部那一句、数组元素写回、`vb6_VariantClear(&_vs2)`、
+  UDT 字段写回、`_vs3` 放掉、控制格 `Count` 写回
+- `b252_varslot2_lesion` 两条反面针（修复前：表达式内部 / 数组元素目标直接写目标）
+- 第一百零六刀的 `b251_*` 针随之把 `_av` 改成 `_vs`
+
+#### 五、门
+
+- 静态门 9 枚 PASS（`manifest_coverage` inputs=755 / registered=755）
+- `owned_temp_keeps` 255 行不变
+- manifest：新增 1 行 + 10 行重算 = 755 行
+- 本机可编：B612/B613/B614/B190/DictApp/urlpic/ucTreeView/NullFamilyProbe（CI 再全量）
+
+---
+
+## §11.86 第一百零八刀前的探针（M 族：Set 赋值位 / ByRef Variant 目标）
+
+§11.85 末尾登记的两条未量形，探针已经写进 `RealMachineProbe.bas`（M1–M4），等真机数：
+
+- `M1  Set o2 = o.NoSuchProperty`（`o2 As Object`，先 `Set o2 = Nothing`）
+- `M2  Set v = o.NoSuchProperty`（`v As Variant`，先 `v = 111`）
+- `M3  Set o2 = o`（控制格：成功的 Set 必须落到目标）
+- `M4  LateToParam v, o`（目标是一枚 ByRef 的 Variant 形参，C 里是 `(*w)`）
+
+本机 C3 读数（同一份探针，**未改代码**）：
+
+| 格 | 本机 |
+|----|------|
+| M1 | `o2 is nothing=True` err=438 |
+| M2 | `v=` err=438 —— **目标被清空** |
+| M3 | `o2 is nothing=False` err=0 |
+| M4 | `v=` err=438 —— **调用方的 v 被清空** |
+
+M2/M4 看形就是缺口（和 K4 / L6–L9 不是一回事：那几格是目标不动，这两格是目标被清），
+但真机没量前**不改**。真机若给 111 → 开第一百零八刀；真机若也是空 → 现状就是对的，登记为已覆盖。
+M1 若真机给 `False`（o2 被塞了东西）也是新缺口。
+
+---
+
+## §11.87 第一百零八刀：Set 赋值位 + ByRef Variant 目标（兼修 lateBoundComReadExpr 的形参盲区）
+
+### 一、真机（再跑一轮 M 族）
+
+| 格 | 语句 | 真机 | 修前本机 |
+|----|------|------|----------|
+| M1 | `Set o2 = o.NoSuchProperty`（`o2 As Object`，先 Nothing） | `True` / 438 | `True` / 438 ✓ |
+| M2 | `Set v = o.NoSuchProperty`（`v As Variant`，先 111） | `111` / 438 | **空** / 438 ✗ |
+| M3 | `Set o2 = o`（控制格） | `False`（已指向）/ 0 | 同 ✓ |
+| M4 | `LateToParam v, o`（目标是一枚 ByRef 的 Variant 形参） | `111` / 438 | **空** / 438 ✗ |
+
+结论：Set 位与 ByRef 形参位跟 K4/L6–L9 同一条规则 —— 438 一出，目标一个字都不写。
+
+### 二、两个根因
+
+1. **Set 站没接守机**：`visit(SetStmt&)` 的 `targetIsVariant` 那一支直接发
+   `v = <boxed>;  /* Set */`，随后 `err` 还是 438，但 v 已经被写成空值。
+2. **`lateBoundComReadExpr` 看不见形参**：判据要求根名在 `knownLocalVars_` 里，
+   而 `ByVal o As Object` 这种形参只进了 `knownObjectVars_`（`cgen_decl_proc.cpp` 的 void* 那一支）
+   —— 于是 `w = o.NoSuchProperty` 这种在**另一个过程里**写的句，守卫压根没接上，
+   发出的是 `vb6_VariantClear(&(*w)); (*w) = ...`（先清后赋）。
+
+### 三、改法
+
+- `cgen_util_scan.cpp`：`lateBoundComReadExpr` 的变量闸从
+  `knownLocalVars_.count(rn)` 改为 `knownLocalVars_ || knownObjectVars_`（Object/Collection/COM 变量不管
+  是局部、形参还是模块级，都算“变量”）。
+- `cgen_setlet_set_rhs.inc`：`targetIsVariant` 那一支加与赋值位同形的守机（序号 + `_vs` 临时量 + 两道闸）；
+  只接**裸变量**目标（数组元素支在上面先走、`me->字段` / UDT 字段槽 / 解引用形未量 ⇒ 仍走原路）。
+- 调试口：`C3_DBG_VSLOT107`（赋值位）、`C3_DBG_VSET108`（Set 位）。
+
+**收紧那一步（CI 红线逼出来的）**：`knownObjectVars_` **全程不清空**，同名会漏到别的过程 ——
+`b190_object_formal_goes_late` 第三条针里 `Thing` 是工程类，却被当成 Object，`Thing->Alpha`
+被误判成晚绑定。所以“只进 knownObjectVars_”那一腿再要求**接收者解析不出工程类名**：
+
+```
+if (!isLocalVar && !knownObjectVars_.count(rn)) return false;
+if (inferExprType(*rcv) == Vb6Type::Object) return true;
+if (!isLocalVar) return inferClassTypeOfExpr(*rcv).empty();   // 工程类字段 ⇒ 不是晚绑定
+return knownObjectVars_.count(rn) > 0;                        // 老口径，一字不改
+```
+
+针随之改两条（`vb6_BSTR_Assign` → `vb6_BSTR_AssignMoveIfOk(..., _e`，用**不带号**的形式免得撞号），
+第三条 `Thing->Alpha` 原样保留 —— 它正是这条收紧的哨兵。
+
+### 四、量
+
+- 改前 census（755 输入，`C3_DBG_VSLOT107`）：28 处 / 10 个输入（同 §11.85）。
+- 改后实编：manifest **37 行变动**（756 行中）。变动的形状全是“多加了一道守卫”，分两类：
+  Variant/串目标上的晚绑定读（本刀要的），以及**标量/串目标上接收者是 Object 形参**的
+  那批站点（同一个盲区的另一半 —— 以前它们也漏了守卫）。
+- 本机逐个编过：`test_events` / `setobj` / `k271_outparam` / `b446_latebind`（CI 再全量盯）。
+
+#### 五、夹具与针
+
+- `tests/test_late_setvar.bas`（M1–M4 + M5 控制格：`Set v = o` 成功必须落进目标）
+- `b253_setvar_shape` 五条针：`_vs0` 起手、`(*w)` 的 `VariantAssign`、`_vs0` 收回、`_vs1` 起手（M2）、
+  M2 写回
+- `b253_setvar_lesion` 两条反面针（修复前：Set 直接写目标 / `(*w) = ...` 裸赋）
+
+#### 六、门
+
+- 静态门 9 枚 PASS（`manifest_coverage` inputs=756 / registered=756）
+- `owned_temp_keeps` 255 行不变
+- manifest：新增 1 行 + 37 行重算 = 756 行
+
+---
+
+## §11.88 第一百零九刀前的探针（N 族：Set 进 Variant 槽 / ByRef 形参的 VarType）
+
+§11.87 剩下的末几形写成探针（N1–N5），等真机数：
+
+| 格 | 语句 | 本机 C3（未改代码） |
+|----|------|---------------------|
+| N1 | `Set va(0) = o.NoSuchProperty`（Variant 数组元素） | `va(0)=` err=438 —— **目标被清空** |
+| N2 | `Set uv.f = o.NoSuchProperty`（UDT 的 Variant 字段） | `uv.f=111` err=438（§11.85 槽形守卫已覆盖） |
+| N3a/N3b | `Set va(1) = o` / `Set uv.f = o`（控制格） | 均已指向 / 0 |
+| N4a | `VarTypeOfParam v`（v=1） | `vt=2`（VT_I2） |
+| N4b | `VarTypeOfParam v`（v="x"） | `vt=8`（VT_BSTR） |
+| N5 | `AssignThroughParam v, 5`（控制格） | `v=5` / 0 |
+
+待判点：
+
+- **N1**：真机给 111 ⇒ Set 到数组元素这一形也要接守卫（就是下一刀）；给“空”⇒ 现状就对。
+- **N4**：真机若报 `16387`（VT_BYREF|VT_I4）⇒ 那一形确实存在，我们在形参里报的是底层型（2/8），
+  是一处表示差异需单独记；也报 2/8 ⇒ 该形在 VB6 里根本不出现，可从“未量缺口”里划掉。
+
+---
+
+## §11.89 第一百零九刀：Set 进 Variant 数组元素 + VT_BYREF 那一形注销
+
+### 一、真机（N 族）
+
+| 格 | 语句 | 真机 | 修前本机 |
+|----|------|------|----------|
+| N1 | `Set va(0) = o.NoSuchProperty` | `111` / 438 | **空** / 438 ✗ |
+| N2 | `Set uv.f = o.NoSuchProperty` | `111` / 438 | 111 / 438 ✓ |
+| N3a/N3b | `Set va(1) = o` / `Set uv.f = o` | 落槽 / 0 | 同 ✓ |
+| N4a | `VarType(ByRef w As Variant)`（v=1） | `2`（VT_I2） | 2 ✓ |
+| N4b | 同上（v="x"） | `8`（VT_BSTR） | 8 ✓ |
+| N5 | `AssignThroughParam v, 5` | `5` / 0 | 5 ✓ |
+
+**VT_BYREF 注销**：两格真机都报底层型（2/8），从没报过 16387 —— 那条从 §11.84 起挂在“未量缺口”里的
+`VT_BYREF` 写穿形，**在 VB6 里不出现**，从登记里删掉（不是修好，是不存在）。
+
+### 二、改法
+
+`cgen_setlet_set_rhs.inc` 的 `targetIsVariantArraySlot` 那一支（Set 到 `VB6_SA_AT(vb6_VARIANT, …)`）
+接上与 Set 裸变量位同形的守机：序号先抓 → 右值进 `_vs` 临时量 → 同一枚序号决定写不写。
+槽仍走 `vb6_VariantAssign`（Clear + 深拷贝），临时量自有时才自己 `vb6_VariantClear`
+（`vb6_VariantFromValue(void*)` 走 `vb6_VariantObject` 已 AddRef，一进一出账是平的）。
+下标表达式只求值一次（挤在 VariantAssign 那一句里）。
+
+### 三、量
+
+- 语料实编 churn：**0 行**（757 行里只有新夹具那 1 行是新增）—— 存量语料没有“Set 到 Variant 数组元素 +
+  晚绑定读”这一形；它只由新夹具覆盖。
+
+#### 四、夹具与针
+
+- `tests/test_late_setslot.bas`（N1 / N1b 下标表达式 / N3a 控制格）
+- `b254_setslot_shape` 四条针：`_vs0` 起手、缺读那一句、写回数组元素、`vb6_VariantClear(&_vs0)`
+- `b254_setslot_lesion` 一条反面针（修复前：Set 直接写数组元素）
+
+#### 五、门
+
+- 静态门 9 枚 PASS（`manifest_coverage` inputs=757 / registered=757）
+- `owned_temp_keeps` 255 行不变
+- manifest：新增 1 行 = 757 行
+
+---
+
+## §11.90 第一百一十刀前的探针（P 族：Set 到工程类字段槽）与一处新账
+
+最后一条未量形（`Set <工程类 Variant 字段> = 晚绑定读`）在普通 .bas 探针里伸不到，所以另做了一个
+**最小工程**：`ClsSlotProbe.vbp` + `ProbeMain.bas` + `SlotCls.cls`（类里 `Public f As Variant`），
+四格：
+
+- `P1  Set c.f = o.NoSuchProperty`（类外面写字段，C 里 `c->f`）
+- `P2  c.SetMissing o`（类里面写自己的字段，C 里 `me->f`）
+- `P3/P4` 控制格（成功的 Set 必须落进字段）
+
+**这一形 C3 现在编不过**（新测到的独立缺口，与 438 该不该写目标是两回事）：
+
+```
+ProbeMain.c(56): error C2440: 无法从 “void *” 转换为 “vb6_VARIANT”
+  c->f  /* class var .f field variant */ = vb6_ComGetObjectProp(o, L"NoSuchProperty");  /* Set */
+ProbeMain.c(68): error C2440: 同上（控制格 `Set c.f = o`）
+  c->f  /* class var .f field variant */ = o;  /* Set */
+```
+
+即：Set 到工程类的 Variant 字段那一支，**装箱（对象指针 → Variant）整个缺了** ——
+`targetIsVariant` 那一支只认 `knownVariantVars_` / 类字段表里的**名字**，但写回时没走
+`wrapVariantValue`，与 §11.87 给 Set 裸变量位加守卫时看到的那个 `value` 不是同一口径。
+先记下，等真机 P1/P2 数回来一并处理（先装箱，再谈守卫）。
+
+---
+
+## §11.91 第一百一十刀：Set 到工程类 Variant 字段槽（真机 P 族）
+
+### 一、真机
+
+| 格 | 语句 | 真机 | 修前本机 |
+|----|------|------|----------|
+| P1 | `Set c.f = o.NoSuchProperty`（类外，C `c->f`） | `c.f=111` / 438 | **C2440 编不过** ✗ |
+| P2 | `Set f = o.NoSuchProperty`（类内，C `me->f`） | `c.f=111` / 438 | 111 / 438（数对，但没退旧值） |
+| P3 | `Set c.f = o`（控制格） | `isobj=True` / 0 | C2440 |
+| P4 | `Set f = o`（控制格） | `isobj=True` / 0 | 落槽 / 0 |
+
+### 二、两个根因（同一格两件不同的事）
+
+1. **类外目标不认**：字段读那一站给目标拼上尾注 `/* class var .f field variant */`，于是
+   `checkName` 带注释，按名那三条判定全落空 ⇒ 目标被当 typed 槽：不装箱、不守卫，直接发
+   `c->f  /* … */ = vb6_ComGetObjectProp(o, L"…");  /* Set */` ⇒ C2440。
+2. **类内目标装箱但不守卫**：`me->f` 那一形本来就命中 `classVariantFields_`，装箱是对的，
+   但 438 之后照样裸写，且覆写前不退旧值（Variant 结构体裸赋 = 旧值漏掉）。
+
+### 三、改法（`cgen_setlet_set_rhs.inc`）
+
+- 新判据 `classVarFieldSlot110` 问**两腿**，都问表、不认文本：
+  - 类外（`Set c.f = …`）：AST 是 `MemberAccessExpr` ⇒ 宿主类名问 `inferClassTypeOfExpr`，
+    方法/属性该名先否决（`resolveClassMemberCall` 非空），再问 `classFieldIsVariantSlot`；
+  - 类内（`Set f = …`）：AST 是裸 `IdentifierExpr`、发码是 `me->f` ⇒ 问 `classVariantFields_`
+    （与 Fix 091p 同一张表）。
+  两腿命中都把目标当 Variant 容器（后面的装箱两步自然接上）。
+- 写回两档：
+  - 有晚绑定读 ⇒ `_eN` 序号 + `_vsN` 临时量 + 两枚同序号闸；写回是
+    `vb6_VariantClear(&<槽>); <槽> = _vsN;`（槽是真存储，临时量是**移**进去，不自己收回）；
+  - 无晚绑定读 ⇒ 交给 `emitVariantSlotStore`（“清+搬”的唯一出口，§B164 第五十五刀）；
+    以前 `me->f` 那一形只发一句裸赋，**旧值不退**。
+- 调试：`C3_DBG_VSET110`（`[VSET110-DET]` / `[VSET110]`）。
+- **被静态门退回一次的有用记录**：第一版判据按目标文本那枚尾注写（看 `/* class var .` 与
+  `field variant */`），并手抄了「清+搬」两行 —— `variant_slot_store` 当场红两格：
+  R3「清+搬不许住定义出口那份文件之外」、R5d「不许再把尾注当判据」。改成问表 + 走唯一出口后：
+  `violations 0`（`calls 13`）。
+
+### 四、量
+
+- 语料实编 churn：**0 行**（759 行逐行同；存量语料里没有“Set 到工程类 Variant 字段槽”这一形）。
+  量法分两段单进程跑（前 510 行 + 从 `test_let_variant_slot.bas` 起的尾段）—— 并发跑全量时那一段
+  曾报过一行 `CHG`，单份复算 sha/bytes/ascii 与登记全同，是两枚 C3 同时跑撞出的假红。
+- 新夹具 `tests/setcls/{SetCls.vbp, SetClsMain.bas, SetClsSlot.cls}`：本机四格与真机逐字相同。
+- 针：`b255_setclsslot_shape`（6 条，含 `vb6_VariantClear(&me->f);` 与两枚控制格装箱）/
+  `b255_setclsslot_lesion`（2 条）。另 `Test-Vbp setcls` + `setcls_x86` 两架构行为格。
+
+### 五、门
+
+- 静态门 9 枚 PASS（`manifest_coverage` inputs=759 [.vbp=280 .bas=479] registered=759）
+- `variant_slot_store` PASS（violations 0）
+- manifest：757 → 759 行（新增 .vbp/.bas 两行，存量 0 行变动；次日重算 .vbp 行
+  10187 → 10165 字节，·cls 体内多了守卫）
+---
+
+## §11.92 第一百一十一刀前的探针（Q 族：Set 语句目标的另外两形）
+
+第一百一十刀把「工程类 Variant 字段槽」量完并修好之后，Set 的目标还剩下两形没量。
+本机先用一份小夹具（`.temp/k111/slots111.bas` / `slots111b.bas`）读现状：
+
+| 格 | 语句 | 本机现状 |
+|----|------|----------|
+| Q1 | `Set w = o.NoSuchProperty`（目标 = ByRef Variant 形参，C `(*w)`） | **C2440 编不过**：`(*w) = vb6_ComGetObjectProp(o, L"…");` —— 装箱整个缺 |
+| Q2 | `Set uv.f = o.NoSuchProperty`（UDT Variant 字段） | 111 / 438 ✅（第一百零七刀已修） |
+| Q3 | `With uv : Set .f = o.NoSuchProperty` | `uv.f=` / 438 ❌ —— 裸赋值，槽被清空 |
+| Q4 | `With uv : Set .f = o`（控制格） | `isobj=True` / 0 ✅ |
+
+另记一处与本刀无关的独立缺口：**模块级 UDT（含 Variant 成员）初始化 = C2074**
+（`vb6_type_UV uv = {0};`），所以 Q2/Q3 的本机读数改用过程内局部 UDT 取得。
+
+真机探针已写出（`.temp/k111/probe111/RealMachineProbe111.bas`，五格：Q1 / Q1c 控制 /
+Q2 参照 / Q3 / Q3c 控制），等真机数回来再改编译器 —— 两形都按「先量后改」处理。
+---
+
+## §11.93 第一百一十一刀：Set 到解引用槽 (*w) 与 With 块 UDT Variant 字段（真机 Q 族）
+
+### 一、真机
+
+| 格 | 语句 | 真机 | 修前本机 |
+|----|------|------|----------|
+| Q1 | `Set w = o.NoSuchProperty`（w = ByRef Variant，C `(*w)`） | `v=111` / 438 | **C2440 编不过** |
+| Q1c | `Set w = o`（控制格） | `isobj=True` / 0 | C2440 |
+| Q2 | `Set uv.f = o.NoSuchProperty`（UDT 字段，参照） | `uv.f=111` / 438 | 111 / 438 ✅ |
+| Q3 | `With uv : Set .f = o.NoSuchProperty` | `uv.f=111` / 438 | **空** / 438 ✗ |
+| Q3c | `With uv : Set .f = o`（控制格） | `isobj=True` / 0 | 落槽 ✅ |
+
+### 二、两个根因
+
+1. **Q1：剥壳只认长名**。判定 Variant 容器前把 `(*w)` 剥成 `w` 的那句条件是 `size() > 4`，
+   而 `(*w)` 恰好 4 个字符 ⇒ 不剥 ⇒ 名字带星号查表全落空 ⇒ 当 typed 槽发
+   `(*w) = vb6_ComGetObjectProp(o, L"…");`（void* → vb6_VARIANT，C2440，装箱整个缺）。
+2. **Q3：判据把「含 `->`」一律排到裸赋**。`plainVar108` 要求 `target` 里既无 `(` 也无 `->`；
+   With 块的字段发出来是 `_vb6_with_N->f` ⇒ 进不了守卫那一档，438 之后照样把槽写空（且不退旧值）。
+
+### 三、改法（`cgen_setlet_set_rhs.inc`）
+
+- **Q1**：不全局放宽剥壳（那么做会把 `(*p)` 这种**工程类出参槽**也剥掉，见下面「A/B 退回记录」），
+  单开一问 `derefVariant111`：目标形如 `(*名)` 且
+  ① 名字在 `knownVariantVars_` 里、不在 `knownObjectVars_` / `knownTypedComVars_` 里；
+  ② `inferClassTypeOfExpr` 答得出类名就否决（工程类出参槽 `(*p)` 就是这一形，与 §11.87 的
+  staleness 否决同一口径）。
+  命中才 `targetIsVariant = true`（装箱 + 守卫一并接上）。
+  ⚠ 这里**不**问 `classOfProjectRefOutSlot`：`class_refcount_authority` 把「出参槽类名问句」钉成
+  恰好 4 处（声明 + 定义 + 两站），第一版多问了一次，CI 的 compile 格当场红（第 5 处）。改用 AST
+  那一问（更早就有的口径），把那一问留给它自己的 4 处。
+- **Q3**：`plainVar108` 的排除项从「含 `(` 或 `->`」改成「目标不是一次纯粹的左值求值」：
+  `(*w)` 与「`->` 之前没有括号」两形都算纯左值；只把**带函数调用**的目标
+  （`Add(…)->Image`，写回两次会多调一次）留在原路。
+- 两形写回仍走既有那一档：`_eN` 序号 + `_vsN` 临时量 + 同序号闸，
+  写回是 `vb6_VariantClear(&<槽>); <槽> = _vsN;`（槽是真存储，临时量移进去）。
+
+#### 四、A/B 退回记录（记一次真回归）
+
+第一版把剥壳条件从 `size() > 4` 放宽成 `>= 4`，全量 rehash 立刻给出 **2 行 churn**：
+`tests/b187_box/B187d.vbp` / `tests/b445_refcount/B445.vbp`。用 BASE（`git stash` + 重建）与新机
+并排重发那两份，diff 逐字给出原因：`(*p)` 里的 `p` 是 `As B187Good` / `As C445` 的**出参槽**，
+剥壳后被当成 Variant 容器 ⇒ §B218 腿②′ 那整段（Unbox + AddRef + 花括号注释）被抢走，两行各短 72 / 3 字节。
+改成只看声明档的 `derefVariant111` 后，那两份与 BASE **逐行相同**，全量 rehash 回到 0 行。
+
+### 五、量
+
+- 语料实编 churn：**0 行**（760 行逐行同；单进程一次跑完）。
+- 新夹具 `tests/test_late_setslot2.bas`：五格与真机逐字相同（Q1 / Q1c / Q2 参照 / Q3 / Q3c）。
+- 针：`b256_setslot2_shape`（7 条，含 `vb6_VariantClear(&(*w)); (*w) = _vs`、With 字段的
+  `->f); _vb6_with_`、Q2 回归针）／`b256_setslot2_lesion`（2 条：裸 `(*w) = ComGetObjectProp`、
+  裸 `->f = VariantFromValue(ComGetObjectProp)`）。
+
+### 六、门
+
+- 静态门 9 枚 PASS（`manifest_coverage` inputs=760 [.vbp=280 .bas=480] registered=760）
+- manifest：759 → 760 行（只新增本刀那一行，存量 0 行变动）
+
+---
+
+## §11.94 模块级 UDT 变量的静态初始化（第一百一十二刀）
+
+### 一、病灶
+
+真机 VB6 里再普通不过的一行声明：
+
+```vb
+Public Type UV
+    f As Variant
+End Type
+Public uv As UV
+```
+
+本机发成 `vb6_type_UV uv = 0;` —— 结构体不能拿 `= 0` 初始化，cl 直接 **C2074**
+（initialization of a struct requires a brace-enclosed initializer list），
+整个工程编不过。所以此前凡带 Variant 成员的模块级 UDT 都是空白面。
+
+### 二、根因
+
+`cgen_decl_var.cpp` 里那条「UDT ⇒ `{0}`」的判定只问 `lookupDotted(simple.name)`：
+
+```cpp
+auto* sym = lookupDotted(simple.name);
+isUdtType = (sym && sym->kind == SymbolKind::UserDefinedType);
+```
+
+而 `Public Type UV … End Type` 只登记在**模块作用域**（`lookupModuleDotted` 那一层），
+名字查不到 ⇒ `isUdtType = false` ⇒ 落到 `initVal = defaultValue(Vb6Type::Unknown)` = `"0"`。
+`Unknown` 这一档本是给数组那类 `vb6_SafeArray1D*` 留空指针用的（账 #116 那条注释写得很清楚，
+不能改成 Variant），与 UDT 撞在同一个 `"0"` 上。
+
+### 三、改法
+
+两处兜底，都是「先量后改」量出来的最小面：
+
+1. 名字查不到时补一问模块作用域：`if (!sym) sym = lookupModuleDotted(simple.name);`
+2. 再用 **C 类型名**兜底：`cType.rfind("vb6_type_", 0) == 0` 判为结构体 ⇒ `{0}`。
+   这一条不依赖符号表，符号表再怎么缺登记也不会把结构体发成 `= 0`。
+
+`{0}` 就是全零：Variant 成员 = Empty（VT_EMPTY=0）、String = 空、数值 = 0 —— 与 VB6
+对模块级变量的零初始化一致。
+
+### 四、量（本机）
+
+新夹具 `tests/test_udtmod.bas`（Public / 嵌套 / Private 三形 + 零初始化读数 + 模块级槽的 438 守卫）：
+
+```
+UDTMOD-1 VarType=0 IsEmpty=True IsNull=False
+UDTMOD-2 uv.f=7 VarType=2
+UDTMOD-3 nst.inner.f=[] nst.s=[] nst.n=0
+UDTMOD-4 x|abc|42
+UDTMOD-5 IsEmpty(pv.f)=True
+UDTMOD-6 v=111 err=438
+UDTMOD-7 isobj=True err=0
+```
+
+- `UDTMOD-6` 与真机 probe111 **Q2 逐字一致**（`uv.f=111 err=438`，只是槽从过程级挪到模块级；
+  发射码与 Q2 同形：`const int32_t _eN = vb6_ErrSerial();` 双闸 + `_vsN`）。
+- `UDTMOD-1/3/5`（零初始化那几格）已由 **probe112** 真机逐字复核（见下表），全部对上。
+
+#### 真机 probe112 读数（逐字对照，已回）
+
+| 格 | 真机 | 本机 | |
+|---|---|---|---|
+| P1 | `VarType=0 IsEmpty=True IsNull=False` | 同 | ✔ |
+| P1b | `uv.f=7 VarType=2` | 同 | ✔ |
+| P1c | `nst.inner.f=[] nst.s=[] nst.n=0` | 同 | ✔ |
+| P1d | `x|abc|42` | 同 | ✔ |
+| P1e | `IsEmpty(pv.f)=True` | 同 | ✔ |
+| P2 | `v=111 err=438` | 同 | ✔ 模块级槽守卫正确 |
+| P2c | `isobj=True err=0` | 同 | ✔ |
+| P3 | `v=[111] err=438` | `v=[] err=0` | ✘ 缺口确认 |
+
+`{0}` 这一手与真机零初始化**完全一致**（Variant=Empty / String 空 / Long 0，嵌套同形，
+Public 与 Private 同）；模块级槽的 438 守卫也与过程级同一条规则。
+
+### 五、针与门
+
+- `b257_udtmod_shape`（4 条）：`vb6_type_UV uv = {0};` / `vb6_type_Nest nst = {0};` /
+  `vb6_type_UV pv = {0};` / `vb6_VariantClear(&uv.f); uv.f = _vs`
+- `b257_udtmod_lesion`（3 条，修前那三行都是 `= 0`）
+- 运行核 `Add-BasTest "test_udtmod"`：8 条读数
+- manifest：760 → 761 行
+
+### 六、P3：Collection 未知名成员（真机已确认的缺口，第一百一十三刀）
+
+真机 probe112 **P3 = `v=[111] err=438`**，本机 `v=[] err=0`：
+
+```vb
+Dim col As Object: Set col = New Collection
+v = 111
+Set v = col.NoSuchProperty     ' 真机: 438 且目标保持 111（不写目标）；本机: 清空 err=0
+```
+
+两处都错：① 没报 438；② 还把目标写了（清成空）—— 真机 438 不写目标。
+与 §11.93 的槽守卫无关（守卫是好的：P2 换 `Scripting.Dictionary` 立刻 `v=111 err=438`），
+是 COM 派发那一层的宽松。真机读数已到，开第一百一十三刀。
+
+## §11.95 内建 Collection 的未知名成员 ⇒ 438（第一百一十三刀 · 量到了，但被一处发错误挡住）
+
+### 一、真机读数（probe112 P3）
+
+```vb
+Dim col As Object: Set col = New Collection
+col.Add 5
+v = 111
+Set v = col.NoSuchProperty
+```
+
+| | 读数 |
+|---|---|
+| 真机 | `v=[111] err=438` |
+| 本机（现状） | `v=[] err=0` |
+
+两处都错：① 不报 438；② 还把目标写了（清成空）—— 真机 438 不写目标。
+
+### 二、根因（RTL 一侧，已定位）
+
+`uc_hostmodel_getprop.inc` 的内建 Collection 岔口对**任何**未知成员都 `return 1`
+（"答了但没答"），于是 `vb6_ComGetPropRcv` 宿主分支那条 `hgot < 0 ⇒ 438` 的收口
+（同文件末尾 `fxtDocument.rtfText` 那一刀立的规矩）永远走不到。正确改法只有一行：
+
+```c
+    if (vb6_uc_isColl(obj)) {
+        if (_wcsicmp(name, L"Count") == 0) { ...; return 1; }
+        return -1;     /* 成员不存在 ⇒ 调用方抛 438、交空值（438 不写目标） */
+    }
+```
+
+### 三、为什么这一刀没落（实测：改成 `-1` 当场红两格）
+
+改完本机自测是对的（`P3 v=[111] err=438`，与真机逐字一致），但 CI 两格红：
+
+1. `[STATIC] com_latebind_guard`：`R5 calls of vb6_ho_report438 in uc_hostmodel_getprop.inc = 2 (want 1)`
+   —— 那枚门把报数站点钉成恰好 1 处（文件末尾那位主人）；这一格不再重报即可（已按此改）。
+2. `[GUI] Charts2020 ... exit=438`：**真正的拦路虎**。
+
+Charts2020 的 438 与 Collection 本身无关，是生成码里一处**既有的**发错误：
+
+```vb
+Type RectF
+    Prop As Collection
+End Type
+With Rects(i)
+    .Prop.Add value, name          ' 应发成 vb6_ComCall(_vb6_with_N->Prop, L"Add", …)
+End With
+```
+
+实际发出（复现器 `.temp/k113/wuc2.bas`，五行）：
+
+```c
+vb6_ComCall(vb6_ComGetObjectProp(_vb6_with_5->Prop, L"Prop"), L"Add", …)
+```
+
+多出来的一层 `ComGetObjectProp(……, L"Prop")` —— 拿 **Collection** 去问它自己叫不叫 `Prop`。
+这一层以前被第二节那格宽容吞掉：接收者变 NULL，`vb6_ComCall(NULL, L"Add", …)` 落成
+晚绑定 miss（本案 stderr 里那一串 `site=ComCall name="Add" disp=00000000`，60+ 条），
+也就是说**那些 `Add` 本来一次都没进过集合**；§11.95 让它报 438 之后，这一层就从空转变成了
+进程级错误。旧读数也印证：Charts2020 的 GUI 用例此前通过，靠的是"错得不出声"。
+
+出处是 `cgen_expr_with.cpp` 的 Fix 110t 分支（With 块里 UDT 的**对象字段**当 callee）：
+它把 `comObjExpr_` 设成**已经解好的字段取值** `_vb6_with_N->Prop`、`comMemberName_` 又设成
+**同一个字段名** `Prop`，于是外层再解一层就成了上面的形状。同一分支的另一个消费者
+（`.ObjField(args)` 直接调用，要 `L"Item"`）不能一起动 —— 试过把名字清空：直接调用那形
+退化成 `vb6_ComCall(…, L"", …)`、`.Add` 那形退化成 C 结构体方法调用
+`_vb6_with_0->Prop.Add(1, …)`，两形都不对，已撤回（记录在 `cgen_util_com.cpp` 的 `resolveComValue`
+与 `cgen_expr_with.cpp` 两处都恢复原样）。
+
+### 四、结论与下一刀
+
+- 这一格**先不改**：留着 `return 1`，并把上面那段证据写进代码注释（谁改谁先看 Charts2020）。
+- 第一百一十四刀的正题 = 修 Fix 110t 那个"字段已解好又当成员名"的接收者发法，
+  让 `With <UDT>: .ObjField.Method …` 发成 `vb6_ComCall(<字段>, L"<Method>", …)`、
+  `With <UDT>: .ObjField(args)` 仍发 `L"Item"`。修好后把本节第二节那一行改回 `-1`。
+- 复现器：`.temp/k113/wuc2.bas`（`Type Holder: Prop As Collection` + `With h(0): .Prop.Add 1, "k"`
+  + `.Prop(1)` + `.Prop.Count` 三形一起看）。
+- 撤下的东西：`tests/test_collmiss.bas` 及其运行核（**不**给错误行为立针）、manifest 762 → 761。
+
+### 五、顺带量到、另行登记的一处缺口
+
+普通赋值读已知成员到 Variant 槽，本机交空：
+
+```vb
+Dim v As Variant
+v = col.Count        ' 本机: v 为空, err=0；VB6: 1（待 probe113 Q2 真机复核）
+```
+
+`CStr(col.Count)`（直接取值）是对的；`v = dict.Count`（Dictionary 走 IDispatch）也正常
+（`v=[1] VarType=3`）。只有"宿主回 VT_I4 → Variant 槽"这条搬运路漏，且只在宿主那条路上。
+
+## §11.96 With-UDT 对象字段的方法调用（第一百一十四刀 · 修好 §11.95 被勒住的那处发错误）
+
+### 一、病在哪：一处发错误，两个症状
+
+`With <UDT>` 里对**对象字段**（`Prop As Collection` 这类）做调用，Fix 110t 设的标记是
+
+```
+comObjExpr_  = _vb6_with_5->Prop      ← 字段值本身（对象已经在手上）
+comMemberName_ = "Prop"               ← 只是记着它是哪个字段
+```
+
+下游把这两个字段**分别**当「接收者」和「方法名」用，于是同一件事实被解了两次：
+
+| VB 源码 | 修前发码 | 错在哪 |
+|---|---|---|
+| `With h(0): .Prop.Add 1, "k"` | `ComCall(ComGetObjectProp(_vb6_with_5->Prop, L"Prop"), L"Add", …)` | 拿 Collection 问它自己叫不叫 `Prop`（多解一层） |
+| `With h(0): .Prop(1)` | `ComCall(_vb6_with_5->Prop, L"Prop", …)` | 字段名顶到方法名上（该走默认成员 `L""`） |
+| `With m_Serie(i): .CustomColors(j+1)` | `ComCallInt(_vb6_with_19->CustomColors, L"CustomColors", …)` | 同上，Fix 110t 自己的第一格就一直是错形状 |
+
+第一条在 §11.95 之前一直是**空转**：多出来那层 `ComGetObjectProp(…, L"Prop")` 打到内建 Collection 的宽容岔口（`return 1` + 空对象），接收者变 NULL，`Add` 一次也没真进过集合（账上 60+ 条 `site=ComCall name="Add" disp=00000000` 就是它）。§11.95 让 Collection 老实回 438 之后，这层空转立刻变成**进程级错误**（`Charts2020 exit=438`）——所以 §11.95 当时只能撤回，先把发错误修好。
+
+### 二、修法（三处，都在发码侧）
+
+1. **`cgen_expr_member_generic_access.inc`（新增 ST-GEN3 支）**
+   链式成员访问看到 `isComMarker_` 时，先判「标记的接收者尾巴就是这个成员名」（`objExpr` 以 `-><member>` 收尾）。
+   命中 ⇒ 说明**对象已经在手上**，照「已解好的对象」续链（`comObjExpr_` 不动、`comMemberName_` 换成外层成员名），
+   不再 `resolveComValue("Object")`。不命中 ⇒ 逐字走原路。
+
+2. **`cgen_expr_call_com_bind.inc`**
+   标记被**直接当调用目标**消费时（没有外层成员），若接收者尾巴等于成员名 ⇒ 这个名字是字段名，不是方法名 ⇒ 名字交空，
+   走 `vb6_ComCall` 的默认成员（DISPID 0）。
+
+3. **`cgen_call.cpp`（语句路）**
+   `With <UDT>: .ObjField.Method arg, arg` 这种**语句式带实参**调用（parser 交 `CallStmt(callee=IndexOrCallExpr)`），
+   以前会落到「结构体方法调用」拼成 `_vb6_with_0->Prop.Add(1, _own_1)`（C 结构体方法形，编不过 / 语义全错）。
+   现在在 `emitExpr(*node.callee)` 之后先看标记：有标记 + 有实参 ⇒ 直接发
+   `vb6_ComCall(<字段>, L"<方法>", (void*[]){…}, n)`，与表达式路同一口径。
+
+三处合起来：**字段只解一次，名字只用在它该在的位置**。
+
+### 三、发码对照（撤改前后逐字，5 行 churn 全部是这处语义纠正）
+
+`tests/Charts 2020/ucChartBar/Proyecto1.vbp`（4 站 `Values.Add`）：
+
+```
+修前: vb6_ComCall(vb6_ComGetObjectProp(_vb6_with_4->Values, L"Values"), L"Add", …)
+修后: vb6_ComCall(_vb6_with_4->Values, L"Add", …)
+```
+
+`tests/Charts 2020/ucTreeMaps/Proyecto1.vbp`（`CustomColors(j+1)` 4 站）：
+
+```
+修前: vb6_ComCallInt(_vb6_with_19->CustomColors, L"CustomColors", …)
+修后: vb6_ComCallInt(_vb6_with_19->CustomColors, L"", …)
+```
+
+`tests/VBFlexGridDemo/Builds/VTableHandle.bas` 与 `VBFlexGridDemo.vbp`（`.Enumerable(.Index)`）：
+
+```
+修前: vb6_ComCall(_vb6_with_21->Enumerable, L"Enumerable", …)
+修后: vb6_ComCall(_vb6_with_21->Enumerable, L"", …)
+```
+
+churn: **5 / 762**（`tests/Charts 2020/Proyecto1.vbp`、其 ucChartBar、ucTreeMaps 三个 vbp + VBFlexGridDemo 两行），
+其余 757 行 byte-identical；skip 5（机差 5 枚，与历刀同）。
+
+### 四、复现器与读数
+
+`.temp/k113/wuc2.bas`（五行，含 `Set h(0).Prop = New Collection`）：
+
+```
+修前: H0 count=  H1 count=   (Add 全空转, count 读空)
+修后: H0 count=1 H1 count=2  (Add 真进集合)
+```
+
+真机口径对照（probe112 P3，§11.95 已量）：`Set v = col.NoSuchProperty` ⇒ `v=[111] err=438`。
+第一百一十三刀撤回的那格（内建 Collection 未知名 ⇒ 返回 -1）本刀已恢复：
+
+```
+本机: err=438  type=2 val=111   ← 与真机逐字一致
+```
+
+`tests/test_collmiss.bas` 六格全绿（`CM-1 count=1` / `CM-2 item=5` / `CM-3 v=[111] err=438` /
+`CM-4 count=1 err=0` / `CM-5 v=[222] err=438` / `COLLMISS-DONE`）。
+
+### 五、Charts2020
+
+修后 `exit=6`（`Unhandled VB6 Error #6: Overflow`），与 §11.95 撤回后的基线**同一读数**，
+且 stderr 里 **一条 438 也没有**、`C3_LATEBIND_MISS` 从 60+ 条降到 **0 条** ——
+那串 `Add` 以前一直空转，现在真进了集合（这才是 Charts2020 原本要的行为）。
+
+### 六、仍缺的一格（不属本刀）
+
+`With h(0): .Prop(1)` 的**返回值**交空（本机 `H2 item1=` 空）：接收者与默认成员名都已经对了，
+缺的是「宿主回 VT_I4 → Variant 槽」这条搬运路。已登记在 probe113 Q2/Q2b 待真机读数，见 §11.95 的缺口表。
+
+## §11.97 内建 Collection 的调用臂：Count / 空名默认成员 / 未知名 ⇒ 438（第一百一十五刀）
+
+### 一、probe113 真机读数（VB6 IDE 实测，2026-11-22）
+
+```
+Q1  Set v = col.NoSuchProperty   => v=[111] err=438      (对照格, §11.95 已收口)
+Q2  v = col.Count                => v=[1] err=0 VarType=3 (VT_I4)
+Q2b v = col.Item(1)              => v=[5] err=0 VarType=2 (VT_I2; 5 是 Integer 字面量)
+Q2c v = col.NoSuchProperty       => v=[111] err=438      (普通赋值读未知名)
+Q3  col.Count                    => count=1 err=0
+```
+
+### 二、病在哪：同一个出口上的三个洞
+
+`v = col.Count`、`v = col.NoSuchProperty`、`With h(0): .Prop(1)` 在发码侧都是 **`vb6_ComCall`**
+（不是 `ComGetProp`），而宿主模型 `uc_hostmodel_call.inc` 的 `vb6_uc_isColl(obj)` 臂只认
+`Add` / `Item` / `Remove`，末尾无条件 `return 1`：
+
+| 源码 | 修前这一臂 | 症状 |
+|---|---|---|
+| `v = col.Count` | 没有 Count 分支，落到末尾 `return 1` | `out` 仍是入口清零的 Empty ⇒ 宿主那枚 VT_I4 根本没生出来（Q2 读成空/VarType=0） |
+| `With h(0): .Prop(1)` | 空方法名（§11.96 定的默认成员写法 `L""`）不映射到 Item | 返回 Empty（复现器 H2 blank） |
+| `v = col.NoSuchProperty` | 未知名也 `return 1`（「答了但没答」） | Q2c 读到 err=0，且目标被写成空 |
+
+三格同属**一个调用出口**，所以一刀修完；这也是 §11.96 末尾登记的那格（H2 与 Q2 同根）。
+
+### 三、修法（RTL 一处，`uc_hostmodel_call.inc`）
+
+1. `cname = (name && name[0]) ? name : L"Item"` —— 空名字按 VB6 默认成员处理；
+2. 新增 `Count` 分支，与 GetProp 臂问**同一个主人** `vb6_Collection_Count`；
+3. 其余未知名 ⇒ `vb6_ho_report438(L"Call", …)` + `return -1`，与 §11.95 的 GetProp 尾巴同口径
+   （`vb6_ComCallRcv` 的宿主分支按 VB6 语义抛 438，目标不动）。
+
+认得的三支（Add/Item/Remove）与 Count 仍 `return 1`；行为面只加三格。
+
+### 四、本机读数（修前 → 修后）
+
+```
+P3  v = col.Count            : v=[] VarType=0      → v=[1] VarType=3
+H2  With h(0): .Prop(1)      : 空                    → item1=1 / item2=2
+Q2c v = col.NoSuchProperty   : (err=0, 目标被写空)   → v=[111] err=438
+CC-6 col.AnotherMissing      : err=0                → err=438
+```
+
+新增夹具 `tests/test_collcall.bas` 七格（`CC-1` … `CC-6` + `COLLCALL-DONE`），
+与 probe113 逐格对照；manifest 762 → **763** 行。
+
+### 五、静态闸门与 churn
+
+- `check_com_latebind_guard.ps1` 的 R5「438 站点数」按实测从 `Call=1` 收紧为 `Call=2`：
+  新增那处不是把真缺口改记成 438，而是 Collection 未知名在调用臂上**本来就没有这个成员**
+  （与 GetProp 臂 §11.95 同一件事）；认得的三支仍 return 1。
+- `check_variant_slot_store.ps1` / `gates.ps1` 全绿；`check_manifest_coverage` 763/763。
+- churn 实测 `full_rehash85.ps1`：**rows=763 changed=0 skipped=5 missing=0** ——
+  本刀只动 RTL 宿主模型、不动发码，期望表除新增那一行外逐字节不变。
+
+### 六、与真机的剩余差异（不在本刀）
+
+`CC-2 v = col.Item(1)` 值对，VarType 本机 3(VT_I4) / 真机 2(VT_I2)：`col.Add 5` 的整数字面量
+归档口径差异（既有），本条针只立「搬进 Variant 槽且值对」，不为这处差异立期望。
+
+## §11.98 宿主 Font 臂交对象：`.Font.Size` / `CallByName(…,"Font",…).Size` 不再读空（第一百一十六刀）
+
+### 一、读数（本机 x86，与 CI 同一产物形态，同一台机）
+
+| 夹具 | 旧编译 | 新编译 | 行形 |
+|---|---|---|---|
+| `tests\Charts 2020\Proyecto1.vbp` | 23 | **0** | `site=ComGetProp name="Size" disp=00000000 kind=null` |
+| `tests\czUI-main\czFormDemo.vbp` | 3 | **0** | `site=ComSetProp name="Name"/"Size"/"Bold" disp=00000000 kind=null` |
+
+两枚都是跑 8~10 秒后杀进程；修前修后进程都还在消息循环里（不是提前退出）。
+
+### 二、病在哪：一个「防崩」出口把对象吞了
+
+`uc_hostmodel_getprop.inc` 的 Font 分支：
+
+```c
+vb6_UCFontRec* fr = (vb6_UCFontRec*)vb6_UC_NewFont();
+vb6_ho_setVariantDispatch(out, fr); return 1;   /* 这个出口恒交 Empty */
+```
+
+`vb6_ho_setVariantDispatch` 的契约是**恒 Empty**（历史原因：怕 `VariantClear` 对伪对象调 Release）。
+于是：
+
+- `CallByName(oCtrl, "Font", VbGet).Size`（`ClsResizer.cls:107`）取到 Empty ⇒ `.Size` 接收者 NULL（23 条）；
+- `txtEmbed.Font.Name/Size/Bold`（czFormDemo）同样（3 条）。
+
+### 三、为什么裸 VT_DISPATCH 是安全的
+
+`vb6_ReleaseObject` / `vb6_ComAddRefDispatch` 的唯一判据是 `vb6_ComIsDispatchable`
+（首字段是不是可执行 vtable）。字体伪对象首字段是 `BSTR Name`，两个出口都跳过，
+`vb6_VariantClear` 不会去 Release；`vb6_Host_ToWinVariant` / `ClearVariant` 对对象档
+本来就是「借用不计数」。Controls.Item 那族（`vb6_ho_setVariantObject`）早就是同一口径。
+
+### 四、修法
+
+```c
+vb6_ho_setVariantObject(out, fr); return 1;
+```
+
+`.Size` / `.Name` / `.Bold` 随后落到同一格（`vb6_uc_isFont` → `vb6_ho_getFontMember` /
+`uc_hostmodel_setprop.inc` 的字体分歧），不需要另立第二条字体属性面。
+
+### 五、针与闸门
+
+- `LateBindMissAllow`：删掉 `'Proyecto1' = 23`、`'czFormDemo' = 3`（默认期望恰好 0），
+  并写上两条旧读数的行形与出处 —— 「从 23 降到 0」不是放宽判据，是不该计入的伤口消失。
+- `check_com_latebind_guard.ps1` 新增形状钉：Font 臂必须发 `vb6_ho_setVariantObject(out, fr)`，
+  改回 `setVariantDispatch` 就红（那等于把 23 + 3 条 miss 放回来）。
+- 本机 `test_collcall` / `test_collmiss` 全绿；`gates.ps1` 9/9；churn 763 行 changed=0
+  （只动 RTL 宿主模型，不动发码）。
+
+### 六、本刀**不**声称修好的那半句
+
+交出去的是 `vb6_UC_NewFont()` 现造的**默认档**字体代理（8.25pt / MS Sans Serif），不是控件
+自己的那一枚。因此：
+
+- `ctl.Font.Size` 现在**有值**（不再 NULL miss），但值恒是默认档，不会读出设计期给它设的字号；
+- `ctl.Font.Size = x` 写在一片崭新的记录上，**不落到控件**；
+- 推论：Charts2020 `ClsResizer` 的字体随窗口缩放（先记 `.Size * 100 / RatioAspect`，
+  Resize 时再写回）存量下来了但**还不改变外观**。
+
+真正对齐需要两件（下一刀）：① 宿主模型为每个宿主对象记一枚字体记录（按 HWND / UC 实例去重，
+不复用 `vb6_uc_fontOf` 那张只认字体的表）；② setprop 写完后叫 `vb6_UC_ApplyFontToWindow(obj, f)`
+把八档发到窗口（那位主人已在 `uc_controls.c`，不另造）。本刀只保证「接收者不再是 NULL」。
+
+## §11.99 宿主 Font 代理挂到控件上：读回设计期字号、写回落盘（第一百一十七刀）
+
+上一节留下的那半句，本刀补齐。
+
+### 一、读数（本机 x86，探针 = `czUI-main` 副本插两行 `Debug.Print`）
+
+探针位置：`czUI.ctl:1354-1356`（`txtEmbed.Font.Name/Size/Bold = m_Font*`）前后各印一次。
+
+| 编译 | before | after（写完 10pt / Segoe UI） |
+|---|---|---|
+| §11.98 之前（`C3_old`） | `size=` `name=` `bold=`（`.Font` 是 Empty） | 同左（写进空接收者） |
+| §11.98 | `size=8.25 name=MS Sans Serif bold=0` | `size=8.25 name=MS Sans Serif bold=0`（孤儿代理，写回不落盘） |
+| 第一百一十七刀 | `size=8.25 name=MS Sans Serif bold=0` | `size=10 name=Segoe UI bold=0` |
+
+`[C3_LATEBIND_MISS]` 条数不回退：Charts2020 / czFormDemo 本机实测仍为 **0 / 0**。
+
+### 二、病：代理是孤儿
+
+§11.98 交出的对象是 `vb6_UC_NewFont()` 现造的默认档（8.25pt / MS Sans Serif），而且**每次读都新造**：
+
+- `.Size` 恒 8.25，读不到控件设计期字号；
+- `.Size = x` 写在一片马上丢掉的记录上，控件不缩放 —— Charts2020 `ClsResizer` 的存（`.cls:107`）与放（`.cls:147`）两半都空转。
+
+### 三、修法：代理挂到六位既有主人上
+
+控件字体本来就只有一套存储与出口：`vb6forms_ctrl.c` 的
+`vb6_Get/SetControlFontName|Size|Bold|Italic|Underline|Strikethrough`（同一格 `VB6_CtrlFont` + `WM_SETFONT`）。
+本刀不新造第二份状态：
+
+1. `vb6_UCFontRec` 加 `owner`（HWND，0 = 设计期字体块 / PropertyBag 那枚）；
+   `vb6_HostObjRec` 加 `fontProxy`（每个宿主对象一枚）；
+2. `vb6_UC_NewFontForWindow(hwnd)`：造代理 + 记 owner + 用六位读侧填成控件**现值**（字号走
+   `vb6_GetControlFontSize` 的自存精确磅值，不从像素高度反推，所以 8.25 还是 8.25）；
+3. `vb6_UC_FontSyncFromOwner(p)`：`vb6_UC_FontField` 每次取字段前刷新 —— 静态路径
+   `ctl.FontSize = x` 改的是窗口上那张字，代理不刷就是旧值；
+4. `vb6_UC_FontCommit(p, name)`：`vb6_ComSetProp` 写完一档后交回**对应 setter**（落盘 + 存字）；
+   `Weight`/`Charset` 没有单档 setter，走整块 `vb6_UC_ApplyFontToWindow`。
+
+宿主 Font 臂改为按登记记录缓存（`h->fontProxy`），同一控件两次读是同一枚对象；
+字体分支不再 `vb6_UC_NewFont()` 现造。
+
+### 四、闸门
+
+- 探针三点读数见上表；`test_collcall` / `test_collmiss` 全绿；`gates.ps1` 9/9；
+  churn 763 行 changed=0（只动 RTL，不动发码）。
+- `check_com_latebind_guard.ps1` 的形状钉升级：Font 臂必须同时出现 `fontProxy` 与
+  `vb6_UC_NewFontForWindow`；改回 Empty 或每读现造就红。
+
+### 五、边界
+
+- owner 为零的字体（设计期块 / PropertyBag）行为与本刀前完全一致；
+- 同一控件上的 `ctl.Font` 与 `ctl.FontSize` 现在读写**同一格**（晚绑定走代理 → 六位主人，
+  静态路径直接走六位主人），不再出现两条路两个答案；
+- `Weight` / `Charset` 的写回会把当前八档整块发一次（IFont 在 GDI 里本来只有一个 hFont）。
+
+## §11.100 缺省 Instancing 的工程类也能装箱：`As Object` 收得下类实例（第一百一十八刀）
+
+### 一、读数
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| `tests\b190_scope` 的 `[C3_LATEBIND_MISS]` | 8（4 处 × 2 行：`DispView` + `ComGetProp`，全部 `kind=notdispatchable`） | **0** |
+| P3/P4（`As Object` 形参读字段） | 空 | `A1` / `A1` |
+| P9/P10（Object 变量读 `Label`） | 空 | `A-label` / `A-label` |
+| P6/P7/P8/P11/P12（`TypeName`） | 部分空 | `Nothing` / `B190A` / `B190B` / `B190A` / `B190A` |
+
+同族 9 个夹具（`b168_cvf`、`b169_cfw`、`b170_mrt`、`b171_slotarg`、`b172_paramslot`、
+`b173_udtarg`、`b183_intfield`、`b184_fieldw`、`b190_memberarray`）本机逐个编译运行：
+全部 exit=0、`miss=0`。
+
+### 二、病：一条判据答了两件事
+
+`Symbol::isCoClassTableEntry()` 一直同时回答：
+
+1. 这枚类能不能**对外 CoCreate**（BUG-4 口径：只有 MultiUse/SingleUse 该有 ClassFactory 项）；
+2. 这枚类能不能在运行期 coclass 描述表里找到 desc（装箱腿 `boxIntoLateSlot` 的闸门）。
+
+缺省 Instancing 的工程类在 VB6 里同样是 COM 对象（`As Object` 形参收得下、晚绑定读得动），
+但它被第 1 问的答案拉进了第 2 问：不在表里 ⇒ `classHasCoClassDesc` 为假 ⇒ 装箱腿交**裸**
+`vb6_cls_*` ⇒ `vb6_ComIsDispatchable` 判否 ⇒ `[C3_LATEBIND_MISS] kind=notdispatchable` 全链静默。
+
+### 三、修法：把两条判据拆开，表里补「不可创建」的行
+
+1. `Symbol::isLateBindClass()` = 所有类（接口除外）—— 「能不能装箱」只看这个；
+2. 收集器改按 `isLateBindClass()` 收，同时记 `CoClassInfo.registerable = isCoClassTableEntry()`；
+3. 行照发（装箱靠它找 desc），但 `progId` / `clsid` 两格发**空串**；
+4. `DllRegisterServer` / `DllUnregisterServer` 见空即 `continue`；`vb6_GetClassFactory` 按 CLSID
+   匹配（空串必然匹配不上）⇒ 私有类不会出现在注册表里；
+5. 装箱腿与 `As New` 字段的闸门改用 `isLateBindClass()`；
+6. **UserControl (.ctl) 必须留在闸门外** —— 它的 C 侧值是 HWND；把 `.ctl` 当类收进表，
+   `com_entry.c` 会去引 `.ctl` 里不存在的符号（`ucSlider_2022` 实测 LNK2019：
+   `_vb6_LabelPlus_tmrMOUSEOVER_Timer`）。三处同一条守卫：收集器
+   （`knownControlModuleNames_`）、装箱名单、`As New` 字段。
+
+实测面：`tests` 下 423 份 `.cls` 里 18 份缺省 Instancing（`b168..b190` 那族），
+真语料按 §B187 的普查全部带 Instancing ⇒ 存量工程产物不动。
+
+### 四、闸门
+
+- `LateBindMissAllow` 删掉 `'B190' = 8`（现在表里只剩负控 `B446`）—— 期望恰好 0；
+- B190 12 个探针值与同族 9 夹具见上；`gates.ps1` 9/9；
+- churn 763 行 **changed=3**：`tests/b190_scope/B190.vbp`（预期：多出 B190A/B 两行 desc
+  + 四处装箱）、`tests/b216_slot/B216d.vbp`、`tests/iface_wrap/IfaceWrap.vbp`（同一形状）。
+  其余 760 行不动 —— 真语料类全带 Instancing，本来就是表内行。
+
+### 五、随刀改正的旧针（b216）
+
+`tests\b216_slot` 原来把「表外那一档」当正确答案钉住：N1/N2/N3 读 `tn=Object`，并且
+发码针强求 `vb6_FindCoClassDesc("B216Plain")` **不在场**。这与 VB6 语义相祀：
+`B216Plain.cls` 只是没有 Instancing（= Private），同一工程里 `New` 出来的实例
+`TypeName` 就是类名，不是 `Object`。本刀实测：
+
+```
+N1-plain-inlineNew-tn=B216Plain isNothing=False
+N2-plain-moduleNew-tn=B216Plain isNothing=False
+N3-plain-variant-tn=B216Plain
+```
+
+于是三枚读数随之改正；发码针改成 `b216_slot_never_boxes_bare_instance`（“裸实例进槽”
+仍是 0），并把 plain 三形也钉进 `b216_slot_stations_ask_one_owner`；
+`check_object_slot_boxing.ps1` 的 B2 改钉拆分后的两间：`isCoClassTableEntry` 消费点**恰好 1**
+（只有 `registerable` 那一枚标记），`isLateBindClass` 消费点**恰好 3**。
+
+### 六、边界
+
+- 私有类不注册、不可外部 `New`；这一行 desc 只服务 IDispatch 装箱；
+- 已是私有类的字段/形参早绑定那一半不变（仍走 `vb6_cls_*` 直读）；只有跨 `void*` / Variant 槽
+  的那一步现在会包一层真 IDispatch；
+- `PublicNotCreatable` 的对外可见性不变（它本来就不该可创建）。
+
+## §11.101 晚绑定结果的静态类型与 `Single` 的字符串形（第一百一十九刀）
+
+### 一、读数（Charts 2020，用户点名的两处）
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| ucTreeMaps 每个色块的项名 | 一个都不显示 | 全部显示（WhatsApp / Youtube / Pinterest / Wikipedia / Twitter / Instagram） |
+| ucPieChart2 数据标签 | `23.7000007629395%` | `23.7%` |
+| 探针 `.temp/k122/pct.bas` | `single=23.7000007629395`、`pointthree=0.300000011920929` | `single=23.7`、`pointthree=0.3`，Double / Variant 两行逐字节不变 |
+
+### 二、病 A：晚绑定调用的结果是 **Variant**，不是对象
+
+`ucTreeMaps.ctl:1531/1533` 是 `DrawText(..., m_Serie(i).Labels(j), ...)`；`Labels` 是
+`Collection`，`Labels(j)` 走 `vb6_ComCall(..., L"Item", ...)`，交回的是**堆上 `VARIANT*`**。
+发码侧 Object 那一支按「声明类型是对象」把它装成
+`{vt=VT_DISPATCH, pdispVal=<VARIANT*>}` —— 等于把 VARIANT 结构体地址当 IDispatch 递下去，
+控件里 `StrPtr(text)` 读到的是 `vt` / 保留字段 ⇒ 项名一个都画不出来（控件自己的诊断一直只在
+等值，所以从 .ctl 源码看不出毛病）。
+
+### 三、修法 A：Object 臂认出「晚绑定结果」就不再二次装箱
+
+`cgen_expr_call_arg_emit.inc` 的 Object 臂在装箱前先看实参的**裸脸**：`vb6_ComCall(` /
+`vb6_ComCallByDispid(` / `vb6_ComGetProp(` 三形 ⇒ 改发
+`&((vb6_VARIANT[]){vb6_VariantFromComResult(<call>)})[0]`，整枚 Variant 值原样递下去。
+所有权交给 `vb6_VariantFromComResult`（与 `boxToVariant` / Fix 113l 同一条口径），
+刻意不登记 `boxTempsToClear_` —— 那条道的 authority 仍是两站（knife 121 + 第一百七十二刀站E）。
+
+### 四、病 B：`Single` 的隐式字符串化走了 Double 的格式
+
+`wrapToBSTR` 里 `case Vb6Type::Single:` 与 `Double` 共用 `vb6_CStrDbl` ⇒ Single 的二进制残差
+被原样打出来（`23.7` 存成 `23.7000007629395`，`0.3` 存成 `0.300000011920929`）。VB6 的
+`CStr(Single)` 是 **7 位有效数字**，与 `CStr(Double)` 的 15 位不是同一个函数。
+
+### 五、修法 B：`Single` 走 `vb6_CStrSingle`
+
+`cgen_expr_binary_util.cpp` 的 `wrapToBSTR` 把 `Single` 从 `Double` 那一格拆出来，改发
+`vb6_CStrSingle`（RTL 早已有这一档，只是发码侧没接）。
+
+### 六、闸门
+
+- `gates.ps1` 9/9 绿；四道邻居 `check_object_slot_boxing.ps1`（装箱站点 / 三站 / 借用引用
+  逐格不动）、`check_com_latebind_guard.ps1`、`check_box_temp_reclaim.ps1`（decl=10 / clear=9 /
+  unreclaimed=1 不变）、`check_variant_i8_coverage.ps1` 全 PASS；
+- churn 763 行 **changed=7**：`tests/Charts 2020/Proyecto1.vbp` 与 `ucChartArea` / `ucChartBar` /
+  `ucPieChart` / `ucTreeMaps` 四份子工程（Single 字符串形），`tests/ctrlrichtextbox/RtfApp.vbp`、
+  `tests/test_memdim.bas`（同一形状）；其余 756 行不动。
+
+### 七、边界与随手记账
+
+- `vb6_CStrSingle` 只改**隐式**字符串化（`&` 拼接 / `CStr` 腿）；显式 `Format$` 一档不动；
+- 整数百分比在 VB6 里就叫 `16%`（`CStr(16!)` 不带 `.0`），本刀不改这条语义 —— 要「一律一位
+  小数」得由 .ctl 自己 `Format$(Percent, "0.0")`，不是编译器的活；
+- **量法附注**：本机屏幕 DPI = 120。`PrintWindow` 那套截图脚本若不先
+  `SetProcessDpiAwarenessContext(-4)`，`GetWindowRect` 交的是虚拟化后的 96 口径矩形 ⇒ 位图比
+  真窗口小 20%，看着像「图没画全」（本轮 ucChartArea2 就是被它冤枉的）。以后截图脚本一律先声明
+  per-monitor v2。
+
+## §11.102 UC 的 TextWidth/TextHeight 跟真屏 DPI 量字（第一百二十刀）
+
+### 一、读数（Charts 2020 · ucPieChart2，用户点名「数字对了但没有百分号 %」）
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| ucPieChart2 五个数据标签 | `23.1` `30.9` `15.3` `14.1` `16.6`（末尾 `%` 全被切掉） | `20.7%` `21.1%` `11.4%` `22.8%` `24%`（全部完整） |
+| 本机 `UserControl.TextWidth("0000000000")` | 60（11px 口径 = 96 DPI） | 75（14px 口径 = 真屏 120 DPI） |
+| `tests/ve_units` | U-SW/U-TW/U-TH 全 True | 全 True（判据是「缇型 = 像素型 × TwipsPerPixelX」，与 DPI 无关） |
+
+### 二、病：量字和画字用了两个 DPI
+
+控件里画字一律是 `MulDiv(oFont.Size, GetDeviceCaps(hDC, LOGPIXELSY), 72)`（Charts 2020 的
+`ucPieChart` / `ucChartArea` / `ucTreeMaps` 三处 `DrawText` 都这么写）；而
+`vb6_uc_measureText` 造度量字体时**恒传 96**（Fix 113k 的旧结论：换真屏 DPI 反而把 Charts
+的图例/轴标签排布推坏 —— 那一版两侧只对上了一半，所以旧结论不成立）。
+
+120 DPI 上比值 14/11 ≈ 1.27：`TextWidth` 比实际画出来小 25%。控件自己拿 `TextWidth` 算标签框
+（`ucPieChart.ctl:1325` `.TextWidth * 1.3`）与标题行高，框就正好差几个像素 —— GDI+ 居中排布时
+最后一个字形整枚被裁掉，于是 `{P}%` 只剩数字。
+
+### 三、修法：量字走调用方给的真屏 DPI
+
+`vb6rtl_com.c::vb6_uc_measureText` 里把两处字面 `96` 换成 `GetDeviceCaps(hdc, LOGPIXELSY)`
+（取不到才回 96）。「八档 → LOGFONT」仍问唯一主人 `vb6_UC_FontLogFont`，本刀只换 DPI 那一格。
+
+### 四、判据
+
+- Charts 2020 真跑（`.temp\k119\charts_dpi_180317\Proyecto1.exe`，DPI=120）：五个标签的 `%`
+  全部回来；同一张图上 ucTreeMaps 项名、ucChartArea1/2 的图例与轴标签、ucChartBar1/2 的
+  类别名均在位；
+- `tests/ve_units` 真跑：`U-RAW tw=540 pix=36 swT=2400 swP=160`、`U-TW/U-TH/U-SW/U-CTX/U-HW/
+  U-CNT/U-ARR/U-ARREVT/U-ARRCLICK/U-ARRDBL/U-ARREXT/U-PMOVE` 全 True、`U-DONE`；
+- `tests/ucTreeView` 真跑：节点图标（Facebook / Instagram / Meta / WhatsApp）与文字、右侧
+  属性页排版逐枚照旧；
+- `gates.ps1` 9/9 绿；RTL-only 刀 ⇒ emit-manifest 763 行**零移动**（无 登记 提交）。
+
+### 五、边界
+
+- DPI=96 的机器上 `GetDeviceCaps` 就是 96 ⇒ 取值与改前逐字节相同，CI 那 22 格口径不动；
+- 只动 **UserControl** 的那一对；普通控件走 `vb6_ControlMeasureTextPx`（按 HWND 取字体）未动；
+- 本刀不改 `CStr(Single)` 的位数语义（整数百分比仍叫 `16%`），要「一律一位小数」得由 .ctl 用
+  `Format$(Percent, "0.0")`。
+
+## §11.103 私有类实例跨 void* 槽：TypeOf … Is 与 Set 的引用计数归属（第一百二十一刀）
+
+### 一、读数（探针 `.temp\k121\typeprobe`，私有类 `TofC` 无 `Instancing`）
+
+| 相 | 改前 | 改后 | VB6 |
+|---|---|---|---|
+| `TypeOf o Is TofC`（Object 槽） | False | **True** | True |
+| `TypeOf v Is TofC`（Variant 槽） | False | **True** | True |
+| `ByVal Item As Object` 形参里 `TypeOf Item Is TofC` | False | **True** | True |
+| `TypeOf a Is TofC`（原生类变量） | True | True | True |
+| `TypeOf o Is Object` / `TypeOf Nothing Is TofC` | True / False | True / False | 同 |
+| `TypeName(o)` / `TypeName(v)` | TofC / TofC | TofC / TofC | 同 |
+| 双槽 `Set s1 = New : Set s2 = s1 : Set s1 = Nothing` | 清 s1 即 Terminate，s2 悬垂（`label=""`、`seed=0`、stderr `C3_LATEBIND_MISS kind=notdispatchable`） | 清 s1 不销毁、`s2.label` 仍 `C-label`；清 s2 才 Terminate 一次 | 同改后 |
+| 三槽 `t1/t2/t3` | 清第一枚即销毁，后两枚静默 | t1、t2 清掉都不销毁，t3 清掉才 Terminate | 同改后 |
+| 单槽 `Set q = New : Set q = Nothing` | Terminate 1 次 | Terminate 1 次 | 同 |
+
+### 二、两个病
+
+**甲｜TypeOf 恒假。** `visit(TypeOfExpr&)` 在「目标是工程类、但声明类推不出」（Object / Variant 槽、
+`ByVal Object` 形参）时落到 `vb6_TypeOf` —— 那个出口是 `vb6rtl_conv.c` 里只认 Picture 的桩，其余
+`return 0`。同一枚对象的 `TypeName` 却已经答对类名 ⇒ 判据不是缺，是没人问。
+
+**乙｜`Set` 只拷指针。** `cgen_setlet_set_rhs.inc` 兜底那条发 `target = value; /* Set */`：不取引用，
+也不退旧值。于是两枚槽只持一枚引用（清任意一枚就销毁对象、另一枚变悬垂），而槽里原有值时再 Set
+一次 = 裸覆写泄漏（同一条兜底的两面）。
+
+### 三、修法
+
+- **甲**：新增 `vb6_TypeOfProject(obj, L"类名")`（`vb6rtl_conv.c`），身份只问一位主人
+  `vb6_ComObject_ClassNameOfAny`（`vb6comserver_obj.c`）：先问包装器自报类名
+  （`vb6_ComObject_ClassNameA`，与 `TypeName` 同源），再问 512 格反查表
+  （`vb6_FindProjectClassDesc`，只比指针不解引用）。codegen 只在「项目类 + 声明类推不出」这一格
+  发它；声明类静态档、接口 QI、Picture 档一字未动。
+- **乙**：兜底改成 VB6 三步 —— `取引用 → 退旧值(置 NULL) → 写新值`。顺序是硬口径（先取后放 ⇒
+  `Set a = a` 安全）。两枚闸都在 RTL：`vb6_ComAddRefDispatch` / `vb6_ReleaseObject` 都先问
+  `vb6_ComIsDispatchable`（HWND / 裸工程实例 / 伪 vtable 全跳过）⇒ 原先裸拷贝的那几档行为不变。
+
+**第一版教训（实测，留档）**：无条件的「一律 AddRef」是错的 —— 右值若自带对价引用（`New`、调用
+形态、新建包装器 `vb6_ComObject_From*Instance`），那一枚本来就归槽所有，再 claim = 每发净 +1。
+实测全场 `term=0`，连 `Set q = New TofC : Set q = Nothing` 都不销毁。现按「只对裸槽标识符取引用，
+退旧值对所有形状都做」收口。
+
+### 四、判据
+
+- 探针 23 相：上表「改后」全中；stderr 为空（改前两行 `C3_LATEBIND_MISS` +
+  `property "Label" not found`）；
+- `gates.ps1` 9/9 绿（含 `check_manifest_coverage` 763 行、`check_rtl_embedded` 138 资源逐字节）；
+- emit-manifest 763 行 **changed=183**（全局 Set 站点换形，其余不动）。
+
+### 五、边界
+
+- 派生类按基类名问仍答 False（与 Fix 193 那条静态档同一个假阴性方向；真要链条得给每个类加运行时
+  类型字段）；
+- 外部 IDispatch / VB 控件 / 字体 / 宿主 HWND 一律仍答 False（表外答案，与改前同向）；
+- `Set` 取引用只认**裸槽标识符**；成员访问（`me->F`）与真调用形态维持裸拷贝（未量，不猜）；
+- 局部对象格仍不在过程出口放手（§B164 那族），本刀不动。
+
+## §11.104 声明档工程类槽的 `New` 交码形状：名字撞车 → 拥有型包装器进 typed 槽 → 实例永久存活（第一百二十二刀）
+
+### 一、读数（探针 `.temp\k122\shape`、`.temp\k122\fieldprobe`）
+
+同一句 `Set <声明档工程类槽> = New FC`，同一个工程里发成两种形状，差别只在**变量名**：
+
+| 源 | 交码 |
+|---|---|
+| `Dim k1 As FC : Set k1 = New FC` | `k1 = Unbox(FC_New())` —— 裸实例，正确 |
+| `Dim b As FC : Set b = New FC` | `b = Unbox((void*)FromInstance(desc, FC_New()))` —— 拥有型包装器 |
+
+`b`/`a` 撞上 `FBox` 的 `Public A/B As Object` 字段名，`k1` 不撞。
+
+后果（`fieldprobe` 的 C0/C3 臂）：改前 `Set a = New FC : a.Seed=31 : Set a = New FC` 交
+`C0 term=0`，seed=31 **全程无 Terminate**（旧实例永久存活）；改后 `[FC.Terminate seed=31]` 紧接
+`C0 term=1`，过程出口两枚 seed=0 各拆一次，全场四枚归零。
+
+机理在 RTL 那一行：`vb6_cls_FC_Release` 里 `if (me->__comObj != NULL) return 0UL; /* wrapper owns
+ teardown */` —— 包装器 `ownsInstance=1` 但**没有任何人持有它**（槽里装的是 Unbox 回的裸实例），
+于是类引用计数归零也不拆、包装器自己也没人放。
+
+### 二、成因
+
+`lateBoundSlotTarget()` 的第二臂用 `knownObjectVars_.count(targetLower)` 答「这格是不是泛对象槽」，
+而那张表里混着**未限定**的类 `As Object` 字段名 —— 局部名一旦撞上就误答 true：`boxIntoLateSlot` 把
+`New` 包成拥有型，typed 槽随后又 Unbox 回裸实例，包装器于是失主。
+
+### 三、修法
+
+`lateBoundSlotTarget()` 加一条前置闸：`node.target` 的 `inferClassTypeOfExpr` 非空（声明档是工程类）
+⇒ 这一格不是泛对象槽，直接 false。判据问 AST，不问名字表：`As Object` / `Variant` 拿不到类名时
+照旧落到原臂，行为不变。
+
+### 四、判据
+
+- 探针：C0/C3 臂 Terminate 全归位；`shape/Shape3` 的 `b` 与 `k1` 发同一形状；
+- `gates.ps1` 9/9 绿（exe sha=`50e95c561939`）；
+- emit-manifest 763 行 changed=1：只有 `tests/b190_scope/B190.vbp` 换形（16732 → 16652 字节，
+  消失的正是塞进声明档槽的那几分 `FromInstance(desc, …)` 包装），其余 762 行不动。
+
+### 五、边界（在册，本刀不碰）
+
+- **污染源本身没清**：本刀只在装箱站加闸，`knownObjectVars_` 里为什么会有别的类的字段名（driver
+  预扫描往那张表塞未限定名）待查；同一污染还可能影响其它 `knownObjectVars_` 读者。
+- `TypeName(x.A)`（字段槽里装裸 `vb6_cls_X*`）仍答 "Object"：`vb6_TypeName` 那句注释明写
+  「不该把 512 格反查表拉来当运行期读者 —— 那条口径待拍」，本刀按记录不越位。
+- 声明档槽 `Set x = Nothing` 只发 `x = NULL`、不发 `Release`，属 §B164 那族，未动。
+
+## §11.105 借用型包装器的类引用归属：`__comObj` 回填不能当托孤（第一百二十三刀）
+
+### 一、读数（探针 `.temp/k122/fieldprobe` 的 `FProbe7` / `FProbe6`）
+
+`FProbe7`（**不**读 `TypeName`，只让 `Set` 那一趟走完）：
+
+```
+E1 term=0            ' Set x.A = y           —— 借用型包装器建好
+E2 term=0            ' Set x.A = Nothing    —— 包装器拆，实例另有主人（y），不拆
+  [FC.Terminate seed=51]
+E3 term=1            ' Set y = New FC       —— 旧 y 退到 0，当场 Class_Terminate
+```
+
+trace（`C3_COM_RC_TRACE=1`）：`FROM-BORROW W=… rc=1` → `RELEASEOBJ p=W` →
+`RELEASE W cnt=0 owns=0` ⇒ 包装器归零那条路径**完整走通**。
+
+同一句话在 `FProbe6`（多读两枚 `TypeName(x.A)`）里改前/改后：
+
+| 台面 | 改前 | 只加 `field voidptr` 臂（RTL 未动） | 本刀（RTL + desc） |
+|---|---|---|---|
+| `D1 name=` | `Object` | `FC` | `FC` |
+| seed=51 Terminate | 有（`D2 term=1`） | **没有**（`D2 term=0`，此后永不） | 仍没有（见「五、边界」） |
+
+中间那一列是「把装箱放开但没给借用型包装器记账」的直接后果：**装箱那一瞬间就把这个实例的退场永久堵死**。
+
+### 二、成因
+
+生成类的 `vb6_cls_X_Release` 里：
+
+```c
+if (me->__comObj != NULL) return 0UL;   /* wrapper owns teardown */
+```
+
+而借用型包装器（`FromBorrowedInstance`，`ownsInstance = 0`）当时**两头都不在账上**：建的时候不取类引用、
+拆的时候不清 `__comObj` 也不退引用（只 `*(void**)vb6Instance = NULL`）。于是：
+
+1. typed 变量 `y` 退到 0 时，`Release` 见 `__comObj != NULL` ⇒ 认为「包装器负责拆」，返回；
+2. 包装器那一头按设计**不动实例**（借用），也从不退引用；
+3. 剩下的一枚引用谁也碰不到 ⇒ 实例永久存活，`Class_Terminate` 永不发生。
+
+### 三、修法
+
+1. `vb6_CoClassDesc` **末尾**追加两格：`classAddRef` / `classRelease`（`NULL` = 不取不退 = 改前行为）。
+   放末尾的理由与 ai/022 B16 那两格同一条：`{0}` 空桩与少写一格的旧写法自动得 `NULL`，不会错位。
+2. `emitCoclassRow` **无条件**发这两格（每类都有自己的 `vb6_cls_X_AddRef/_Release`），
+   `com_entry.c` 的前向声明区同步补两条 `extern`。
+3. `FromBorrowedInstance` 新建包装器时取一枚类引用（复用既有包装器那条不改：那一枚已经记在旧包装器账上）。
+4. `ComObj_Release` 的 `owns = 0` 分支：**先摘回填、再退引用** —— 顺序是硬口径，不先摘就会把最后一次退场
+   又挡回去（第 1 条那个闸认的就是这个字段）。这一退可能是实例最后一枚，于是当场 `Class_Terminate`。
+5. 发码侧：`lateBoundSlotTarget()` 恢复 `field voidptr` 那一臂（§11.104 的 `inferClassTypeOfExpr` 闸在前），
+   于是 `Set <非 me 接收者>.<对象字段> = <声明档工程类值>` 走装箱站。
+
+### 四、判据
+
+- `FProbe7`：`E3 term=1` 且 `[FC.Terminate seed=51]` 出现在 `Set y = New FC` 那一行；
+- `FProbe4`（knife 122 的 C0..C3 臂）读数不变：`C0/C1/C2 term=1`、`C3 term=2`、seed=31/41 各拆一次；
+- `gates.ps1` 9/9 绿（exe sha=`1e55cd94c7d7`）；
+- 5 份静态普查全 PASS（object_slot_boxing / class_refcount_authority / projclass_scan_bound /
+  g4_receiver_class_gate / legacy_view_arg_owners）；
+- emit-manifest 763 行 **changed=0**：desc 表只在真发 COM 入口的产物里出现，`Set` 臂只碰成员对象槽，
+  存量夹具一行不动。
+
+### 五、边界（在册，本刀不碰）
+
+- **`TypeName(<对象槽>)` 的临时 Variant 不退引用**：`vb6_TypeName(vb6_VariantFromValue(vb6_VariantFromValue(x->A)))`
+  这一形里外层只是过手、内层 `vb6_VariantObject` 记了一枚 `AddRef`，调用结束后没有 `vb6_VariantClear` ⇒
+  每读一次漏一枚包装器引用（trace 里 `ADDREF cnt=2` 之后再无对应 `RELEASE`）。这正是 `FProbe6` 的
+  `D2 term=0`：`Set x.A = Nothing` 把槽退到 1（漏的那一枚还在），类引用计数于是到不了 0。
+  与本刀的类引用归属无关 —— 把 `TypeName` 那两句挪掉（`FProbe7`）归属就是对的。归下一刀（124）：
+  builtin 实参临时 Variant 的生命周期，影响面比本刀宽（所有 `TypeName(o)` 都漏），不并进来。
+- `TypeName` 的 512 格反查表口径（§11.104 第五条）照旧未动。
+- 借用型包装器的 `Is` 同一性仍靠 `__comObj` 回填复用；回填现在只是「同一性缓存」，不再是「托孤」——
+  它的清理由包装器自己的拆解负责。
+
+## §11.106 只读谓词的实参不再偷取对象引用：`TypeName` 一类调用的临时 Variant 归属（第一百二十四刀）
+
+### 一、读数（探针 `.temp/k124/probe`、`.temp/k122/fieldprobe/FProbe6`）
+
+`FProbe6` 同一份源的三态：
+
+| 台面 | 第一百二十二刀后 | 第一百二十三刀后 | 本刀后 |
+|---|---|---|---|
+| `D1 name=TypeName(x.A)` | `Object` | `FC` | `FC` |
+| seed=51 的 Terminate | 有 | **没有** | **有** |
+| `D2 term=` | 1 | 0 | 1 |
+
+本刀前的 trace（`C3_COM_RC_TRACE=1`）：`FROM-BORROW rc=1` → `ADDREF cnt=2` → `RELEASE cnt=1`
+—— 那一枚 `AddRef` 之后再无对应 `Release`，于是 `Set x.A = Nothing` 只能把槽退到 1，类引用计数到不了 0。
+
+`K124` 探针（修后）：`T1 FC True` / `T2 FC True` / `T3 String 8` / `T4 False True` /
+`T5 FC True` / `T6 Long() 8195 True True`（数组与 Null 两档也逐位对）。
+
+### 二、成因
+
+`vb6_TypeName` / `vb6_VarType` / `vb6_IsObject` / `vb6_IsNull` / `vb6_IsEmpty` / `vb6_IsArray` /
+`vb6_IsDate` / `vb6_IsError` / `vb6_IsNumeric` 的形参都是**按值** `vb6_VARIANT`，而发码把实参
+包成表达式里的临时：`vb6_TypeName(vb6_VariantFromValue(vb6_VariantFromValue(x->A)))`。
+`vb6_VariantFromValue` 的指针档是 `vb6_VariantObject`，按 Fix 024 **必须 AddRef**（因为 Variant 析构
+会 Release）；而这枚临时是表达式里的右值，**没人会 `vb6_VariantClear` 它** ⇒ 每读一次漏一枚引用。
+对象是包装器时，那一枚就是包装器的命：槽清空后仍 rc=1。
+
+（同一族里只有对象档会漏：`wchar_t*` 的 `vb6_VariantString` 本来就只存指针不拷贝，标量档不拥有任何东西。）
+
+### 三、修法
+
+1. RTL 加一对**借用档**：`vb6_VariantObjectBorrowed`（`VT_DISPATCH` + 指针，不 AddRef）与它的
+   `_Generic` 入口 `vb6_VariantBorrowFromValue`（臂表与正式档逐条对齐，只把 default 换成借用的那枚）。
+2. 发码：`cgen_expr_call_builtin_argtype.inc` 里新增一站 —— `callee` 是上述九枚之一时，把每个实参
+   **最外层的装箱名前缀** `vb6_VariantFromValue(` 换成 `vb6_VariantBorrowFromValue(`（外层那两层都
+   换；嵌套子表达式里的装箱一律不动，它们自有一套所有权）。
+3. `scripts/gen_variant_slot_prefixes.ps1` 重跑（生成物 61 → 62 名，多出的就是 `vb6_VariantObjectBorrowed`）。
+
+能借的根据：这九枚 RTL 体只读 `vt` 与 payload，既不存也不清（`vb6rtl_conv.c` 逐行可对）；实参的
+生存期覆盖整个调用。借档**不分配任何东西**，也就不存在「谁退」那一问。
+
+### 四、判据
+
+- `FProbe6`：`D1 name=FC term=0` → `[FC.Terminate seed=51]` → `D2 term=1`，出口再拆 seed=0；
+  trace 里不再出现无主的 `ADDREF`；
+- `K124` T1..T6 六臂全对（含数组 `Long() / 8195 / True` 与 `Null`）；
+- **A/B 实证**（`.temp/k124/ab`，四份改过的夹具：test_variant、test_vbnet_ext、GCCache、CtrlState）：
+  把新产物的 `vb6_VariantBorrowFromValue(` 改回原名后与基线产物**逐字节相同**；借用档出现次数
+  12/7/6/6 —— 即改动只有这一个名字；
+- `gates.ps1` 9/9 绿（exe sha=`dab63bf72166`）；5 份静态普查全 PASS；
+- emit-manifest 763 行 changed=122：全部是「含这九枚谓词且有指针/对象实参」的产物，形状如上一行。
+
+### 五、边界（在册，本刀不碰）
+
+- `struct tagSAFEARRAY*` 那一臂仍用正式档 `vb6_VariantFromParamArray`（它自己拷贝、自己拥有），
+  借用档没有覆盖它 —— 那条路的临时 Variant 归属是另一个话题。
+- 任何会**存**实参的出口（`Array(...)`、`Collection.Add`、形参是 ByVal Variant 的用户过程）
+  一律不用借用档：那一枚引用是它们要拿走的，借了就是悬空。
+- 用户过程（非内置）的 ByVal Variant 形参仍然走正式档：漏不漏归于被调方清不清，与本刀无关。
+
+## §11.107 #412 已关门：`Set <工程类实例>` 进 Object 槽之后晚绑定是真能用的（第一百二十五刀）
+
+### 一、为什么这一刀是「登记」而不是改代码
+
+台账里 #412 一直是开口的（B190 那组里的 P3/P4/P7-P12 读数就被它顶着，故意没钉成针）：
+「`Type=Exe` 工程里 `Set 工程实例` 进 Object 槽从不发包器 ⇒ Object 那一路晚绑定全落空」。
+第一百二十二〜一百二十四刀把**装箱站**（§11.104 的 AST 闸、§11.105 的类引用归属）、
+**谓词实参**（§11.106 的借用档）收拾完之后，这一条自己就不成立了 —— 本刀只把它量下来、
+钉成门禁，不改一个字的发码。
+
+### 二、读数（探针 `.temp/k125`）
+
+同一份源在两台架构上逐字相同：
+
+```
+C3ProbeB412-P1=B412Item      ' TypeName(o)       —— Object 槽里是包装器, 答得出类名
+C3ProbeB412-P2=22            ' o.Seed = 22 : 读回 —— 晚绑定 Set 真进了实例
+C3ProbeB412-P3=B412Item      ' Set gSlot = o    —— 模块级 Object 槽同一形状
+C3ProbeB412-P4=23            ' gSlot.Seed = 23
+C3ProbeB412-P5=23            ' Set o = Nothing  —— typed 变量那一枚不受影响 (借用型)
+C3ProbeB412-P6=23            ' Set gSlot = Nothing
+C3ProbeB412-TERM=23          ' 只拆一次, 在最后一枚 Set a = Nothing 之后
+C3ProbeB412-DONE
+```
+
+另一枚探针 `VJ`（`Dim y As FC : Set o = y`，无模块级槽）同读数：`J1 FC` / `J2 22` /
+`J3 term=0`（拆包装器不退实例）/ `[FC.Terminate seed=22]` / `J4 term=1`。
+
+### 三、夹具与判据
+
+夹具 `tests/b412_objslot/`（`B412Item.cls` + `B412Main.bas` + `B412ObjSlot.vbp`，
+`Type=Exe`）：P1..P6 + TERM + DONE 共 8 枚针，x64 与 x86 各跑一遍。
+钉的是三件事：① Object 槽里那枚包装器答得出类名；② 晚绑定 Set/Get 真到实例；
+③ 槽的拆解不影响另一枚主人（typed 变量），也就是 §11.105 那对取/退引用在 Object 槽这一形上也成对。
+
+### 四、边界
+
+- 本刀只钉 `Type=Exe` 的 Object 槽；`As Object` 的**外部** IDispatch（`CreateObject`
+  那一族）的晚绑定另有出口，不在本夹具范围。
+- `knownObjectVars_` 的污染源（§11.104 第五条「待查」）本刀也量了一遍：本轮试了
+  `Dim b As FC`（撞 `FBox.B`）在成员读/`Is Nothing`/`Is`/`With`/数组下标五形，与不撞名的
+  `k1` / `zz` 对照发码**逐字相同**（声明驱动的权威都排在名字表之前），没找到别的读数；
+  仍留作在册，不并进本刀。
+
+## §11.108 `knownObjectVars_` 的污染源找到了：类模块的 `Public` 字段被当成「模块级变量」注入（第一百二十六刀）
+
+### 一、源头
+
+§11.104 第五条一直挂着的「名字表里混着别的类的成员名」，本刀用一枚带标签的登记口读数
+（`C3_K126`，`.temp/k125/k126b.err`）定到了确切位置 —— 跨模块登记站
+（`cgen_base_generate_crossmod.inc` 的 `sym->isExternal && kind == Variable` 那一圈）：
+
+```
+[K126 X] mod=FC     var=a type=Object src=FBox    <-- FBox.cls: Public A As Object
+[K126 X] mod=FC     var=b type=Object src=FBox    <-- FBox.cls: Public B As Object
+[K126 X] mod=FMain7 var=a type=Object src=FBox
+[K126 X] mod=FMain7 var=b type=Object src=FBox
+```
+
+stage 3.5 把**类模块的 `Public` 字段**也注成了消费模块的「外部模块级变量」（
+`isExternal=true, sourceModule=<类名>`），于是 `FBox` 的字段名进了 `FMain7` 与 `FC` 两个模块的
+`knownObjectVars_`。它们不是全局变量：裸名在消费模块里根本不可写，只有 `obj.A` 这种成员访问才成立。
+
+### 二、闸
+
+跨模块登记站的 Object 那一支加一条：源模块是类模块 ⇒ 不登记。
+（`sym->sourceModule` 解到 `SymbolKind::Class` 即跳过；标准模块的 Public Object 变量照旧。）
+
+读数：同一枚探针重跑，四行全变 `SKIP`；类模块**自己**的发码照旧（`FBox.cls` 里 `A`/`B` 仍是它
+自己的字段，走声明口那一臂）。
+
+### 三、没动的东西（回归面）
+
+| 读数 | 夹具 | 结果 |
+|---|---|---|
+| `E1 term=0` / `E2 term=0` / `[FC.Terminate seed=51]` / `E3 term=1` | FProbe7 | 与本刀前逐字相同 |
+| `D1 name=FC` / `[FC.Terminate seed=51]` / `D2 term=1` | FProbe6 | 同上 |
+| `T1..T6`（含 `T6 Long() 8195 True True`） | K124 | 同上 |
+| P1..P6 / TERM=23 / DONE | B412 | 同上 |
+
+全语料发码：765 行里 760 行逐字相同，只有那 5 行机器侧差（guisample x3 + TeeChartChartDisplay +
+ctrlmscomm，以 CI 那台为准）—— 也就是说这条闸在存量语料上**一行发码也不改**，它清的是名字表。
+
+### 四、钉住闸的上限（不让它过宽）
+
+夹具 `tests/b126_crossmod_objglobal/`（`B126M1.bas` 的 `Public gObj As Object` + `B126M2.bas`
+消费 + `B126Item.cls`）：`C3ProbeB126-A1=B126Item` / `A2=8` / `DONE`，双架构。发码侧 `gObj` 仍是
+`void*` + `vb6_ComSetProp(gObj, L"Seed", ...)` / `vb6_ComGetProp(...)`（Fix 089 那一臂留得住）。
+
+### 五、边界
+
+- 只拦「类模块的 `Public` 字段被当模块级变量」这一路；类模块自己内部的裸名（声明口登记的）不变。
+- 类模块字段符号本身仍留在符号表里（推理、成员表、跨模块类型查询都没动），本刀只改它在
+  `knownObjectVars_` 里的影子。
+
+## §11.109 腿④ 的第四档：局部泛对象槽（`Dim o As Object`）在过程出口放手（第一百二十七刀）
+
+### 一、缺口与读数
+
+`slotsToRelease_` 那张表里一直只有三档：接口薄指针（`isView`）、工程类实例（`clsName`）、
+数组载体（`isCarrier`）。**局部泛对象槽不在表里** —— 过程里现造现丢，包装器与它握着的那一枚
+类引用一起漏，`Class_Terminate` 永远走不到：
+
+```
+' 修前 (.temp/k127/localobj)
+　one done
+　one done
+　one done
+L1 end          ' 三次调用, 一枚 [K127Item.Terminate] 都没有
+
+' 修后
+　one done
+　[K127Item.Terminate]
+　…（三枚）
+```
+
+对照臂（同一份源、只去掉 `Dim o As Object` 那一格）：工程类局部（`Dim it As K127Item`）本来就会在出口
+放手 —— 所以漏的只有**泛对象那一档**，不是腿④ 整条（这也是为什么夹具里两种声明同处一室）。
+
+### 二、机制（三处，各一位主人）
+
+1. **登记口**（`cgen_localdecl.cpp` 的 `void*` 那一臂，与工程类 / 接口两档同处）：只认
+   声明名就是 `Object` 的那一档；`Static` / `Static Sub` 里那一格跨调用活着（C 侧 static 存储），
+   `WithEvents` 那一格另有主人 —— 两条都不登记。
+2. **出口发码**（`emitIvrefScopeRelease`）：`vb6_ReleaseObject((void**)&o);`。判据复用 Fix 191
+   那一道（`vb6_ComIsDispatchable`）：包装器 / 真 IDispatch 退一轮，裸工程实例指针与 HWND 只清槽
+   不越权；入口先清槽再放手（与 §11.105 那条次序同一口径）。
+3. **两条撤登**（`dropLateObjSlotRelease`）：
+   - `For Each` 的循环变量（`cgen_control.cpp`）：每一轮由循环自己写，元素那一枚归容器/迭代器，
+     出口放手 = 无对价的退；
+   - 这一格的**地址交给了外部 Declare** 的那一档：复用既有 `dropClassSlotRelease`（它按
+     「非 view」撤，正好覆盖本档）。
+
+### 三、风险臂量过（不是拍脑袋）
+
+| 形状 | 探针 | 读数 |
+|---|---|---|
+| `Set o = Held()`（工程内函数交回一枚泛对象） | `.temp/k127/neg` | `N1 keep` → `N2 still=K127Item seed=11`（不过退） |
+| `Set o = c.Item(1)`（Collection 元素） | 同上 | `N3 item=K127Item` / `N4 keep=K127Item`（不过退） |
+| `For Each oEach In c` | 夹具乙 | `A2-live=B127Item`（撤登生效，容器里那一枚还活着） |
+| 声明住在 `If` 括号里 | 夹具丙 | 编得过（提升到序言）+ 照样放手（`A3-terms=4`） |
+
+### 四、回归面
+
+- `tests/b445_refcount` 全夹具：针上的 13 条（W1–W10 / W38 / W39 / DONE）逐字相同；
+- FProbe7 / FProbe6 / K124 / B412 / B126 五族读数逐字相同（`E1..E3` / `D1..D2` / `T1..T6` /
+  `P1..P6` / `A1..A2`）；
+- 全语料发码：只有**带局部 `As Object` 的文件**各多出一行 `vb6_ReleaseObject((void**)&o);`，
+  其余行一字未动（登记那一刀的数字见下面的「登记」节）。
+
+### 五、边界
+
+- 只认声明名就是 `Object` 的那一档。宿主类局部（`Dim c As Collection` / `As Dictionary`）与外部
+  COM 局部同样会漏一枚包装器，但它们不在本档（需要先量清「那些槽里躺着的是不是借用」）—— 在册。
+- 模块级 / 类字段那一档不在本条腿上：本体退出时的整体拆除（VB6 关机时把全局对象置 Nothing）
+  是另一格机制，今天 `vb6_Exit()` 只调 `vb6_ComExit()`—— 在册。
+- `Exit Sub` / `Exit Function` 与正常出口走同一个 `vb6_proc_exit`，本档自动跟着（与腿④ 其余三档同一条路）。
+
+## §11.110 晚绑定实参打包后的「内容」放手：一个出口、三处裸 free（第一百二十八刀）
+
+### 一、缺口
+
+晚绑定那八个出口的实参是**堆上自造的 VARIANT**（`vb6_ComPackObject` / `vb6_ComPackVB6InstanceRaw` /
+`vb6_ComPack_<Cls>` …）：结构体是 `calloc` 的，内容里那一枚引用（或 BSTR）只有 `VariantClear` 会退。
+修前有三处收尾只 `free` 结构体、从不碰内容：
+
+1. `vb6_ComCallRcv` 的**宿主对象**岔口（`vb6_Host_Call` 之后）—— 内建 `Collection` 是宿主对象
+   （`vb6_uc_isColl`），所以 `c.Add o` 每次都从这里过；
+2. IUnknown `AddRef`/`Release` 的**合成**岔口（按名直发那一路）；
+3. `vb6_ComSetPropArgRcv`（`d.Item(k) = 值` 这一形）：值那一枚与索引参数一概裸 free。
+
+宿主集合那一头早就按「打包方会 `VariantClear`」写好了自己的对价（`vb6_coll_push` 里那句
+"对象档: 集合自己持有一份 —— 此前这里借用不计数, 打包方那次 VariantClear 就把包装器 free 掉了"，
+账 #305 §B165 第五十四刀加的 `vb6_ComAddRefDispatch`），所以这一族漏是**那一句对价落了空**，
+不是语义分歧。
+
+读数（`.temp/k128`，同一份源、只换二进制）：
+
+```
+' 修前
+G3 terms=1            ' c.Add o 之后 Set o = Nothing
+G4 terms=1 count=0    ' Remove 走完, 元素一枚 Terminate 都不打
+P3 terms=0 count=0    ' d("k") = o 之后 d.Remove "k"
+' 修后
+G4 terms=2 count=0
+P3 terms=1 count=0
+```
+
+### 二、机制（两条口径，各一位主人）
+
+- `vb6_ComDropPackedArgs(a, argc)`（既有）与 `vb6_ComDropPackedOne(pv)`（本刀新增，单枚）：
+  **内容问 `VariantClear`，结构体才 `free`**；
+- `VT_BYREF` 跳过：出参指向调用方存储，引用归调用方（这条判据与 `dp.rgvarg` 那一段一字相同）。
+
+三处站点全部改成调这两个口，`vb6_ComCallRcv` 主路（`dp.rgvarg` 浅拷贝那一段）本来就是这个口径。
+
+### 三、夹具与读数
+
+`tests/b128_argpack_release/`（`B128Item.cls` + `B128Main.bas` + `B128ArgPack.vbp`）：
+
+| 针 | 修前 | 修后 |
+|---|---|---|
+| `C3ProbeB128-A1-terms`（宿主那岔：`Collection.Add` + `Remove`） | 0 | **1** |
+| `C3ProbeB128-A2-terms`（真 IDispatch 那岔：`d("k") = o` + `d.Remove`） | 0 | **2** |
+| `C3ProbeB128-DONE` | ✓ | ✓ |
+
+x64 / x86 双架构同针。
+
+### 四、边界（在册）
+
+- `vb6_ComSetPropRcv` 自己那一条（`o.Prop = 值`，无索引）仍然是裸 `free`：它同时服务 Font / Extender
+  的**借用指针**写（`case 4: *(void**)efp = punkVal`，明写"不接管所有权"），放手口径要先量清
+  「借指针那几格谁持有」再动 —— 在册。
+- `vb6_ComSetRefRcv`（`Set o.Prop = x`）走的是借指针，不属本档 —— 在册。
+- 类字段（`Public Col As Collection`）在 `_Destroy` 里不放手（实测 `.temp/k128` KHaz：`F3 terms=0`），
+  那是腿⑤ 的字段档，不是实参打包 —— 在册。
+
+### 五、补（第一百二十八刀补）：宿主包装器那一档**不清内容**
+
+第一版把宿主岔（`vb6_ComCallRcv` 里 `vb6_Host_Call` 之后那一处）也接上 `VariantClear`，CI 当场红：
+job `Tests (vbp #8)` 的 `geomcache_x86` 报 `latebind-miss: GCCache 期望 0 条, 实到 12 条`。本机复现同一读数
+（`.temp/k128/gc_x86/gc.err`，12 条 `site=DispView` / `site=ComSetProp name="Width" ... kind=notdispatchable`），
+连带 GC18/GC19 两条针从 `True` 翻 `False`（`raw=3007,2003,1507,1401` / `200,82,134` —— 一条 Width 都没落地）。
+
+根因不在放手本身，而在**谁持有那枚包装器**：`vb6_ComPackObject` 对宿主对象（控件/窗体/集合/字体）发的是
+`vb6_UC_WrapHostObject` 现造的 `Vb6HostWrap`（`refs=1`），而宿主模型 `vb6_coll_push` 只对**工程类包装器**
+（`vb6_ComObject_IsVb6Wrapper`）调 `vb6_ComAddRefDispatch` —— 宿主包装器一格引用都不加，集合里那一枚是**借**的。
+修前那处裸 `free` 结构体，包装器本人留着，`collC(iC)` 读回还能用；接了 `VariantClear`，集合手里那枚当场被
+`HW_Release` free 掉，GC18 的 `With collC(iC) : .Width = 1234` 拿它就是一枚野指针。
+
+口径（两条出口，各按自己的持有方）：
+
+- 宿主岔改调 `vb6_ComDropPackedHostArgs`：`vb6_UC_IsHostWrap` 认得出是**我们包出来的那枚** `Vb6HostWrap` 时
+  只 `free` 结构体、内容留在原处（与 `uc_collection` 那一侧「集合自己持有一份」尚未配对相对）；
+  其余（真 COM / 工程类包装器）照旧走 `vb6_ComDropPackedOne` 的 `VariantClear`；
+- `vb6_UC_IsHostWrap`（`uc_hostmodel.c`）**从后往前**扫包装表：表只追加不撤、地址会被下一枚包装器复用，
+  最新的那条才是它的主人（§B165 第五十四刀那条 stale pair 的教训）；判据只认包装器本人，
+  真宿主对象（HWND / UC 实例 / 集合 / 字体）一个字段都不碰。
+
+读数（同一份源，只换二进制）：
+
+| 针 | 第一版（宿主岔也清内容） | 补后 |
+|---|---|---|
+| `geomcache_x86` latebind-miss | 12 | **0** |
+| `geomcache` / `geomcache_x86` GC18 | False | **True**（`raw=1234,1234,1234,1234`） |
+| 同上 GC19 | False | **True**（`raw=82,82,82`） |
+| `C3ProbeB128-A1/A2` | 1 / 2 | **1 / 2**（本刀的主体不动） |
+
+回归面逐字相同：`tests/b445_refcount`（W1–W39 + DONE）、FProbe7（E1–E3）、FProbe6（D1–D2）、K124（T1–T6）、
+B412（P1–P6 / TERM=23）、B126（A1–A2）、KOwn（G0–G4）、KHaz（F1–F3）。九门 9/9、语料 772 行不动
+（本刀只动 RTL，发码一字未变）。
+
+在册：宿主包装器进集合仍是「一枚只加不退的引用」—— 那是 `uc_collection` 元素自己不 Release 那一格
+（§11.110 边界同源），修前就是这样，不是本刀引入的。
+
+## §11.111 内建 Collection 的载体寿命：计数、元素出厂、包装器手里那一份（第一百二十九刀）
+
+### 一、缺口
+
+内建 `Collection` 的载体是 `calloc` 的一枚 `vb6_CollRec`，各槽里存的**直接就是它**（不是 `vb6_ComObject`
+包装器）。而 Set 那对出口都先问同一句判据：
+
+```c
+if (vb6_ComIsDispatchable(pUnk)) pUnk->lpVtbl->Release(pUnk);   /* vb6_ReleaseObject */
+if (!vb6_ComIsDispatchable(p)) return;                          /* vb6_ComAddRefDispatch */
+```
+
+宿主对象一律不可分派（首字段是 `tag`/句柄，不是 vtable），于是这一对**双双空跑**：
+`Set c = New Collection` 之后再怎么 `Set c = Nothing`、再怎么重新赋值，载体既不拆、
+里面的元素也一枚都不出厂。实测（`.temp/k129`，只换二进制）：
+
+```
+' 修前
+A1 terms=0        ' Set c = Nothing 之后 (集合里两枚元素, 应 2)
+A2 terms=0        ' 重新赋值丢掉旧载体 + 末了 Nothing (应 2)
+B  terms=0        ' 两枚槽指同一枚载体, 最后一枚退掉 (应 1)
+' 修后
+A1 terms=2 / A2 terms=2 / B terms=1
+```
+
+这一格就是第一百二十八刀量到的 `c.Add New X` 恒 `terms=0` 的根：那一刀把**实参**那一枚引用的
+放手补齐了（元素于是活在集合自己那一份引用上，与 VB6 一致），可集合自己**永远不死**，元素当然也
+永远不出厂。
+
+### 二、机制
+
+- `vb6_CollRec` 加 `int32_t refs`；`vb6_Collection_New` 出生即 `refs=1`；
+- `vb6_Collection_AddRef` / `vb6_Collection_Release` 是载体的唯一一对出口。Release 在 `refs`
+  退到 0 时：逐枚按 `vb6_Collection_Remove` **一字不差**的口径放手（`vb6_VariantValueFree` + 只对
+  `vb6_ComObject_IsVb6Wrapper` 那一档 `vb6_ReleaseObject`，键另放），再 free 三项、先撕 `tag`
+  再 free 载体（第二发 Release 不再认它）；
+- `vb6_ComAddRefDispatch` / `vb6_ReleaseObject` 各加一条 Collection 分支放在 `ComIsDispatchable`
+  **之前**——判据只有一句（`vb6_uc_isColl`），两处成对；
+- 集合套集合：`vb6_ComPackObject` 把宿主对象包成 `Vb6HostWrap` 时，若目标是内建 Collection，
+  替它**收一份载体引用**并给包装器打 `ownsTarget`；`HW_Release` 在包装器真死时把那份放回。
+  没有这一份，`Set inner = Nothing` 会在宿主那边还拿着包装器时就把载体拆了。
+
+### 三、夹具与读数
+
+`tests/b129_coll_lifetime/`（`B129Item.cls` + `B129Main.bas` + `B129Coll.vbp`）：
+
+| 针 | 修前 | 修后 |
+|---|---|---|
+| `B129-A-count`（`Set Nothing` 前 Count） | 2 | 2 |
+| `B129-A1-terms`（`Set Nothing` 拆掉两枚元素） | 0 | **2** |
+| `B129-A2-terms`（重新赋值丢旧载体 1 + 末了 Nothing 1） | 0 | **4** |
+| `B129-B-alive` / `B129-B-terms`（两枚槽同一载体：退一枚槽不许拆） | 1 / 0 | 1 / **5** |
+| `B129-C-inner`（集合套集合：inner 置 Nothing 后仍可用） | 1 | 1 |
+
+x64 / x86 双架构同针（x86 实测逐字相同）。
+
+### 四、回归面
+
+- `tests/b445_refcount`：W1–W39 + DONE 逐字相同；
+- `b412_objslot`（P1–P6 / TERM=23）、`b126_crossmod_objglobal`（A1–A2）、`K124`（T1–T6）、
+  `FProbe7`（E1–E3）、`FProbe6`（D1–D2）、`KOwn`（G0–G4）、`KHaz`（F1–F3）、`K128`（C1/D1=0）、
+  `b128`（A1=1 / A2=2）逐字相同；
+- `tests/geomcache` x64 + x86：`C3_LATEBIND_MISS` 0 条，GC17/GC18/GC19 全 True；
+- 九门 9/9；语料 772 → 774 行（只多夹具自己两行；本刀只动 RTL，发码一字未变）。
+
+### 五、边界（在册）
+
+- **局部 `As New Collection` / `Dim c As Collection` 出作用域仍不退**：腿④ 只认声明名就是 `Object`
+  的那一档，宿主类局部还没有那一句 `vb6_ReleaseObject`（实测 `.temp/k129` A2 = 0）。载体计数已经
+  就位，缺的只是发码那一句 —— 下一刀。
+- **集合套集合**：内层载体由包装器护着，而宿主侧存的是**借来的**包装器指针（§11.110 那条边界），
+  包装器自己不释放 ⇒ 内层载体仍不拆（C 那格两版都 alive）。
+- 集合元素里的**宿主包装器**仍是借的：Release 只对 `vb6_ComObject_IsVb6Wrapper` 放手，与控制/窗体
+  寿命有关的那一档不在这里。
+- 模块级 / 类字段那一档仍不放手（`KHaz` F3 = 0），与 §11.109 同一条边界。
+- `Scripting.Dictionary` 是真 IDispatch 载体（`vb6com_dict.c`），不走这一格 —— 在册。
+
+## §11.112 腿④ 宿主类局部档（第一百三十刀）
+
+### 一、缺口
+
+第一百二十九刀把 Collection 载体的计数交回载体自己（`refs`，`New` 时 1），但**出口那一句**
+`vb6_ReleaseObject` 只发给声明名就是 `Object` 的槽（§11.109 第四档）。于是：
+
+```vb
+Private Sub NewLocal()
+    Dim c As New Collection
+    c.Add New B130Item
+End Sub          ' 载体没人放手 ⇒ 元素一枚 Terminate 都不打
+```
+
+实测（`.temp/k129` 的 A2 格）：修前 `A2 terms=0`，修后 `2`；b130 夹具 `E2-terms=0 → 1`。
+
+### 二、改法
+
+挂点在 `cgen_localdecl.cpp` 那条 `cType == "void*"` 的臂里 —— 与 `Object` 共用同一张表
+（`slotsToRelease_`，出口由 `emitIvrefScopeRelease` 发）：
+
+- `isPlainObject`（声明名 `object`）之外补一个 `isHostClassLocal`（声明名 `collection`）；
+- 三道已有闸门原样生效：`!var.isStatic`（Static 槽跨调用活着）、`!inStaticProc_`、`!var.isWithEvents`；
+- For Each 循环变量那一条撤登记（`dropLateObjSlotRelease`）按 `isLateObj` 认人，照旧管用。
+
+**只收 `Collection` 一个名字**：`Dictionary` 的 C 侧槽是类型化接口
+`vb6_ComIface_IDictionary*`，不走这条臂（实测 `DictLocal` 里没有那一句，`D1` 增量 0）—— 在册。
+
+### 三、反面证人（同一夹具，出口放手不许伤到别人）
+
+| 针 | 含义 | 读数 |
+|---|---|---|
+| `B130-E1-count` / `B130-E2-terms` | `Dim c As New Collection` 出作用域 | 1 / **1**（修前 0） |
+| `B130-A1-count` / `B130-A2-field` | 局部是从**字段**借的（`Set c = gBox.Col` 那一发 AddRef） | 1 / 1 |
+| `B130-S1-count`（两次）/ `B130-S2-terms` | `Static s As Collection` 跨调用活着 | 1,1 / 1 |
+
+「字段那一枚跟着走」的形态不会出现：`Set` 取引用的发码本来是
+`vb6_ComAddRefDispatch(vref); vb6_ReleaseObject(&dst);`，第一百二十九刀让 `ComAddRefDispatch`
+对 Collection 计数，出口放手只退自己那一份。x64 / x86 逐字相同。
+
+### 四、发码面（本刀唯一动发码的刀）
+
+全量重算 774 行：**19 行变**，逐行 A/B（旧二进制 vs 新二进制各出一份 `--emit-c`）：
+
+```
+add=1..11  del=0   （19/19 行都只有新增行，没有一行被改写或删除）
+```
+
+新增行全是同一句 `vb6_ReleaseObject((void**)&X);`，X 逐个对上源码里的 `As Collection` 局部：
+`c`、`a`、`Value`、`TempCol`、`Lables`、`Icons`、`collC`、`col`、`thunkCol`、`tmpFrames`
+（Charts 2020 三张图 + `Form1/Form2`、`geomcache`、`k174`、`k294`、`ucSlider_2022`、
+`GifcontrolSource`、`vb6probe`、`b127/b128/b129` 夹具）。
+
+### 五、读数与回归
+
+- `b445` W1–W39 + DONE 逐字相同；`B412`、`B126`、`K124`、`KOwn` G0–G4、`KHaz` F1–F3、
+  `b128` A1/A2、`b129` 七针（2/2/4/1/5/1）逐字相同；
+- `K128` 的 `C1 terms=0 → 1`（同一份源，`Dim c As Collection` 那一格现在是**应当**有的读数）；
+- `geomcache` x64 + x86：`latebind-miss` 0 条，GC17/18/19 全 True
+  （`GC18=1234,1234,1234,1234`、`GC19=82,82,82`）；
+- 九门 9/9；语料 774 → **776** 行（夹具两行）。
+
+### 六、边界（在册）
+
+- **`Dim dc As Dictionary` 出作用域仍不退**（`vb6_ComIface_IDictionary*`，接口臂没有出口登记）。
+- 模块级 / 类字段那一档仍不放手；集合元素里的宿主包装器仍是借的；集合套集合的内层载体仍由
+  借出的包装器护着（与 §11.111 五同）。
+- 泛对象档与宿主类档共用一个 `isLateObj` 标记 ⇒ `dropLateObjSlotRelease` 的「无对价撤登记」
+  对两者同时生效（For Each 循环变量 / 交地址给 Declare 那两处）。
+
+## §11.113 腿④ 宿主类局部档第二格（第一百三十一刀）
+
+### 一、缺口
+
+`Dim dc As Dictionary` 的 C 侧槽是**类型化接口** `vb6_ComIface_IDictionary*`，不经过
+`cType == "void*"` 那条臂，所以第一百三十刀只收到 `Collection`。实测（`.temp/k130` 的
+`DictLocal`）：出口一句不发，`D1` 增量 0；b131 夹具修前 `E2-terms=0`、`Z-terms=0`。
+
+### 二、改法
+
+挂点在 `cgen_localdecl.cpp` 的 ComClass/ComInterface 臂里（`knownTypedComVars_` 那一站）：
+
+- 声明名是内建 `dictionary`，且过三道闸门（`!var.isStatic` / `!inStaticProc_` / `!var.isWithEvents`）
+  ⇒ 登记 `trackLateObjSlotForRelease`；
+- 出口那一发与泛对象档同一形状 `vb6_ReleaseObject((void**)&x)` —— 与 `Set` 那一站退旧值
+  用的是同一句（实参类型对得上，`vb6_ComIsDispatchable` 把关，真 IDispatch 才 Release）。
+
+**只收内建 `Dictionary` 一个名字**：外部 ComClass / ComInterface 一大片，每一格的引用归属
+各有各的主人（`GetObject` / 属性取 / 参参借），在册另刀。
+
+### 三、反面证人（同一夹具，出口放手不许伤到别人）
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B131-E1-count` / `E2-terms` | `Dim dc As Dictionary` 出作用域 | 1 / **0 → 1** |
+| `B131-A1-count` / `A2-field` | 局部从**字段**借（`Set dc = gBox.Dict` AddRef） | 1 / 1 |
+| `B131-S1-count`（两次） | `Static d As Dictionary` 跨调用活着 | 1,1 |
+| `B131-O1-alive` | 局部**交给字段**之后字段仍可用 | 1 |
+| `B131-Z-terms` | 累计（E 那枚 + 换人时旧载体 + 末了 Nothing） | **0 → 3** |
+
+「交给字段」那一站的发码是 `vb6_ComAddRefDispatch(vref); vb6_ReleaseObject(&字段); 字段 = vref;`
+——本地那一枚退掉后字段手里还有一份，所以 `O1-alive=1`（不是悬空）。x64 / x86 逐字相同。
+
+### 四、发码面
+
+全量重算 776 行：**3 行变**（`tests/b128_argpack_release/B128ArgPack.vbp`、`B128Main.bas`、
+`tests/test_com_default_prop.bas`），逐行 A/B（旧二进制 vs 新二进制）全部 `add=1`、`del=0`，
+新增行只有 `vb6_ReleaseObject((void**)&d);` 那一句（对源码里的 `Dim d As Dictionary`）。
+语料 776 → **778** 行（夹具两行）。
+
+### 五、读数与回归
+
+- `K128` 的 `D1 terms=1 → 2`（同一份源，`DictCase` 那一格现在应当有 Terminate）；
+- `b445` W1–W39 + DONE、`B412`、`B126`、`K124`、`KOwn` G0–G4、`KHaz` F1–F3、`b128` A1/A2、
+  `b129` 七针、`b130` 七针逐字相同；
+- `geomcache` x64 + x86：`latebind-miss` 0 条，GC17/18/19 全 True；
+- 九门 9/9。
+
+### 六、边界（在册）
+
+- **外部类型库接口 / ComClass 局部**（`Dim x As FileSystemObject` / `As XMLHTTP` …）仍不登记：
+  它们的引用可能来自 `GetObject`、属性取或参数传递，归属各不相同，需逐档量过再收。
+- 模块级 / 类字段那一档仍不放手（b131 的 `Z` 那两枚是全靠**显式赋值/置空**才拆的）；
+  集合里借出的宿主包装器、集合套集合的内层载体仍与 §11.111 五、§11.112 六同一条边界。
+
+## §11.114 腿④ 第三档：类型化 COM 接口局部（第一百三十二刀）
+
+### 一、缺口
+
+第一百三十一刀只收了内建 `Dictionary` **一个名字**。同一条臂里的其余类型化 COM 接口槽
+（`vb6_ComIface_I<X>*`，既包括别名接口名 `As IDictionary`，也包括外部类型库的
+`As FileSystemObject` / `As IPictureDisp` / `As ADODB.Stream` …）出作用域仍一句不发：
+
+```vb
+Private Sub ViaAlias()
+    Dim d As IDictionary
+    Set d = New Dictionary
+    d.Add "k", New B132Item
+End Sub          ' 修前 terms=0（载体不拆，元素不终止）
+```
+
+### 二、改法与所有权口径
+
+`cgen_localdecl.cpp` 的 ComClass/ComInterface 臂（`knownTypedComVars_` 那一站）放开到**所有**
+类型化 COM 接口 / ComClass 局部，登记 `trackLateObjSlotForRelease`（出口发
+`vb6_ReleaseObject((void**)&x)`，与 `Set` 那一站退旧值同一句；`vb6_ComIsDispatchable` 把关）。
+
+三条赋值路在发码里都**取所有权或 AddRef**（逐条看过 `--emit-c`）：
+
+| 赋值形 | 发码 |
+|---|---|
+| `Set d = New Dictionary` | `vb6_NewObject(L"Scripting.Dictionary")`（所有权交过来） |
+| `Set d = CreateObject("…")` | `vb6_ComCreateTyped(progId, iid)`（同上） |
+| `Set d = gBox.D`（字段/属性取） | `vb6_ComAddRefDispatch(vref)` + 退旧值 |
+
+所以出口放手成对。同一条闸保留：`Static` / `Static Sub` 里那一格跨调用活着，不登记；
+For Each 循环变量由 `dropLateObjSlotRelease` 撤登（每一轮由循环自己写）。
+
+### 三、夹具与读数（`tests/b132_typedcom_local_scope/`）
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B132-A1-count` / `A2-terms` | `Dim d As IDictionary` + `New Dictionary` | 1 / **0 → 1** |
+| `B132-C1-count` / `C2-terms` | `CreateObject("Scripting.Dictionary")` 那条路 | 1 / **0 → 2**（累计） |
+| `B132-F1-count` / `F2-field` | 从**字段**借的局部退出 | 1 / 1（字段不动） |
+| `B132-S1-count`（两次）/ `S2-terms` | `Static d As IDictionary` 跨调用活着 | 1,1 / 2（累计不动） |
+| `B132-K1-alive` | 局部**交给字段**后字段仍可用 | 1 |
+| `B132-Z-terms` | 累计（A/C + 两次显式置空） | **0 → 4** |
+| `B132-X1-name` | 真外部类型库服务器 scrrun（`FileSystemObject.GetFileName`） | `win.ini`（不崩） |
+
+x64 与 x86 逐字相同。（`FileSystemObject.FileExists` 在本仓两版都是 `False`，late-bound 与typed
+同形 —— 那是另一格在册的**谓词返回**口径，与本刀无关，夹具改用 `GetFileName` 作观测点。）
+
+### 四、发码面
+
+全量重算 778 行：**15 行变**，逐行 A/B（旧/新二进制各一份 `--emit-c`）结果
+**全部 `del=0`**、共 76 行新增，每行都是 `vb6_ReleaseObject((void**)&X);`：
+
+```
+Charts 2020 Proyecto1 1 (IPic)      combyref271 K271 5 (f/g/h/…)
+test_com_optional 1 (fso)           test_com_variant_prop 2 (el/at)
+test_earlybound 1 (fso)             test_earlybound2 3 (fso/drv/ts)
+test_not_com 1 (fso)                VBFlexGridDemo 51 (IPicture / IPersistStream / IOleObject / IUnknown 那类槽)
+VbQRCodegen Project1 2 (pStream/pPersist)
+ucSegmentedControl 2 (IPic/oStream) ucTreeView 1 (IPic)   ucSlider_2022 2 (ipic)
+fgz_fix011 1 (b)                    GifcontrolSource 2 (lBMPsource/tPic)
+dict_native NewBind 1 (d)
+```
+
+语料 778 → **780** 行（夹具两行）。
+
+### 五、回归
+
+- `b445` W1–W39 + DONE、`B412`、`B126`、`K124`、`KOwn` G0–G4、`KHaz` F1–F3、`K128`（C1=1 / D1=2）、
+  `b128`、`b129` 七针、`b130` 七针、`b131` 九针逐字相同；
+- `geomcache` x64 + x86：`latebind-miss` 0 条，GC17/18/19 全 True；
+- 九门 9/9；`check_class_refcount_authority` OK（static-gate 仍是 7 条：本刀是**替换**
+  §11.113 那一站的窄条件，不是新增闸门）；语料 780 行。
+
+### 六、边界（在册）
+
+- **地址交给外部 Declare 那一格**仍是整条腿④ 的共同边界（写它的一站在计数系统外面；
+  泛对象档与类型化接口档共用同一条 `isLateObj` 登记与撤登面）。
+- 模块级 / 类字段仍不放手（b132 里 `Set gBox.K = d` 那格是靠显式置空才拆的；夹具那个字段
+  声明成 `As Object`，读数与声明成 `As IDictionary` 逐字相同）。
+- **b132 的 `.vbp` 聚合行是 CI 口径**（第一百三十二刀补）：本机与 CI 各跑一遍
+  `scripts/emit_manifest.ps1`，780 行里只有 6 行不同 —— 5 行是既有的 machineDiff
+  （guisample ×3 / TeeChartChartDisplay / ctrlmscomm，本机没装那几个控件），第 6 行就是
+  `tests/b132_typedcom_local_scope/B132Typed.vbp`（归一化后本机 bytes=17258 / CI bytes=17239，
+  差 19 字节；同一台机器内部可复现、跨机器不可复现，而单模块 `B132Main.bas` 那行两边逐字一致）。
+  按既有口径取 `ci/emit-manifest` 那台二进制交回来的数登记，本机复跑会一直报这一行。
+- `FileSystemObject.FileExists` 一类的**谓词返回**口径不在本刀（两版同形，另册）。
+## §11.115 `With` 自己造的那一枚载体在 `End With` 放手（第一百三十三刀）
+
+### 一、缺口与读数
+
+`With New Collection` / `With CreateObject("…")` 这两形的目标表达式是**自己造一份对象**，
+所有权交到 With 临时量手上；`End With` 一句不发 —— 载体连同体内的元素一起活到进程结束：
+
+```vb
+Private Sub WithNew()
+    With New Collection
+        .Add New B133Item
+        Debug.Print "B133-A1-count=" & .Count
+    End With          ' 修前: 块尾不放手 ⇒ 载体与元素都还在
+    Debug.Print "B133-A2-terms=" & gTerms
+End Sub
+```
+
+夹具 `tests/b133_with_carrier_scope/`（x64 与 x86 逐字相同）：
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B133-A1-count` / `A2-terms` | `With New Collection` + `.Add New B133Item` | 1 / **0 → 1** |
+| `B133-B1-count` / `B2-terms` | `With CreateObject("Scripting.Dictionary")` | 1 / **0 → 2**（累计） |
+| `B133-C1-count` / `C2-terms` | 反面证人一：`With gBox.C`（**字段**借来的那一份） | 1 / 0 → **0**（不动） |
+| `B133-D1-count` / `D2-terms` | 反面证人二：`With c`（**局部** `Set` 取的引用） | 2 / 0 → **0**（不动） |
+| `B133-E1-tag` / `E2-terms` | 在册边界：`With New <工程类>` | 11 / 0 → **0**（本刀刻意不发；**§11.117 已补**，补后 = 3） |
+| `B133-Z-terms` | 累计 | **0 → 2**（§11.117 之后为 3） |
+
+修前那四个 `0` 是本机实跑：把源码 stash 回本刀之前、重编一份 exe 跑同一个夹具
+（产物在 `.temp/k133/b133pre`），不是按形状推的。
+
+### 二、机制（发码一处；闸只认两座工厂）
+
+`src/backend/stmt/cgen_with.cpp`：With 体那块 `{ … }` 收口之后，若**初始化器本身**就是
+`(void*)vb6_NewObject(` / `(void*)vb6_CreateObject(`（两座工厂交过来的一份所有权，
+与 §11.114 那三条赋值路同一个口径），补一句：
+
+```c
+vb6_ReleaseObject((void**)&_vb6_with_N);  /* 账 #305 §11.115: With 自己造的那一枚载体, 块尾放手 */
+```
+
+闸按**发码形状**认，不按 AST 猜 —— 四条不匹配：
+
+- 借用型（字段 / 局部 / 形参 / `me.X`）发的是裸取值；
+- `With New <窗体>` 已被上一站改写成 `vb6_form_hwnd_X()`（全局默认实例，不归 With）；
+- UDT / 宿主伪结构体 / VARIANT 那几档 `tempType` 本身不是 `void*`；
+- `With New <工程类>` 发的是 `vb6_cls_X_New()`（类自己那一档）。
+
+`vb6_ReleaseObject` 自己把槽置空（两条分支都 `*objPtr = NULL`），所以体内即使又把它交给了别人，
+块尾这一发也只退一次。
+
+### 三、发码面
+
+全量重算 **782 行**（语料 780 + 夹具两行）。与本刀之前那份 CI 清单逐行比：
+
+```
+changed=6   added=2   missing=0
+  changed 六行全是旧账（5 行 machineDiff + b132 那个聚合行，机器侧）
+  added   夹具两行（B133Carr.vbp / B133Main.bas）
+```
+
+⇒ 语料 780 行**零行变**。承面在语料里是 **0 处**：全仓 `With New` 只有
+`VBFlexGridDemo/MainForm.frm` 那三处 `With New InputForm`（工程窗体 ⇒ 窗体默认实例那一站，
+不是晚绑定工厂）。本刀是"补一条语义"，不是"修一片存量"。
+
+### 四、回归
+
+- `b445` W1–W39（含 `W8-terms=200` / `W36-terms=12` / `W39-terms=0 null=False`）、
+  `b412` `TERM=23`、`b132` 十二针、`b131` 九针、`b130` 七针、`b129` 七针、
+  `b128` `A1=1 / A2=2` 逐字相同；
+- `geomcache` x64 + x86：`GC17/GC18/GC19` 全 True（`GC18=1234,1234,1234,1234`、
+  `GC19=82,82,82`），latebind-miss 0；
+- 九门 9/9（exe sha `2b1db40ed67e`）；`vbp_fixture_census` / `static_sentinel_registration` 都过。
+
+### 五、边界（在册）
+
+- **`With New <工程类>`**：`tempType` 是 `vb6_cls_*`，走类自己的 `_New`/`_Release` 那一档，
+  本刀闸刻意挡在外面（夹具 E 路 `E2-terms=0` 是本刀的**预期**读数，不是漏）；
+  **第一百三十五刀 §11.117 已补上**（块尾与 Exit 两处都发 `vb6_cls_X_Release`）。
+- **`Exit <proc>` 从 With 体内直接跳出**：With 临时量是块内局部，登记进 `slotsToRelease_`
+  会在嵌套位置发成越界引用（C2065），所以本刀不登记 —— 早退那一格仍漏一枚，与腿④ 的
+  过程出口机制不同源，另册。
+- **`With <函数返回>`**（`With f()`）不在本刀：那一格是 Variant / 解封后的借用值，
+  所有权归调用那一站，要单独量。
+## §11.116 `With New …` 体内 `Exit` 那一格：goto 出块前先放手（第一百三十四刀）
+
+### 一、缺口与读数
+
+第一百三十三刀只补了**块尾**那一发（`End With`）。体内 `Exit Sub/Function/Property` 走的是
+`goto vb6_proc_exit` —— 一出块就没人再问那枚载体，于是它活到进程结束：
+
+```vb
+Private Sub ExitInside()
+    With New Collection
+        .Add New B134Item
+        Exit Sub          ' 修前: 这里出去, 载体与元素都还在
+    End With
+End Sub
+```
+
+夹具 `tests/b134_with_exit_scope/`（x64 与 x86 逐字相同）：
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B134-A1-count` / `A2-terms` | 对照：正常走到 `End With`（§11.115 那一发） | 1 / **0 → 1** |
+| `B134-F1-count` / `F2-terms` | `Exit Sub` 从 `With New Collection` 体内跳出 | 1 / **0 → 2**（累计） |
+| `B134-G1-count` / `G2-terms` | 反面证人：`With <字段>` 里 `Exit Sub`（借用型，不许退） | 1 / 0 → **0** |
+| `B134-H1` / `H2-terms` | `Exit Function` 从 `With New …` 跳出（返回值仍落位） | 7 / **0 → 3** |
+| `B134-I2-terms` | 两层自家载体 + `Exit Sub`（内层先退、外层后退） | **0 → 5** |
+| `B134-Z-terms` | 累计 | **0 → 5** |
+
+修前那四个 `0` 同样是本机实跑（`.temp/k134/pre`，本刀之前的那份 exe）。
+
+### 二、机制（两处，一位主人 + 一枚印）
+
+- `cgen_with.cpp`（§11.115 那站）在认出发码形状是 `vb6_NewObject` / `vb6_CreateObject` 时，
+  顺手把 `ownsCarrier` 盖在**当前这一帧**的 `WithObjInfo` 上；
+- `cgen_jumps.cpp` 的 `visit(ExitStmt&)`：`Exit Sub/Function/Property` 三条臂在发
+  `goto vb6_proc_exit;` **之前**，从信息栈顶往下把盖过印的帧各发一句
+  `vb6_ReleaseObject((void**)&_vb6_with_N);`。
+
+载体声明就在 With 体内那一层 ⇒ 走到这条 `Exit` 时它仍在作用域里；`vb6_ReleaseObject` 自己置空，
+所以块尾那一发与这里这一发不会二次退。借用型 / 窗体默认实例 / 工程类 `New` 那三档没有印，
+一条都不发（G 路就是这条反面证人）。
+
+### 三、发码面
+
+语料 **784 行**（原 780 + b133 两行 + 夹具两行）。本刀动的只有 `Exit` 那三条臂，而它们只在
+**盖过印的帧**存在时才多出一句 —— 全仓 `With New` 只有 `VBFlexGridDemo/MainForm.frm` 那三处
+`With New InputForm`（窗体默认实例，没有印）⇒ 语料里预计零行变，形状 oracle 在 CI 上复算 784 行验证。
+
+### 四、回归
+
+- `b445` W1–W39、`b412` `TERM=23`、`b133` 十二针、`b132` 十二针逐字相同；
+- 九门 9/9（exe sha `1ac6d1f05070`）。
+
+### 五、边界（在册）
+
+- **`GoTo` 跳出 With 块**：`GoTo <label>` 越过块尾那一发，与 `Exit` 不同源，本刀不接。
+- **错误处理器**（`On Error GoTo` 落进 handler）那一格：`vb6_ErrRaise` 的 longjmp 路径上
+  With 载体仍漏一枚 —— 要接得先给错误边界一张"活着的载体"名册，另册。
+- **`With <函数返回>`** 仍不在册（同 §11.115 五）。
+## §11.117 `With New <工程类>` 的载体：块尾与 Exit 两处放手（第一百三十五刀）
+
+### 一、缺口与读数
+
+§11.115 的闸只认晚绑定两座工厂（`vb6_NewObject` / `vb6_CreateObject`）；`With New <工程类>`
+发的是 `vb6_cls_B133Item* _vb6_with_4 = (vb6_cls_B133Item*)(vb6_cls_B133Item_New())`，
+一句都不发 —— b133 夹具的 E 路当场记着这条边界（`E2-terms=0`），本刀把它关掉：
+
+夹具 `tests/b135_with_class_carrier/`（x64 与 x86 逐字相同）：
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B135-A1-tag` / `A2-terms` | `With New B135Item` 走到 `End With` | 11 / **0 → 1** |
+| `B135-B1-tag` / `B2-terms` | 同上但体内 `Exit Sub` | 22 / **0 → 2**（累计） |
+| `B135-C1-tag` / `C2-terms` | 反面证人一：`With gBox.It`（字段里的实例） | 33 / 0 → **0**（不动） |
+| `B135-E1-tag` / `E2-terms` | 反面证人二：`With <局部>` + `Exit Sub`（局部那一份归过程出口） | 44 / 0 → **0**（不动） |
+| `B135-Z-terms` | 累计 | **0 → 2** |
+| `B135-D1-field` | 字段里那枚实例到收尾仍活着 | 44 |
+
+修前那一列同样是拿本刀之前的 exe 实跑（`.temp/k135/pre`，sha `215903550809`）。
+
+### 二、机制（与 §11.115/§11.116 同一对站点，各加一档）
+
+- `cgen_with.cpp`：`tempType` 是 `vb6_cls_X*` 且初始化器里含 `vb6_cls_X_New()`（同一类名两头
+  对上）⇒ 块尾发 `if (_vb6_with_N) vb6_cls_X_Release(_vb6_with_N);`，并把类名盖到这一帧的
+  `carrierClass` 上；
+- `cgen_jumps.cpp` 的 Exit 三条臂：帧上有 `carrierClass` 就发同一句（不是 `vb6_ReleaseObject`）。
+
+**为什么不用 `vb6_ReleaseObject`**：裸工程实例不是可分派对象，Fix 191 那道判据只清槽不 Release
+—— 用它等于没退。工程类那一档本来就有唯一出口（`vb6_cls_X_Release`），这里只是接上去。
+
+### 三、旧读数随之更新（b133 的 E 路）
+
+`B133-E2-terms` 2 → **3**、`B133-Z-terms` 2 → **3**（b133 夹具的 E 路就是这条边界），
+`tests/run_tests.ps1` 的 `$b133Needles` 同步改。
+
+发码侧：b133 的 `.vbp` 聚合行变（`bytes` 15788 → 15920），而 `B133Main.bas` 的**单文件行不变**
+—— 单文件编译没有工程上下文，`As B133Item` 认不出是工程类 ⇒ 闸不认它。这与全仓"单文件口径"
+一致，不是漏。
+
+### 四、发码面
+
+语料 **786 行**（780 + b133/b134/b135 三组夹具各两行）。变的只有 b133 的聚合行 + b135 的两行新增。
+
+### 五、回归
+
+- `b445` W1–W39、`b412` `TERM=23`、`b134` 十一针、`b133`（新读数）、`b132` 十二针逐字相同；
+- 九门 9/9（exe sha `64f3651debbc`）。
+
+### 六、边界（在册）
+
+- **单文件（`.bas` 单独 `--emit-c`）**不认识工程类 ⇒ 闸不认（与全仓单文件口径一致）。
+- `GoTo` 跳出 With 块 / 错误处理器 longjmp 两条仍与 §11.116 五 同册；`With <函数返回>` 由 §11.118 关掉（Property Get 那一形另册）。
+## §11.118 `With <工程函数>()` 的载体：块尾与 Exit 两处放手（第一百三十六刀）
+
+### 一、缺口与读数
+
+§11.115 / §11.117 两份闸都只认初始化器里那一句"就地造对象"（两座晚绑定工厂 / `vb6_cls_X_New()`）。
+`With MakeColl()` 发的是 `void* _vb6_with_0 = (void*)vb6_K136Main_MakeColl()` —— 引用是**被调方
+交回来**的，闸不认，块尾一句不发。
+
+夹具 `tests/b136_fnret_carrier/`（x64 与 x86 逐字相同）：
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B136-A1-count` / `A2-terms` | `With MakeColl()` 走到 `End With` | 1 / **0 → 1** |
+| `B136-B1-count` / `B2-terms` | 同上但体内 `Exit Sub` | 1 / **0 → 2**（累计） |
+| `B136-C1-count` / `C2-terms` | 反面证人一：`With gColl`（模块字段，借来的） | 2 / 0 → **2**（不退） |
+| `B136-D1-count` / `D2-terms` | 反面证人二：`With c`（`Set c = gColl`，局部借来的） | 3 / 0 → **2**（不退） |
+| `B136-Z-terms` | 累计 | **0 → 2** |
+
+修前那一列是拿本刀之前的 exe 实跑（stash 后重建，`.temp/k136/fx_pre`，五针全 0）。C/D 两路
+的原有数字一并涨到 2，是因为 A/B 两枚载体被退了、体内那两枚元素随之终止 —— 借来的那两枚本身
+一枚都没退，这正是它们要证的。
+
+### 二、口径：为什么这一枚归调用方
+
+被调方的返回槽在过程出口放手时被排除（`currentReturnVar_`，腿④ §11.114 那一档），而
+`Set <返回槽> = …` 必取一枚引用（新对象或 AddRef）。两头相加：调用方接到的这一枚是**净交回**的，
+With 临时量就是它的主人。与 §11.115 两座工厂同一个口径，只是"造"发生在被调方体内。
+
+### 三、机制与闸（四问，任一否就不发）
+
+- `cgen_with.cpp`：AST 上是 `IdentifierExpr` 的无参调用 ⇒ `lookupModuleDotted` 命中
+  `SymbolKind::Function` ⇒ `sym->type == Vb6Type::Object` ⇒ 发码是 `vb6_<Mod>_<Name>()`
+  那一形（尾部只有一个 `(`，没有经 Variant 解封 / COM 包装）。四问全过才 `ownsCarrier = true`，
+  块尾发 `vb6_ReleaseObject((void**)&x);`；Exit 三条臂照 §11.116 盖的那枚印子走，一处不改。
+- **Property Get 不在本刀闸内**：它发的是 `…(gBox)` 而不是 `()`，被"尾部单个 `(`"那一问挡在外面。
+  要认它得在符号侧把返回类认到，另开一档。
+- 两条放手路径的注释分开写（§11.115 / §11.118 各一句），已登记行的字节不为本刀多动。
+
+### 四、修中两条实测（写下来免得下一个人再猜一次）
+
+1. 首版闸按 `(void*)vb6_` 前缀认 —— `(void*)` 是 With 声明器**自己**加在发码行上的，不在
+   `lastExpr_` 里（构建期 stderr 探针实测 `last=[vb6_K136Main_MakeColl()]`），于是闸永不发。
+   改成"`vb6_` 开头 + 尾部单个 `(`"。
+2. 第一版只把印子盖到 `withObjectInfoStack_`（Exit 用），块尾仍写着 `if (withOwnedCarrier133)`
+   独门 —— 重建后读数照旧 0。块尾与 Exit 是两处站，两处都要认这一档。
+
+### 五、发码面
+
+语料 **788 行**（780 + b130…b136 夹具）。本刀只新增 b136 两行：b133/b134/b135 五行逐字不变
+（`.temp/k136/recheck136.ps1` 逐条 MATCH），全语料本地重跑也只有既有的 6 条机器侧行不同
+（guisample ×3 / TeeChartChartDisplay / ctrlmscomm / b132 的 `.vbp` 聚合行）。
+
+### 六、回归
+
+- `b445` W1–W39（`W8-terms=200` / `W36-terms=12` / `W39-terms=0`）、`b412` `TERM=23`、
+  b128/b129/b130/b131/b132/b133/b134/b135 读数逐字相同；
+- 九门 9/9（exe sha `dacc07910cf8`）。
+
+### 七、边界（在册）
+
+- `With <Property Get>()`：发码尾部是 `(me)` 那一形，本刀闸不认 —— 待一档。
+- 错误处理器 longjmp：原定本刀，改档 **§11.119**。落点(`setjmp` 后的 `goto`)与 `Resume`
+  语义冲突：`Resume` 允许回到块内继续执行，载体此刻必须还活着；而落点对所有错误共用、且
+  声明在落点之后（嵌套块里更不在作用域）。要做就得是"活载体名册 + 帧标号 + Resume 判据"，
+  单独立设计档，不硬补 —— 设计已落 §11.119（前置：先修 `Resume Next` 落点的 §11.120）。
+- `GoTo` 跳出 With 块仍在册（§11.116 五）—— 第一百四十一刀已关（§11.122）。
+## §11.119 错误处理器落点的活载体名册（第一百三十九刀落码；设计于第一百三十七刀）
+
+### 一、缺口
+
+`On Error GoTo H` 的过程发码：`setjmp` 的落点是**过程顶上**那一块，错误一 raise 就
+`goto vb6_label_H`，把 With 临时量的声明、块尾那句放手统统跨过去。实测量到
+（`.temp/k137/p`，exe `dacc07910cf8`）：
+
+| 路 | handler 形态 | 读数 | 说明 |
+|---|---|---|---|
+| A | 只 `H:` 里打印，**没有 Resume** | `A2-terms=0` | 载体漏，元素不终止 —— 本档要关的那一格 |
+| B | `H:` 里 `Resume Next` | `B2-terms=0`，且 `B1b` **一句没打** | 见 §11.120：`Resume Next` 落到了 `End With` 之后 |
+| | 备注 | §11.119 落码后这三路读数上移一格：`A2` 0→1、`B2` 1→2、`C2` 2→3、`Z` 2→3 | |
+
+### 二、为什么不能在落点直接补一句
+
+1. **`Resume` 语义**：`Resume` / `Resume Next` / `Resume <label>` 允许回到块内继续跑。落点若
+   无条件放手，`Resume` 回块内就是 use-after-free —— 比漏更坏。
+2. **落点与声明的先后**：`goto vb6_label_H` 是往前跳，跳过的正是 `void* _vb6_with_N = …` 那一行；
+   读到的要么是未初始化值（崩），要么（嵌在 `If`/`For` 里时）根本不在作用域（C2065）。
+3. **落点对所有错误共用**：它自己不知道此刻哪几枚载体已经造出来了。
+
+三条加起来 ⇒ 这一格要的不是一句 Release，而是"**槽先零初始化、名册按名放手**"。
+
+### 三、判据表（按 handler 里有没有 `Resume` 分档）
+
+| handler 形态 | 控制权 | 载体归宿 | 本档动作 |
+|---|---|---|---|
+| 无任何 `Resume`（`Exit Sub/Function`、`End`、`GoTo` 出块、落到 `End Sub`） | 确定不回块内 | 落点放手 | **可关** |
+| 有 `Resume Next` / `Resume` / `Resume <label>` | 可能回块内 | 归块尾 / Exit 两处 | 落点不许动 |
+
+判据取"保守的一侧"：从 `On Error GoTo H` 的 H 标签起，扫到过程尾（含嵌套 `If`/`For` 体内），
+出现任一 `ResumeStmt`（含 `Resume Next`）即判"可能回块内"。误判只会少退（漏），不会多退。
+
+### 四、机制（提槽 + 名册）
+
+1. **提槽**：过程入口（`decl_proc` / `decl_func` / `decl_prop` 三处）预扫过程体，数出"晚绑定
+   自有载体"（`New` / `CreateObject` / §11.118 的工程函数那一形）的条数 N，在 `setjmp` **之前**
+   发 `void* _vb6_own_k = 0;`（k = 0..N-1）。零初始化是这一档唯一的硬要求：落点读到的必须是
+   确定的 0，而不是栈上的垃圾。
+2. **改站**：`cgen_with.cpp` 里第 k 条自有载体不再就地声明，改发 `_vb6_own_k = <init>;`，块内
+   引用全走这个名字（`withObjectVars_` / `withObjectInfoStack_` 照常登记，Exit 三条臂不用改）。
+3. **落点放手**：`visit(OnErrorStmt)` 在 `setjmp != 0` 那一块里按名册逐条发
+   `vb6_ReleaseObject((void**)&_vb6_own_k);` —— 它自己置空，没造出来的那几条是 0，天然跳过。
+4. **闸**：只认 `void*` 晚绑定自有载体。`With New <工程类>`（§11.117 档）要按类名调
+   `vb6_cls_X_Release`，名册里得带类名，而落点**先于**那些 With 站点发码 —— 本档不碰，留在册。
+
+### 五、动工顺序（下一刀先做哪一步）
+
+本档的前置是 §11.120：只要 `Resume Next` 还落在 `End With` 之后，"可能回块内"这一档就连
+正常的块尾放手都拿不到。所以顺序是：
+
+1. **§11.120**（**第一百三十八刀已关闭**）：修 `Resume Next` 的落点位置（与 VB6 对齐：回到出错语句的
+   下一条，仍在块内）；
+2. **§11.119 落码**：提槽 + 名册 + 落点放手，夹具三路 —— A（handler 无 Resume）关掉、
+   B（`Resume Next`）交给块尾收、C（`With gColl` 借用型）一枚都不动。
+
+### 六、边界（在册）
+
+- 工程类载体（§11.117）在落点仍漏（名册要带类名，见四.4）；
+- `Resume <label>` 指向块内深处（跳过一部分语句）时，块尾仍会在真正离块时放手 —— 本档不改这条；
+- `GoTo` 跳出 With 块仍在册（§11.116 五）—— 第一百四十一刀已关（§11.122）。
+
+### 七、落码与读数（第一百三十九刀）
+
+机制按四发落地（与三 判据表一致）：
+
+- `cgen_decl_proc` / `cgen_decl_func`：`hoistOwnN_ = (!hasResume_ && hasOnError_) ? countWithStmts(body) : 0`
+  —— **一句 `Resume` 都没有**才启用；名册 `void** _vb6_own[N] = {0};` 就发在过程顶层
+  （`jmp_buf` 之后、`setjmp` 之前），未登记的槽必为 0。`cgen_decl_prop` 把旗清掉（Property 不发名册）。
+- `cgen_with.cpp`：133/136 两档自有载体在声明之后发 `_vb6_own[k] = (void**)&_vb6_with_N;`；块尾放手
+  之后发 `_vb6_own[k] = 0;`（**注销**——不注销的话这个栈槽被后续块复用时，落点会拿悬空地址去退）。
+- `cgen_jumps.cpp` 的 Exit 三条臂：退完一枚接着注销同号槽。
+- `cgen_jumps.cpp` 的 On Error 落点：`if (setjmp(...) != 0) { <逐槽> if (_vb6_own[k]) vb6_ReleaseObject(_vb6_own[k]); goto H; }`。
+
+`countWithStmts` 给的是**上界**（过程体里 With 语句条数，递归）：槽号按发码顺序分配，而"哪一帧是
+自有载体"要等发码才算得出来，多给的槽没登记就是 0、落点天然跳过；少给才会溢出。
+
+夹具 `tests/b138_handler_landing/`（x64 与 x86 逐字相同）：
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B138-A1-count` / `A2-terms` | handler 落到 `End Sub`（无 Resume），块尾那句被跨过 | 1 / **0 → 1** |
+| `B138-B1-count` / `B2-terms` | 同上但 handler 里 `Exit Sub` | 1 / **0 → 2** |
+| `B138-C1-count` / `C2-count` / `C3-terms` | 反面证人：`With gColl`（借来） | 2 / 2 / 0 → **2 / 2 / 2**（gColl 仍在、Count 仍读得出） |
+| `B138-D2-terms` | 两个 With 先后：前一个块尾退、后一个落点退 | 1 → **4** |
+| `B138-E1-count` / `E2-terms` | §11.118 的工程函数那一枚同样在名册里 | 1 / 1 → **1 / 5** |
+| `B138-Z-terms` / `Z-count` | 累计 / gColl 完好 | 1 / 2 → **5 / 2** |
+
+修前那一列是拿本刀之前的 exe 实跑（stash 后重建，`.temp/k139/fx_pre`）。
+
+**随刀改注的旧读数**：§11.120 夹具的三路（`B137-A2` 0 → **1**、`B137-B2` 1 → **2**、`B137-C2` 2 → **3**、
+`B137-Z` 2 → **3**）—— b137 的 A 路本来就是这一格的边界，本刀把它关掉；该夹具的 needles 同步改。
+
+**发码面**：语料 **792 行**（780 + b130…b138 夹具）。既有行有 **7 条**随刀变（都是"过程里有
+`On Error GoTo` + `With`、且一句 `Resume` 都没有"的文件）：`b137_resume_in_block/B137Main.bas`、
+`test_arr_empty.bas`、`test_collcall.bas`、`vb6probe/NullFamilyProbe.bas`、
+`VBFlexGridDemo/Builds/VTableHandle.bas`、`VBFlexGridDemo/Common/VisualStyles.bas`、
+`VbQRCodegen-master/src/mdQRCodegen.bas`；其余一字未动。
+
+**九门 9/9（exe sha `19252414e3e0`）**。
+
+### 八、边界（第一百三十九刀之后仍在册）
+
+- 工程类载体（§11.117）：名册槽只有 `void**`，落点分不出类名 —— 仍归块尾/Exit 两处；第一百四十二刀已关（§11.123）。
+- 过程里**有** `Resume` 的（哪怕 handler 里那句 `Resume` 只落块外）：落点一律不动，仍漏；
+- 出错语句是块内最后一条且 handler `Resume Next`：落点落到块外、块尾那句被跨过 —— 仍漏；
+  第一百四十刀已关（§11.121）。
+- `GoTo` 跳出 With 块（§11.116 五）—— 第一百四十一刀已关（§11.122）。
+
+## §11.120 `Resume Next` 在块内的落点位置（第一百三十八刀）
+
+### 一、缺口
+
+发码里 resume 点只在**过程顶层**的语句表上发（`emitStmtList(body, hasResume_)`），
+`With` / `If` / `For` / `Select` 的体走的是默认 `false`。于是块内报错时
+`vb6_err_resume_next_point` 还是"进入这一整条块语句之前"设的那一号，`Resume Next` 落到块尾
+**之后**：块内剩下的语句被跳过，块尾那句放手也被跳过（`§11.119` 一 的 B 路，`B1b` 一句没打）。
+
+VB6 的语义是"回到**出错语句的下一条**"，与嵌套深浅无关 —— 所以这是控制流本身的缺口。
+
+### 二、改法（一处判据）
+
+`cgen_stmt.cpp` 的 `emitStmtList`：条件从 `emitResumePoints && inProtectedBlock_` 改成只用
+`inProtectedBlock_`。`inProtectedBlock_` 只在过程里用了 `Resume` 时才置位
+（`cgen_jumps.cpp` 的 `On Error GoTo` 站），处理器的体又不在保护区内（同文件的标签站清旗），
+所以这一改既覆盖所有嵌套层，也不给"没有 Resume 的过程"多发一行。
+
+`emitResumePoints` 形参保留（调用点不改），只作兼容。
+
+### 三、读数（夹具 `tests/b137_resume_in_block/`，x64 与 x86 逐字相同）
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B137-A1-count` / `A2-terms` | handler 里一句 `Resume` 都没有（§11.119 那一档） | 1 / 0 → **0**（在册，本刀刻意不动） |
+| `B137-B1-count` / `B1b-after-error` / `B2-terms` | 块内报错 + `Resume Next`，回到出错语句的下一条，块尾放手 | 1 / **没打 → 打了** / **0 → 1** |
+| `B137-C1-count` / `C1c-after-error` / `C2-terms` | 同一条错，但嵌在 `If` 里再套 `With`（两层） | 1 / **没打 → 打了** / **0 → 2** |
+| `B137-Z-terms` | 累计 | **0 → 2** |
+
+修前那一列是拿本刀之前的 exe 实跑（stash 后重建，`.temp/k137/fx_pre`）。
+
+### 四、发码面
+
+语料 **790 行**（780 + b130…b137 夹具）。**既有行零变化**：本刀判据只对"过程里用了
+`Resume` 语句"的那些生效，而全语料没有一条独立的 `Resume` / `Resume Next` 语句
+（`On Error Resume Next` 是另一条路，不发 setjmp、不置 `inProtectedBlock_`）。
+本刀只新增 b137 两行。
+
+### 五、回归
+
+- §11.119 一 的 A 路读数不变（`A2-terms=0`，在册边界照旧）；
+- b133/b134/b135/b136 夹具读数逐字相同；九门 9/9（exe sha `26110e726f47`）。
+
+### 六、边界（在册）
+
+- **出错语句是块内最后一条**时，`Resume Next` 的落点自然落到块外（块尾那句放手被跨过）——
+  这一形仍漏，归 §11.119 的活载体名册（落点放手）与"块尾放手补点"两档，本刀不碰；
+- handler 里一句 `Resume` 都没有的那些（A 路）归 §11.119；
+- `GoTo` 跳出 With 块仍在册（§11.116 五）—— 第一百四十一刀已关（§11.122）。
+
+实测（§11.119 一 的 B 路）：块内报错、handler `Resume Next` 之后，既没回到出错语句的下一条，
+也没执行 `End With` 的放手 —— 发码里 `vb6_err_resume_next_point` 在 With 体内仍是进入 With 前
+设的那一号（`vb6_resume_1` = 块尾之后），因为"下一条语句的号"是在 With 语句**整条**结束时才推进的。
+
+与 VB6 的差异：VB6 的 `Resume Next` 回到**出错语句的下一条**（仍在块内）。这一格是控制流本身的
+缺口，不是放手位置的问题，且会连带影响 §11.119 的"可能回块内"那一档 —— 单独立刀，先修它。
+## §11.121 块尾补一个 resume 点：`Resume Next` 从体内末句回来（第一百四十刀）
+
+### 一、缺口
+
+§11.119 八 的第三条：出错语句是块内**最后一条**、handler `Resume Next` 时，"下一条语句"是块外
+那一句 —— 落点直接跨过 `End With` 的放手。夹具 `tests/b139_blocktail_resume/` 的 A 路修前
+`A2-terms=0`（晚绑定载体活到进程结束）、B 路 `B2-terms=0`（§11.117 工程类载体同病）。
+
+第一百三十八刀把 resume 点发到了每个嵌套层，但"体内最后一条之后"没有点可落；第一百三十九刀
+的名册只管"process 里一句 `Resume` 都没有"的那一档 —— 有 `Resume` 的过程，落点仍无处放。
+
+### 二、改法（一处，且**补点必须在放手之前**）
+
+`cgen_with.cpp` 块尾：若在保护区内、且本块确实发过放手（133 晚绑定自有 / 136 工程函数交回 /
+135 工程类三类），先推进一号 `resumePointCounter_`，发
+
+```
+vb6_err_resume_point   = m;
+vb6_err_resume_next_point = m + 1;
+vb6_resume_m:;
+```
+
+再发放手那几句与名册注销。编号天然接上：体内语句按顺序各占一号，末句的
+`resume_next_point` 正好是 `m`，于是 `Resume Next` 落到 `vb6_resume_m` —— **先跑完放手**，
+再落回块外那一句。
+
+第一版把补点发在放手**之后**（读 `.temp/k140/e.c` 可见 `vb6_resume_3` 在 `ReleaseObject` 下一行），
+实跑 `A2-terms=0` 照旧 —— 落点跳过清理，等于没修。夹具的 `A2/B2` 就是量这一格的。
+
+### 三、读数（夹具 `tests/b139_blocktail_resume/`，x64 与 x86 逐字相同）
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B139-A2-terms` | 晚绑定 `With New Collection`，末句 `Error 5000` + `Resume Next` | **0 → 1** |
+| `B139-B2-terms` | `With New <工程类>`（§11.117 载体），同形 | **0 → 2** |
+| `B139-C1-after-error` / `C2-terms` | 对照：末句之后还有一句（§11.120 那一档） | 打了 / 1 → 打了 / **3** |
+| `B139-D2-count` | 反面证人：`With gColl`（借来的）—— 块尾无清理可跳，handler 里仍读得出 Count | 2 → 2（不动） |
+| `B139-Z-terms` / `Z-count` | 累计 / gColl 完好 | 1 → **3** / 2 |
+
+修前那一列是 stash 掉本刀改动、重建后实跑（`.temp/k140/fx_pre`）。C 路的 1 → 3 是**前两刀**
+（139 的名册在 C 路过程里同样生效）叠加的结果，不是本刀单独贡献。
+
+### 四、发码面
+
+语料 **794 行**（792 + b139 夹具两行）。判据要同时满足"过程里有独立 `Resume`"与"发过放手的
+`With`"，全语料只有 b137 夹具命中 → 既有行变 **2 条**（`b137_resume_in_block/B137Main.bas`、
+`B137Res.vbp`），其余一字未动；本刀新增 b139 两行。
+
+### 五、回归
+
+- b137 夹具读数逐字不变（`A2=1`、`B2=2`、`C2=3`、`Z=3`）—— 它的 B/C 路报错语句后面都还有一句，
+  补点不参与；
+- b138 / b136 / b135 / b134 / b133 夹具与语料既有行不动；九门 9/9（794 行、注册 794）。
+
+### 六、边界（仍在册）
+
+- 工程类载体进落点名册（§11.117 —— 名册槽只有 `void**`，落点分不出类名）—— 第一百四十二刀已关（§11.123）；
+- 过程里**没有**一句 `Resume` 的仍走 §11.119 的名册（两条路互补，不重叠）；
+- `GoTo` 跳出 With 块（§11.116 五）—— 第一百四十一刀已关（§11.122）。
+## §11.122 `GoTo` 跳出 With 块：按层深逐层退（第一百四十一刀）
+
+### 一、缺口
+
+§11.116 五在册的最后一格：`GoTo <label>` 从 `With` 体内跳到块外，块尾那几句放手永远跑不到。
+夹具 `tests/b140_goto_out_with/` 修前：`A2-terms=0`（晚绑定）、`B2-terms=0`（两层嵌套，两层都漏）、
+`D2-terms=1`（工程类载体）。
+
+### 二、改法（预先扫层深，落地按"跳出几层"逐层退）
+
+- `cgen_util_scan.cpp` 新 `collectLabelWithDepth`：单趟递归扫过程体，记下每个 `LabelStmt`
+  定义处的 With 层深（`With` 进入体内 +1，`If` / 循环 / `Select` 的各支同层），存进
+  `labelWithDepth_`（标签名小写）。为什么要预扫：`GoTo` 多半**向下**跳，目标标签在它后面，
+  发码是单趟的；不预扫就只能猜。
+- `cgen_decl_proc` / `cgen_decl_func` / `cgen_decl_prop` 入口清表并填充（Property 也填 ——
+  它的体里同样可能有 `GoTo` 跳出 With）。
+- `cgen_jumps.cpp` 的 `visit(GoToStmt&)`：查目标层深，当前层深 = `withObjectInfoStack_.size()`；
+  从最内层起逐帧退到目标层深（`ownsCarrier` 走 `vb6_ReleaseObject`、`carrierClass` 走
+  `vb6_cls_X_Release`），退一枚就把名册槽清 0。**查不到标签就不发** —— 宁少退不多退。
+
+载体变量声明在 `With` 体内，走到这条 `GoTo` 时仍在作用域里（与 `Exit` 那几臂同理），
+`vb6_ReleaseObject` 自己置空，所以与块尾那一发不会二次退。
+
+### 三、读数（夹具 `tests/b140_goto_out_with/`，x64 与 x86 逐字相同）
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B140-A2-terms` | `With New Collection` + `GoTo` 跳出 | **0 → 1** |
+| `B140-B2-terms` | 两层嵌套，一次跳出两层 | **0 → 3** |
+| `B140-C1-terms` / `C2-terms` | 对照：标签就在本块体内（一层都不出） | 0 / 1 → 3 / 4（体内不退，块尾退） |
+| `B140-D2-terms` | `With New <工程类>`（§11.117）跳出 | 1 → 5 |
+| `B140-E2-count` | 反面证人：`With gColl` 借来的，一枚都不许退（handler 里仍读得出 Count） | 2 → 2 |
+| `B140-Z-terms` / `Z-count` | 累计 / gColl 完好 | 1 → 5 / 2 |
+
+修前那一列是拿本刀之前的 exe 实跑（stash 后重建，`.temp/k141/fx_pre`）。
+
+### 四、发码面
+
+语料 **794 → 796 行**（b140 夹具两行）。**既有行零变化**：判据要同时命中"`GoTo`"与
+"发过放手的 `With`"，全语料先按文本筛出 5 个候选、再逐行实算 —— 只有 b140 是新的，
+b134（§11.116 的 Exit 夹具）等四个候选**逐字相同**。真实语料里没有一例 `GoTo` 跳出自有载体的
+With 块，所以这一刀是纯补口子，不改任何人现有的字节。
+
+### 五、回归
+
+- b137 / b138 / b139 夹具行与读数逐字不变；b133…b136 不动；
+- 九门 9/9（796 行、注册 796）。
+
+### 六、边界（仍在册）
+
+- `GoTo` **跳进** With 块（VB6 本身不许，编译器也不接）：不进本表；
+- 工程类载体进错误落点名册（§11.117 + §11.119 的槽只有 `void**`，分不出类名）—— 第一百四十二刀已关（§11.123）；
+- 过程里**有** `Resume` 的错误落点仍按 §11.121 的块尾补点处理，与本刀不重叠。
+## §11.123 工程类载体进落点名册：每槽一列放手函数（第一百四十二刀）
+
+### 一、缺口
+
+§11.119 八 的最后一格：名册 `void** _vb6_own[N]` 里的槽只记录了"槽地址"，落点统一走
+`vb6_ReleaseObject` —— 那是 COM 槽的放法。工程类那一档（§11.117 的 `With New <工程类>`）
+槽里存的是编译期生成的 `vb6_cls_X` 实例，必须用类自己的 `vb6_cls_X_Release`，而落点
+分不出类名。夹具 `tests/b141_roster_class/` 修前：`A1-terms=0`、`D1-terms=1`
+（嵌套两枚只退了一枚，还是靠块尾那一发），`Z-terms=1`。
+
+### 二、改法（名册加一列，登记时写死放开函数）
+
+生成器里 `vb6_cls_X_Release` 的签名恰好是 `unsigned long (void* instance)` —— 不需要薄：
+
+- `cgen_decl_proc` / `cgen_decl_func`：名册声明多一列
+  `unsigned long (*_vb6_ownRel[N])(void*) = {0};`，紧挨 `_vb6_own` 发在过程顶层
+  （`setjmp` 之前，未登记的槽是 0）。
+- `cgen_with.cpp` 登记站：登记条件从"`void*` 两档"扩到三档（`anyOwn142`）；
+  工程类那档多发一句 `_vb6_ownRel[k] = vb6_cls_X_Release;`，`void*` 两档留 0。
+- `cgen_jumps.cpp` 落点：逐槽
+  `if (_vb6_own[k]) { if (_vb6_ownRel[k]) { _vb6_ownRel[k](*_vb6_own[k]); *_vb6_own[k] = 0; } else vb6_ReleaseObject(_vb6_own[k]); }`
+  —— 有放手函数就按它放（放完把手里的指针清 0），没有走原来的 `vb6_ReleaseObject`。
+
+槽号只增不复用（`hoistOwnNext_++`），所以 `_vb6_ownRel[k]` 不会串到后面登记成
+`void*` 的槽；块的注销站（块尾 / Exit / GoTo）只清 `_vb6_own[k]`，落点读到的就是 0。
+
+### 三、读数（夹具 `tests/b141_roster_class/`，x64 与 x86 逐字相同）
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B141-A1-terms` | 一枚工程类载体，handler 无 `Resume`，落点放手 | **0 → 1** |
+| `B141-B1-terms` | 混合：前一块晚绑定载体（块尾已退）+ 后一块工程类（落点退） | 1 → **3** |
+| `B141-C1-count` | 反面证人：`With gColl` 借来的那一帧不进名册，落点一枚不动 | 2 → 2 |
+| `B141-D1-terms` | 两枚工程类载体同时在册（嵌套），落点逐槽退 | 1 → **5** |
+| `B141-Z-terms` / `Z-count` | 累计 / gColl 完好 | 1 → **5** / 2 |
+
+修前那一列是拿本刀之前的 exe 实跑（stash 后重建，`.temp/k142/fx_pre`）。
+
+### 四、发码面
+
+语料 **796 → 798 行**（b141 夹具两行）。这一刀**确实动了既有行**：名册多一列声明、
+落点那几句换了形 —— 判据是"过程里有 `On Error` 且一句 `Resume` 都没有、过程体里有 `With`"
+（`hoistOwnN_ > 0`）。文本先筛出 24 个候选、再逐行实算，命中的 **9 个模块**
+（`b137_resume_in_block/B137Main.bas`、`b138_handler_landing/B138Main.bas`、
+`test_arr_empty.bas`、`test_collcall.bas`、`test_late_setslot2.bas`、
+`vb6probe/NullFamilyProbe.bas`、`VBFlexGridDemo/Builds/VTableHandle.bas`、
+`VBFlexGridDemo/Common/VisualStyles.bas`、`VbQRCodegen-master/src/mdQRCodegen.bas`）
+与它们所属的 **4 张聚合 `.vbp`**（`B137Res.vbp`、`B138Res.vbp`、`VBFlexGridDemo.vbp`、
+`VbQRCodegen/test/Project1.vbp`）随之改行，其余 782 行一字未动。
+
+### 五、回归
+
+- b137 / b138 / b139 / b140 夹具读数逐字不变（退的是同一批载体，只是工程类那一档
+  这次真退了）；
+- 九门 9/9（798 行、注册 798）。
+
+### 六、边界
+
+§11.119 八 的四条到这里全部关掉。剩下的是**别册**：`With <Property Get>()` 那一形
+（§11.118 明写排除）、以及名册只管"进程里一句 `Resume` 都没有"的那些过程 ——
+有 `Resume` 的过程走 §11.121 的块尾补点，两者互补，不重叠。
+## §11.124 `With <对象>.<Property Get>`：属性交回的载体（第一百四十三刀）
+
+### 一、缺口
+
+§11.118 明写排除的那一格：`With <对象>.<Property Get>` 交回的是一枚**加了引用**的实例
+（与 `Set x = obj.Prop` 同一口径），With 临时量就是它的主人；修前块尾、Exit、落点三处
+都不退。夹具 `tests/b142_propget_with/` 修前：`A2-terms=0`、`C1-terms=0`、`D1-terms=0`、`Z-terms=0`。
+
+### 二、改法（认发码形状，不猜 AST）
+
+`cgen_with.cpp` 的工程类那一档（§11.117）多认一形：`tempType` 仍是 `vb6_cls_X*`，
+初始化器除了 `vb6_cls_X_New()` 之外，还认 `vb6_<Mod>_prop_get_<Name>(…)`
+（带不带 `(vb6_cls_X*)` 那层 cast 都算 —— 实测 cast 是 With 声明符加的，`lastExpr_` 里没有，
+这是第一百三十六刀量过的同一个坑）。认出来就仍走 §11.117 那一档的放手
+（`vb6_cls_X_Release`），块尾 / Exit / `GoTo` / 错误落点四条口一并生效 —— 第二、三处是
+§11.116 / §11.119 早已接好的，本刀不用另发。
+
+块尾那句注释另起一档（`§11.124`），已登记行的字节不动。
+
+对象**字段**那一形（`With gBox.Bare`）发的是裸取值，既没有 `_prop_get_` 也没有类名两头对上，
+天然落在门外 —— 拿别人的字段去退就是错退，夹具 B 路是反面证人。
+
+### 三、读数（夹具 `tests/b142_propget_with/`，x64 与 x86 逐字相同）
+
+| 针 | 含义 | 修前 → 修后 |
+|---|---|---|
+| `B142-A2-terms` | 属性交回的那一枚，块尾放手 | **0 → 1** |
+| `B142-B2-tag` | 反面证人：`With gBox.Bare`（对象字段）只是借，块尾不退，之后仍读得出 | 2 → 2 |
+| `B142-C1-terms` | 体内 `Exit Sub`，§11.116 的 Exit 口退 | **0 → 2** |
+| `B142-D1-terms` | handler 无 `Resume`，§11.119 四.4 的落点退 | **0 → 3** |
+| `B142-Z-terms` | 累计 | **0 → 3** |
+
+修前那一列是拿本刀之前的 exe 实跑（stash 后重建，`.temp/k143/fx_pre`）。
+
+### 四、发码面
+
+语料 **798 → 800 行**（b142 夹具两行）。**既有行零变化**：先按 `With <x>.<y>` 文本筛出
+32 个候选（含 b133…b141 全部旧夹具、VBFlexGridDemo、VbQRCodegen 等），逐行实算 ——
+只有 `tests/itf_neg/n35_legacy_cls_iface.bas` 一行报"不同"，查下去是它本来就 `rc=1/bytes=0`
+（`VB3031`，CoClass 列了非 Interface 的契约项），我的行脚本硬写了 `rc=0` 才显出差；
+真实发码一字未动。
+
+### 五、回归
+
+- b133…b141 夹具读数逐字不变；九门 9/9（800 行、注册 800）。
+
+### 六、边界（新册）
+
+- `With <晚绑定对象>.<属性>`（`void*` 那一档，COM 派发取回）：走的是 `vb6_ComGet` 一类，
+  所有权口径要另量，本刀不碰；
+- 属性返回**工程函数那一形**已经在 §11.118 里（`vb6_<Mod>_<Name>()`）。
+## §11.125 `With <晚绑定对象>.<属性>`：先把引用账量出来（第一百四十四刀 · 设计刀）
+
+### 一、形状与契约
+
+```c
+void* _vb6_with_N = (void*)vb6_ComGetObjectProp(<接收者>, L"<属性>")  /* With object ref */;
+```
+
+接收者两档都量过：`Dim o As Object`（裸 `o`）与 `Dim v As Variant`（`vb6_VariantToObject(&v)`）；
+属性声明 `As <工程类>` 与 `As Object` 同形（`tests/b144_late_with_prop`，探针 `.temp/k144/p`）。
+
+RTL 那头的契约是写死的：`vb6_ComGetObjectProp` 取走 `pv->pdispVal` 之后只调
+`vb6_ComVarFree(pv)`，而那个函数明写「仅释放结构体，对象引用已转移给调用方」
+（`src/rtl/core/vb6com/vb6com_wrap.c:145`、`vb6com_pack.c` 的 `vb6_ComVarFree`）。
+VB6 语义一侧，With 临时量活到 `End With` ⇒ 这一枚引用该由块尾（及 Exit / 落点 / `GoTo` 四口）退。
+
+### 二、读数（夹具 `tests/b144_late_with_prop/`，x64 与 x86 逐字相同）
+
+| 针 | 含义 | 今天 |
+|---|---|---|
+| `B144-A2-terms` | 单发，块尾那一口 | 0 |
+| `B144-B2-tag` / `B144-B2-terms` | 反面证人：交回的是模块级**共用**实例，退自己那一枚之后值仍读得出 | 8 / 0 |
+| `B144-C1-terms` | 体内 `Exit Sub`（§11.116 那一口） | 0 |
+| `B144-D1-terms` | handler 无 `Resume`，落点（§11.119 四.4） | 0 |
+| `B144-E1-terms` | `GoTo` 跳出（§11.122 那一口） | 0 |
+| `B144-Z-terms` / `B144-Z-tag` | 累计 / 共用实例完好 | 0 / 8 |
+
+同一份夹具换成**早期绑定**（`Dim b As B144Box`）5 轮：terms=5 —— 证明 Terminate 计数这把尺子本身是准的
+（`.temp/k144` 的 M1/M2），晚绑定两条路（`With o.Fresh` 与 `Set x = o.Fresh : Set x = Nothing`）
+5 轮都还是 0。差的不是 With 这一站。
+
+### 三、引用账：一次读数交出三枚（`C3_COM_RC_TRACE=1` 探针，`.temp/k144/rc4.txt`）
+
+一枚 `With o.Fresh` 的完整轨迹：
+
+| 轨迹行 | 累计 | 出处 |
+|---|---|---|
+| `FROM-INST W=… cnt=1` | 1 | 适配器把属性返回的实例包成包装器（`vb6_ComObject_FromInstance`，实例那一枚引用交给包装器） |
+| `ADDREF … cnt=2` | 2 | 适配器那一形 `vb6_VariantObject(vb6_ComObject_FromInstance(…))` 又 AddRef 一次（`cgen_util_dllentry_collect.inc` 的返回值装箱） |
+| `ADDREF … cnt=3` | 3 | 服务端 `vb6_VariantPackCopyInto(&tmpRet, pVarResult)` 为「带权副本」再 AddRef 一次（`vb6rtl_com.c`） |
+| `RELEASE … cnt=2` | 2 | 本刀临时接上的块尾放手（见四） |
+
+也就是说：**调用方该拿的只有 1 枚，另外 2 枚是桥的两站各自多 AddRef 一次** ——
+`tmpRet` 打包之后没有清（它那一枚被复制出去了），适配器又把 `FromInstance` 交出来的所有权
+用 `VariantObject` 叠了一层。`Set x = <晚绑定读数>` 走的是同一条桥，所以它 5 轮也全 0：
+这两枚不是 With 独有的账。
+
+### 四、为什么本刀不改发码
+
+认形是一行的事（`tempType == "void*"` 且 `lastExpr_` 前缀是 `vb6_ComGetObjectProp(`），
+四口也早已接好（§11.115 / §11.116 / §11.119 / §11.122）。本机试过：块尾那一发确实发出来了，
+轨迹从「三枚不退」变成「退一枚」，**但夹具读数一个都没变**（仍 0）—— 桥多交的两枚垫在下面。
+
+按本系列的纪律（没有读数变化的刀不落；退错一枚比漏更坏），这一刀只落夹具与这页账，
+不落发码。另外还有一层：今天退一枚必然安全（有两枚垫底），桥修好之后这一枚就必须**精确**，
+两件事得同一刀对账，否则谁先谁后都会静默错。
+
+### 五、下一刀的靶（顺序不可换）
+
+1. 适配器那一枚改为**转移**：`vb6_VariantObject(vb6_ComObject_FromInstance(…))` 叠出来的
+   第二枚引用要收掉（对齐 `New` 实参那条 `vb6_ComPack_<类>` 的「FromInstance 的 1 枚直接
+   转移给 VARIANT」口径）。
+2. 服务端 `ComObj_Invoke`：`vb6_VariantPackCopyInto(&tmpRet, pVarResult)` 之后把 `tmpRet`
+   那一枚退掉（副本已带权）。
+3. 前两条落地后，一次读数应恰好交出 **1** 枚；此时把本夹具的 needle 由
+   `A2=0 / C1=0 / D1=0 / E1=0 / Z=0` 改成 `1 / 2 / 3 / 4 / 4`，With 四口才有可判红的读数
+   （`tests/run_tests.ps1` 里 `$b144Needles` 的注释已经写明这件事）。
+4. `Set x = <晚绑定读数>` 那条 AddRef（setlet 站）同轮对账 —— 桥修好之后它是第二枚多交的。
+
+### 六、发码面与回归
+
+- 语料 **800 → 802 行**（b144 夹具两行：`B144Main.bas` / `B144Res.vbp`），既有行零变化
+  （b141 / b142 逐行实算 `SAME`，`.temp/k144/rows144.ps1`）；
+- 九门 9/9（802 行、注册 802，`.vbp=299 / .bas=503`）。
+
+---
+
+## §11.126（第一百四十五刀）`With <晚绑定对象>.<属性>`：先把桥对平，再让四口接管
+
+### 一、桥的两站各多交一枚
+
+上一刀量出来的是「一次读数交出 3 枚，调用方只该拿 1」。多出来的两枚各自有主：
+
+| 站 | 改前 | 改后 |
+|---|---|---|
+| 适配器装箱（`src/backend/detail/util/cgen_util_dllentry_collect.inc`） | `vb6_VariantObject(vb6_ComObject_FromInstance(…))` —— `FromInstance` 已把实例那一枚交给包装器，`vb6_VariantObject` 又按 Fix 024 的口径 AddRef 一次 | `vb6_VariantObjectTransfer(…)` —— 接管那一枚，不再 AddRef |
+| 服务端打包（`src/rtl/core/vb6comserver/vb6comserver_obj.c`） | `vb6_VariantPackCopyInto(&tmpRet, pVarResult)` 是**带权副本**（串深拷贝、对象 AddRef），副本归对端；`tmpRet` 自己那一枚原封不动漏在服务端 | 打包后补一句 `vb6_VariantClear(&tmpRet)` |
+
+新出口 `vb6_VariantObjectTransfer`（`src/rtl/core/vb6rtl/vb6rtl_variant.h`）与
+`vb6_VariantObject` / `vb6_VariantObjectBorrowed` 并列为三兄弟，**不合并**：借来的一枚随时
+可能被原主退掉，转移来的一枚只有收到它的人退 —— 共用一枚出口，下一次有人给 `Borrowed`
+加口径（比如改成「仅在…」）就必然连带改坏转移的语义。
+
+改后读数（`C3_COM_RC_TRACE=1`）：`FROM-INST cnt=1 → ADDREF cnt=2 → RELEASE cnt=1`，
+一次读数**恰好交出 1 枚**。
+
+### 二、顺带对出来的一枚毒：拥有型包装器拆解要问实例自己的引用计数
+
+桥对平之后夹具 B 路立刻跳红：`B144-B2-terms=2`（应为 1）。原因是 `ComObj_Release` 的
+拥有型那一档直接 `destroyFunc(instance)` —— 对 `New` 出来的那一枚没错，但 `Property Get
+SameObj() As B144Item` 交回的是**模块级共用实例** `gKeep`，拆包装器时把还在用的实例也
+`Class_Terminate` 了（调用方手里留一根悬空指针）。这一档改成先摘 `__comObj` 回填、再调
+`desc->classRelease(instance)`（问实例自己的 `__refcount`），与下面借用型那一档一字相同；
+`destroyFunc` 只留给「没有 `classRelease` 可问」的旧描述符。改后 B2-terms 回到 1。
+
+### 三、With 四口接管
+
+认形是一行的事（`src/backend/stmt/cgen_with.cpp` 的 `withComProp145`）：
+
+```
+tempType == "void*" && lastExpr_.rfind("vb6_ComGetObjectProp(", 0) == 0
+```
+
+所有权口径由 RTL 钉住：`vb6_ComGetObjectProp` 取走 `pv->pdispVal` 之后只
+`vb6_ComVarFree(pv)`，而那个函数明写「仅释放结构体，对象引用已转移给调用方」。也就是说
+Invoke 给属性返回值加的那一枚引用**归调用方**，With 临时量就是它的主人。
+
+接进去的是同样的三处 + 一个出口：`ownsCarrier`（认领）、`anyOwn142`（`_vb6_own[]` 落点
+登记，护住 `GoTo` 出块）、`inProtectedBlock_`（给 `Resume Next` 补落点），以及块尾
+`vb6_ReleaseObject((void**)&_vb6_with_N)`。借用型（`With gColl` / 字段 / 裸变量）的初始化器
+不是这个前缀，天然落在门外。
+
+### 四、读数（x64 与 x86 逐条相同）
+
+| 口 | A2 | B2-tag | B2-terms | C1 | D1 | E1 | Z | Z-tag |
+|---|---|---|---|---|---|---|---|---|
+| 改前 | 0 | 8 | 1 | 0 | 0 | 0 | 0 | 8 |
+| 改后 | 1 | 8 | 1 | 2 | 3 | 4 | 4 | 8 |
+
+（B 路是反面证人：交回的是模块级共用实例，退掉自己那一枚之后 `gKeep` 的 tag 仍读得出 8，
+terms 仍是 1 —— 这一枚退的是「读数交出来的那一枚」，不是实例本身。）
+
+### 五、发码面
+
+- 全清单 **802 行**逐行复算，**只有 14 行**变（7 个 `.vbp` 聚合行 + 7 个 `.bas` 行），
+  其余 788 行 `SAME`；
+- 14 行每一行的 ASCII 骨架变化都能对上本刀的两处手笔（适配器 `vb6_VariantObjectTransfer`
+  改名 + `§11.126` 块尾放手），没有第三种变化；
+- 既有夹具零回归：b133 / b134 / b135 / b142 的读数与各自 needle 逐条相符。
+
+### 六、闸上的连带
+
+新 RTL 出口必须进 `src/backend/detail/expr/cgen_variant_slot_prefixes.inc`（由
+`scripts/gen_variant_slot_prefixes.ps1` 从 RTL 派生，62 → 63 条）；`check_builtin_slot_returns`
+的 R2（漏登记）/ R8（派生不一致）由此转绿。九门 9/9。
+
+### 七、下一刀
+
+`Set x = <晚绑定读数>` 的 setlet 站（§11.125 步骤 4）：桥对平之后它是第二枚多交的 AddRef，
+与 With 这一刀同一条桥、不同的主人。
+
+## §11.127（第一百四十六刀）`Set x = <晚绑定对象>.<属性>`：交回的那一枚归槽
+
+### 一、量具与改前读数
+
+先用量具把账量清（`.temp/k146/probe`，不进语料）：`As Object` 接一个工程类实例，
+`Set c = o.Fresh : Set c = Nothing`，Fresh 每次新造一枚并计 Terminate 数。改前：
+
+```
+S1-terms=0 made=2      ' 新造的那一枚 Set Nothing 之后**不销毁**
+S2-terms=0 made=2 keep=7
+S3-terms=0 made=4      ' 连读两枚, 一枚都没退
+```
+
+发码里多出来的正是这一行（`--emit-c` 逐字）：
+
+```
+{ void* _vref1 = (void*)(vb6_ComGetObjectProp(o, L"Fresh"));
+  vb6_ComAddRefDispatch(_vref1); vb6_ReleaseObject((void**)&c); c = _vref1; }
+```
+
+### 二、改法
+
+`src/backend/detail/stmt/cgen_setlet_set_rhs.inc` 兜底那一支的 `rhsOwned` 增一条口径：
+右值文本以 `vb6_ComGetObjectProp(` 开头 ⇒ 自带一枚对价（§11.125/§11.126 已经钉住
+「对象引用已转移给调用方」），不再 claim。
+
+裸槽拷贝（`Set d = c`）不在这个前缀里，claim 原样保留 —— 这一条是本刀的**反方向证人**：
+少了它 `Set c = Nothing` 会把 d 手里那一枚一并带走。
+
+### 三、读数（x64 与 x86 逐条相同）
+
+| 行 | A1-terms | B1-tag | B2-terms | C1-alive | C2-terms | Z-terms | Z-made |
+|---|---|---|---|---|---|---|---|
+| 改前（量具） | 0 | 7 | 0 | — | — | 0 | 3 |
+| 改后 | 1 | 7 | 0 | 0 | 1 | 2 | 3 |
+
+- A：新造一枚，`Set c = Nothing` 之后恰好 Terminate **一次**（改前 0）；
+- B：交回的是模块级共用实例，退读数那一枚之后它仍活（tag 读得出 7，terms 不增）；
+- C：`Set d = c` 是裸槽拷贝，`Set c = Nothing` 之后实例**仍活**（C1-alive=0），
+  直到 `Set d = Nothing` 才 Terminate（C2-terms=1）。
+
+（C1 一开始写成读 `d.Tag`，读出来是垃圾 —— `d` 是 `As Object`，读裸工程实例的属性走晚绑定，
+那个读数不可信。改判据为 Terminate 计数之后才量得准：这一处是量具的错，不是发码的错。）
+
+### 四、发码面
+
+- 全清单 **802 行**逐行复算：**22 行变**、其余 780 行 `SAME`，加本刀两行新夹具 ⇒ **804 行**；
+- 每一条变化的字节数都是 −31（`vb6_ComAddRefDispatch(_vrefN); ` 恰好那么长），
+  没有第二种变化；
+- 22 行里 **16 行**机器无关（纯 `.bas` 行 + `ucTreeView` / `VBFlexGridDemo` 聚合行）⇒ 本机值直接登记；
+  另 6 行是 vendor typelib 那一路的聚合行（`b132_typedcom_local_scope/B132Typed.vbp`、
+  `ctrlmscomm`、`guisample` 三份、`TeeChart`）；
+- 首跑 CI（`fb0005ad`）只红 `Emit manifest (shape oracle)` 一条。取 `ci/emit-manifest`
+  （head=`fb0005ad`）逐行比：804 行里只有 **3 行**差，全是 `guisample` 那三份聚合行
+  （`ascii256` 三行完全相同，只有 vendor 名字那一段文本不同），另外三行本机值与 CI 逐字相同；
+- 按 CI 侧清单对齐这三行后（`b16ed0f6`），**804 行与 CI 清单 0 差**，CI **22/22 success**。
+
+### 五、闸与连带
+
+- `check_manifest_coverage`：`inputs=804 [.vbp=300 .bas=504]`，registered=804，集合相等；
+- 九门 **9/9 rc=0**（emitted=1574，exe sha=`4ecee736d8c6`）；
+- 本刀没有新增 RTL 出口，`check_builtin_slot_returns` 的派生表不动（仍 63 条）。
+
+### 六、下一刀
+
+同一条桥的**写口**：`Set <晚绑定对象>.<属性> = <对象>` —— 交出去的那一枚由谁持有、
+桥在 `IDispatch::Invoke` 的 `DISPATCH_PROPERTYPUT` 那一路是否已经取走，是这把尺还没量过的第三站。
+
+## §11.128（第一百四十七刀）`Set <晚绑定对象>.<属性> = <对象>`：写口两处病
+
+### 一、量具与改前读数
+
+`.temp/k147/probe`（不进语料）：`As Object` 接一个工程类实例，类里
+`Public Property Set Held(ByVal v As Object)` 存进模块级 `gHold`。改前：
+
+```
+W0-made=1        ' 造了一枚
+W1-terms=1       ' 写完 + Set it = Nothing 就 Terminate —— gHold 里什么都没有
+W2-terms=1       ' 清 gHold 也不动
+```
+
+即：**写静默无效**。C3_OCX_TRACE 里看得更直白：
+
+```
+[189] INVOKE W=... cls=B147Box mem=Held argc=1
+[C3_COM] SetRef 'Held' rcv=... -> COM dispid=1 hr=0x00000000
+```
+
+hr 是 S_OK，参数却整个丢了。两头各有一处病，合起来才是这个结果：
+
+1. **描述符里 Get/Set 各拿一枚 dispid**（实测表：`{L"Held",1,2,…_get}` / `{L"Held",2,8,…_set}`）。
+   COM 口径是同一个属性共用一枚 dispid，客户端按名查（`GetIDsOfNames`）只回**第一条**同名的
+   ⇒ 写永远打在 Get 那一格上。生成器里 `dispIdMap` 建了却从没被读过。
+2. **服务端认档**写成 `(ik == 4 || ik == 8) && (wFlags & DISPATCH_PROPERTYPUT)`。客户端递的是
+   `DISPATCH_PROPERTYPUTREF`(8)，而 `DISPATCH_PROPERTYPUT` 是 4 ⇒ `wFlags & 4` 为假 ⇒
+   按档一位都对不上 ⇒ 落进「同 dispid 第一条」的兜底，而那条正是读臂。
+
+### 二、改法（两处各一句）
+
+- `src/backend/detail/util/cgen_util_dllentry_tables.inc`：dispid 先查同名已分到的，再取
+  driver 回写的 `comDispid`，最后才新发一枚（`nextDispid` 同时抬到已用值之上）。
+- `src/rtl/core/vb6comserver/vb6comserver_obj.c` 的 `ComObj_Invoke`：put 方向先认**自己的**档
+  （PUTREF→invkind 8 / PUT→invkind 4），再退到另一档 put，最后才走兜底；
+  **兜底不再让 put 落到读臂**（找不到 put 档就答 `DISP_E_MEMBERNOTFOUND`，而不是 S_OK 空跑）。
+
+### 三、读数（x64 与 x86 逐条相同）
+
+| 行 | W0-made | W1-terms | W2-terms | W3-terms | W4-terms | R1-num | R2-num | R3-tag | R4/R5-terms | Z-made |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 改前 | 1 | 1 | 1 | 2 | 2 | 41 | 42 | 0 | 2 / 2 | 3 |
+| 改后 | 1 | **0** | **1** | 2 | 2 | 41 | 42 | 0 | 2 / 2 | 3 |
+
+- W1/W2 是判据：写进去之后 `gHold` 持有，`Set it = Nothing` 不动它；清 `gHold` 才 Terminate。
+- W3：同一槽连写两次、再清空，恰好 2 枚 —— 多写不多取引用。
+- R 路三条是反面证人：同名 `Property Let`/`Get`（`o.Num = 41` → 41，`Bump 1` → 42）、普通
+  带参 Function（`TagOf(Nothing)` → 0）在 dispid 共用之后一条不变。
+- R4/R5：写进去的再用 Get 读回（那一枚归调用方，见 §11.127），读数仍 2 —— 不多不少。
+
+（量具本身踩过一次坑：最早把 `"WR1-num=" & o.Num` 直接打，出来是垃圾。`&` 拼接把 Long 属性
+发成 `vb6_ComGetStringProp`，那条读臂取 `bstrVal`。改成先落 Long 再打 —— 与 §11.127 那个
+C1 同一类错：**量具的错不是发码的错**。反过来说，“把 VT_I4 读成 BSTR”这件事是不是也该管，
+是另一把尺上的账，本刀不动。）
+
+### 四、发码面
+
+- 全清单 **804 行**逐行复算：**机器可复现的那 798 行一行未变**，另 6 行是 vendor typelib
+  那一路的既有本机≠CI 差（不是本刀引入）；加新夹具两行 ⇒ **806 行**；
+- **这一刀的发码变化不在清单覆盖范围内**：dispid 表落在 `com_entry.c`（工程级中间文件），
+  而 `--emit-c` / `emit-manifest` 只覆盖各模块的 C ⇒ 清单这一刀**零行变化**。
+  行为由 b147 的 12 枚读数钉死；把 `com_entry.c` 纳入清单需要另一次裁决（全语料行都会动、
+  且带机器相关性），不在这一格做。
+
+### 五、闸与连带
+
+- 九门 **9/9 rc=0**（`inputs=806 [.vbp=301 .bas=505]`，emitted=1574，exe sha=`bb5f67dd8e99`）；
+- 既有桥夹具零回归：b144 九枚读数、b146 八枚读数逐条不变（dispid 共用不影响按名 **读**
+  与 `Set x = <读数>` 那两站）。
+
+### 六、下一刀
+
+`vb6_ComSetProp` / `vb6_ComSetPropArg` 那一族仍然只 `free` 结构体、不清内容（§11.110 里
+在册的那一句）：`vb6_ComPackObject` 给对象 AddRef 一枚，`DISPATCH_PROPERTYPUT` 之后没人
+放它。这一刀没动它，是因为量产路径上的 `Set <对象>.<属性>` 走的是 `vb6_ComSetRef`（不打包）；
+要动它，得先有一枚**真走到 Pattern F**（`vb6_ComGetXxxProp(...) = value` 那个改写）的靶。
+
+## §11.129（第一百四十八刀）服务端 getter 适配器：对象返回被当成整数交出去
+
+### 一、怎么撞上的
+
+第一百四十七刀之后接着量链式写 `Set <晚绑定 o>.<Child>.<Prop> = it`（`Child` 的返回类型
+就是所在类自己）。那一发的读数不对，但顺着摸下去先撞到另一件事：**`o.Child` 这一枚单独的
+读也坏**。`C3_COM` trace 里两条挨着：
+
+```
+[C3_COM] GetProp 'Child'  hr=0x0  vt=3  val=150397680     ' As B148Box（本类）
+[C3_COM] GetProp 'Child2' hr=0x0  vt=9  val=-1            ' As B148Item（异类）
+```
+
+同一张描述符表、同一个 `me`，一个 `vt=3` 一个 `vt=9`。`vt=9` 是 VT_DISPATCH，`vt=3` 是
+VT_I4 —— 对象被当成整数交出去了，`150397680` 就是被 `(int32_t)(intptr_t)` 截断后的指针。
+
+### 二、病在哪儿
+
+`src/backend/detail/util/cgen_util_dllentry_collect.inc` 里 getter 的适配器只认一档：
+
+```cpp
+if (retType == "vb6_VARIANT" && !methodSym->variableTypeName.empty()) { ... }   // Fix 184: 异类
+```
+
+而 `mapType` 给 `As Object` 与本类返回的 C 型**都是 `void*`**（`Object` 一栏写死 `void*`，
+本类返回因为自引用走 `void*`），两条都不进这一档，于是落到本函数最后一个兜底：
+
+```cpp
+((VARIANT*)result)->vt = VT_I4; ((VARIANT*)result)->lVal = (int32_t)(intptr_t)_r;
+```
+
+这是**同一个 else** 吃掉两档，所以两档一起坏：`o.Child`（本类）与 `o.Held`（`As Object`）
+改前都读到 VT_I4。
+
+### 三、改法（两处）
+
+- **本类返回**：判据放宽到「`retType == "void*"` 且声明的类型名解析到本工程一个**有 coclass
+  描述符**的引擎类」⇒ 与异类返回同一律：`vb6_ComObject_FromInstance(...)` 包一层，再用
+  `vb6_VariantObjectTransfer` 把那一枚引用交给 VARIANT。临时量的 C 声明型跟着改（本类那档
+  是 `void*`，异类那档是 `vb6_cls_X*`）。
+- **`As Object`**：类模块里 getter 的返回槽**已经**为泛对象档 claim 了一枚（`B148Box.c` 实测
+  `vb6_ret_Held = gHold; vb6_ComAddRefDispatch(...)`），所以适配器只做**转交**：
+  `vt = VT_DISPATCH; pdispVal = (IDispatch*)_r` —— 不再 AddRef，也不释放。
+
+### 四、读数（x64 与 x86 十枚逐条相同）
+
+| 行 | A2-self-tag | A3-tag | B2-fresh-tag | B3-item-terms | C2-held-tag | C3-item-terms | Z-box-terms | Z-item-made/terms |
+|---|---|---|---|---|---|---|---|---|
+| 改前 | **= Nothing** | 6 | 11 | 1 | **= Nothing** | 2 | 0 | 2 / 2 |
+| 改后 | **5** | 6 | 11 | 1 | **77** | 2 | 0 | 2 / 2 |
+
+- A2/C2 是判据：本类返回与 `As Object` 返回都得交回**那枚对象**，且交回的确实是写进去那一枚
+  （`h.Tag = 77` 之后 `it.Tag` 读到 77 ⇒ 同一枚，不是拷贝）。
+- A3：`Set s = Nothing` 之后 `o` 仍可写可读 —— 交回的那一枚归调用方（§11.126），不多取。
+- B 路是**对照组**：异类返回改前改后都是对象，说明本刀没有把好的一档改坏。
+- Z-item：`Set o.Held = it` → `Set o.Held = Nothing` → `Set it = Nothing`，恰好 2 枚
+  Terminate —— 写口（§11.128）与本刀读口在同一枚对象上收放对得上。
+- **Z-box-terms 停在 0 是在册的**：`Set Self = Me` 在返回槽上 claim 的那一枚（服务端 getter
+  的泛对象返回槽，§11.125 步骤 4 同族）在客户端放手之后仍留在实例自己的 `__refcount` 上，
+  于是 `Class_Terminate` 不触发。它与本刀不同尺：本刀管的是「交出去的**型**对不对」，
+  那一枚管的「**笔数**对不对」。夹具把 0 如实钉住，将来接了就翻成 1。
+
+### 五、发码面
+
+- 全清单 **808 行**：机器可复现的 800 行一行未变，另 6 行是 vendor typelib 那一路的既有
+  本机≠CI 差（不是本刀引入）；新夹具两行 ⇒ 806 → **808**；
+- **这一刀的发码变化不在清单覆盖面**：适配器在 `com_entry.c`（工程级中间文件），`--emit-c` /
+  `emit-manifest` 只覆盖各模块的 C ⇒ 清单这一刀零行位移（与 §11.128 同一处覆盖缺口）。
+  行为由 b148 的十枚读数钉死。
+
+### 六、闸与连带
+
+- 九门 **9/9 rc=0**（`inputs=808 [.vbp=302 .bas=506]`，emitted=1574，exe sha=`0f4e9555c59c`）；
+- 既有桥夹具零回归：b144 九枚、b146 八枚、b147 十二枚读数逐条不变（x64 与 x86 都过）；
+- CI（github `dev`）run `45269265593` = **22/22 success**。
+
+### 七、下一刀（已经量好的）
+
+**链式写 `Set <晚绑定 o>.<Child>.<Prop> = it`**：发码是
+
+```c
+vb6_B148Box_prop_set_Held(o, vb6_ComGetObjectProp(o, L"Child"));  /* Set Property */
+```
+
+两处都不对：接收者写成 `o`（该是 `o.Child` 交回的那一枚），值是 `o.Child` 交回的（该是 `it`）。
+读数 `.temp/k148/probe`（`Chain.vbp`）：`CH-hold=B148Box` —— `gHold` 里落的是 `o`（本该是 item）。
+这一发还顺带绕过了 COM 打包（早绑定直呼 `vb6_B148Box_prop_set_Held`）。本刀没接，是因为
+它的根在 `cgen_setlet_set_prop.inc` 那条链式改写里（接收者/值两个槽的绑定分开算），与本刀
+的适配器不是同一处。
+
+## §11.130（第一百四十九刀）`Set <晚绑定 o>.<Child>.<Prop> = <对象>`：两槽双双串位
+
+### 一、读数与发码
+
+夹具 `tests/b149_chain_write`（`o` 是 `As Object`，子对象是**另一枚** box，值是一枚 item）。
+改前发码：
+
+```c
+vb6_B149Box_prop_set_Held(o, vb6_ComGetObjectProp(o, L"Child"));  /* Set Property */
+```
+
+两个槽都错了：接收者写成裸 `o`（该是 `o.Child` 交回的那一枚），值写成 `o.Child` 的交回
+（该是 `it`）。而 `o` 的 C 类型是 `void*`（IDispatch*），被当成 `vb6_cls_B149Box*` 递进早绑定
+直呼 —— 改前跑起来**首读即错**：
+
+```
+vb6_ComGetProp: property "Held" not found
+Unhandled VB6 Error #438: Object doesn't support this property or method
+```
+
+### 二、病根两处
+
+1. **晚绑定判据只认裸标识符**。`cgen_setlet_set_prop.inc` 里那条 `_lateBoundRecv` 问的是
+   `_ma.object->kind == IdentifierExpr`（为的是 `Sub P2(ByVal o As Object): Set o.X = v` 那一发），
+   成员链作接收者（`o.Child`）时 `_objClass` 推不出（根是 `As Object`）而 `_psSym->isExternal`
+   为真（属性在别的模块）⇒ 照样进早绑定直呼。
+2. **接收者的 COM marker 漏进值槽**。`emitExpr(o.Child)` 对晚绑定成员**只交出基础对象
+   `o`**，成员名挂在 `comMemberName_` 上（等下一站来消费）；这里没人消费，紧接着
+   `emitSetObjectRhs(node.value)` 就把这枚 marker 当成值消费掉了 —— 于是值槽拿到
+   `vb6_ComGetObjectProp(o, L"Child")`，接收者槽只剩裸 `o`。
+
+### 三、改法
+
+- 晚绑定判据沿 `MemberAccess` 链**走到根**再问同一张表（`procObjectFormals_` /
+  `knownVariantVars_` / `knownObjectVars_`，仍排除窗体控件与 UC 实例）；命中就整支跳过，
+  交回下方通用 COM 路径。
+- `emitExpr(*_ma.object)` 之后立即 `if (isComMarker_) _objE = resolveComValue("Object");` ——
+  把这枚 marker 就地交成完整对象表达式（与值侧 Fix 110i 同一口径）。
+
+改后发码：
+
+```c
+vb6_ComSetRef(vb6_ComGetObjectProp(o, L"Child"), L"Held", it);  /* COM SetRef */
+```
+
+### 四、读数（x64 与 x86 八枚逐条相同）
+
+| 行 | A1 根上 | A2 子对象 | A3 同一枚 | C1 item-terms | Z box-terms | Z item-made/terms |
+|---|---|---|---|---|---|---|
+| 改前 | （首读即 438，无读数） | | | | | |
+| 改后 | **empty** | **B149Item** | **9** | 0 | 1 | 1 / 0 |
+
+- A1：根对象 `o` 自己的 `Held` 仍是空 —— 证明写落在子对象上，不是接收者根上。
+- A2/A3：子对象上写的确实是 `it` 那一枚，改 `h1.Tag` 后 `it.Tag` 跟着变（同一枚，不是拷贝）。
+- **Z 那两行是在册的**：链写里接收者 `o.Child` 交回的那一枚**临时引用没人放**。分账探针
+  `.temp/k149/p1`（不进语料）：只取一次子对象又放回 = box-terms **2**（干净）；同一形状再
+  走一发链写 = **3**（多一枚）。子对象因此不 Terminate（停在 1），它手里的 item 也跟着留下。
+  这是「笔数」那把尺（`§11.131`），本刀只管「写到哪一枚、写的值对不对」。
+  注：改前那形状（值槽里挂 getter）也照样漏这一枚 —— 不是本刀引入的。
+
+### 五、发码面
+
+- 全清单 **810 行**：机器可复现的 804 行一行未变，另 6 行是 vendor typelib 那一路的既有
+  本机≠CI 差；新夹具两行 ⇒ 808 → **810**；
+- **全语料复算零位移**：本刀改的两处只在「晚绑定成员链作接收者」这一格 —— 语料里没有这一格，
+  所以 802 行逐行相同（`--emit-c` 覆盖到本刀，这也是它与 §11.129 不同之处：这次变化**在**
+  清单覆盖范围内，读数就是零）。
+
+### 六、闸与连带
+
+- 九门 **9/9 rc=0**（`inputs=810 [.vbp=303 .bas=507]`，emitted=1574，exe sha=`fbb9fcd05e64`）；
+- 既有桥夹具零回归：b144 九枚、b146 八枚、b147 十二枚、b148 十枚读数逐条不变（x64 与 x86）；
+- CI（github `dev`）run `45276625769` = **22/22 success**。
+
+### 七、下一刀（已经量好的）
+
+**链上中间那一枚临时引用**：`vb6_ComGetObjectProp(o, L"Child")` 交回的引用归调用方
+（§11.126），但链写的接收者槽只拿去派发一次，没人放 —— 每发链写漏一枚，子对象永不
+Terminate。同族还有嵌套**读**链（`Set h = o.Child.Held` 里中间那一枚）。要么在发码侧把
+接收者落成临时量、派发后 `Release`，要么在 RTL 侧给一个「交回即持、用完即放」的入口。
+探针 `p1`（2 vs 3）就是这一刀的判据。
+
+
+## §11.131（第一百五十刀）链写接收者那一枚临时引用
+
+### 一、读数
+
+尺子是 Terminate 计数（探针 `.temp/k150/p2`，不进语料）：只取一枚子对象又放回 → **2**（干净）；
+同一形状再走一发链写 → **3**；嵌套**读**链（`v = q.Child.Tag`）→ **4**；两样都有 → **5**。
+每多一层「取回来的对象式中间量」，就多留一枚。
+
+改前发码（`Set p.Child.Held = it`，一条语句、无临时量）：
+
+```c
+vb6_ComSetRef(vb6_ComGetObjectProp(p, L"Child"), L"Held", it);
+```
+
+`vb6_ComGetObjectProp` 交回的那一枚按 §11.126 归**调用方**（`vb6_ComVarFree` 只 free 结构体、
+不碰内容），而这一站只拿它递一次 `IDispatch::Invoke`，谁也不放 ⇒ 每发链写漏一枚，
+中间那枚对象永不 `Class_Terminate`。
+
+### 二、改法
+
+`cgen_setlet_set_prop.inc` 的 COM `SetRef` 支路：接收者表达式若以 `vb6_ComGetObjectProp(` 或
+`vb6_ComCallObject(` 开头（即自有链读/晚绑定调用交回的一枚），先落成临时量，派发完即放：
+
+```c
+void* _rcv0 = vb6_ComGetObjectProp(p, L"Child");
+vb6_ComSetRef(_rcv0, L"Held", it);
+vb6_ReleaseObject((void**)&_rcv0);
+```
+
+三个出口（视图直槽、视图直槽 R4、通用 `ComSetRef`）都覆盖。临时量用**独立序号**
+`setRefRecvSeq_`（`cgen_state.inc`，`cgen_base_generate_prologue.inc` 里归零），不占
+`tempCounter_` —— 否则存量 `_vs`/`_e`/`_ag` 全会重新编号、形状钉全红（§11.103 同一条理由）。
+放引用走 `vb6_ReleaseObject(void**)`：它认 Collection 与 dispatchable 两支，对这两类中间量都安全。
+
+### 三、读数（夹具 `tests/b150_chain_recv_ref`，x64 与 x86 六枚逐条相同）
+
+| 行 | A2 held-tag | C1 item-terms | Z box-terms | Z item-made | Z item-terms |
+|---|---|---|---|---|---|
+| 改前 | 9 | 0 | **1** | 1 | 0 |
+| 改后 | 9 | 0 | **2** | 1 | 0 |
+
+- **Z box-terms 1 → 2 是这一刀的判据**：根与子对象都 `Class_Terminate`（改前子对象被那一枚夹住）。
+- A2：写进去的确实是 `it` 那一枚（改 `h.Tag` 后 `it.Tag` 跟着变）。
+- Z item-terms 停在 0：这是**写口打包**那一枚（`§11.110` 在册的「`Set` 值侧只 free 结构体不清
+  内容」），与接收者临时量不是同一枚，本刀不动它。
+- 夹具刻意**写完之后**才取子对象来验收（单层读），避开读链那一格 —— 见下「在册」。
+
+### 四、发码面
+
+- 全清单 **812 行**：机器可复现的 806 行一行未变，另 6 行是 vendor typelib 那一路的既有
+  本机≠CI 差；新夹具两行 + b149 两行随本刀改码更新 ⇒ 810 → **812**；
+- **全语料复算**：除上述 6 行与 b149 那两行外零位移（本刀改的是语句发码，在 `--emit-c`
+  覆盖面内，所以这里是「量出来的零」，不是「覆盖不到」）。
+
+### 五、闸与连带
+
+- 九门 **9/9 rc=0**（`inputs=812 [.vbp=304 .bas=508]`，emitted=1574，exe sha=`118d259052e5`）；
+- 既有桥夹具零回归：b144 九枚、b146 八枚、b147 十二枚、b148 十枚、b149 八枚读数逐条不变
+  （x64 与 x86）；b149 的 `Z-box-terms=1` 现由**读链**那一格解释（改码后它仍走嵌套读），
+  注释已就地改口径；
+- CI（github `dev`）run `45285250271` = **22/22 success**。
+
+### 六、在册（本刀只对平「只发链写」这一形状）
+
+分账探针 `.temp/k150/p2` / `p4` 把剩下的两条量出来，都留给 §11.132：
+
+1. **嵌套读链**（`Set h = o.Child.Held`、`v = q.Child.Tag`）：中间那一枚同样是「交回即持」，
+   读侧没有对应的临时量，每多一层漏一枚（p2：`C=4`、`D=5`）。
+2. **链写时同一枚子对象另握在别的变量里**（`Set c = q.Child` … `Set q.Child.Held = it`）：
+   这一形状仍多留一枚（p4：`V2-box` 比 `V1-box` 多 1）。把释放顺序对调（先放 `c` 再链写）
+   或写完之后才取子对象，都干净 —— 说明多出来的那一枚是「两处各持一次」的记账，不是悬垂
+   （`Set h = c.Held` 在链写之后照旧读得到，`tag=9`）。
+
+
+## §11.132（第一百五十一刀）链读接收者那一枚临时引用
+
+### 一、读数
+
+分账探针 `.temp/k150/p2`（每臂都在干净状态起，尺子是 box 的 Terminate 计数，每臂两枚对象）：
+
+| 臂 | 形状 | 改前 | 改后 |
+|---|---|---|---|
+| A | 取一次子对象又放回 | 2 | 2 |
+| B | 链写 `Set p.Child.Held = it`（§11.131 已对平） | 4 | 4 |
+| C | 嵌套标量读 `v = q.Child.Tag` | 5 | **6** |
+| D | 链写 + 嵌套对象读 `Set h = r.Child.Held` | 6 | **8** |
+
+改前每多一层链就多留一枚。改前发码（一条语句、层层嵌套）：
+
+```c
+vb6_ComGetIntProp(vb6_ComGetObjectProp(q, L"Child"), L"Tag")
+vb6_ComGetObjectProp(vb6_ComGetObjectProp(r, L"Child"), L"Held")
+```
+
+`vb6_ComGetObjectProp` 交回的那一枚按 §11.126 归调用方（`vb6_ComVarFree` 只 free 结构体、
+不 `Release` `pdispVal`），而它被当**接收者**再递一层时谁也不放 ⇒ 中间那枚对象永不
+`Class_Terminate`。
+
+### 二、改法
+
+新增 `hoistComRecvTemp(objExpr)`（`cgen_util_com.cpp`，声明在 `cgen_helpers.inc`）：接收者是
+自有链读/晚绑定调用交回的那一枚（前缀 `vb6_ComGetObjectProp(` / `vb6_ComCallObject(`）时，
+落成 `void* _rrvN` 并登记语句末收回。改后：
+
+```c
+void* _rrv0 = vb6_ComGetObjectProp(q, L"Child");
+int32_t _av1 = (_e0 == vb6_ErrSerial()) ? (vb6_ComGetIntProp(_rrv0, L"Tag")) : (int32_t)0;
+vb6_ReleaseObject((void**)&_rrv0);   /* 语句末收回 */
+```
+
+挂点是 `resolveComValue` 里**晚绑定兜底之前**（`isComMarker_=false` 之后、`getPropArgs`
+之前）—— 必须排在所有 recognizer 之后：一旦提名，文本里的 `L"Tabs"` / `vb6_hwnd_X` /
+`L"SelectedItem"` 这些线索就跟着走了，TabStrip / StatusBar / TreeView 那几族的直译会失配。
+四道闸：过程内 / `indentLevel()==stmtLevel_`（声明与收回同层）/ 非块内条件 / 非拼串左操作数。
+
+收回走既有的 `ownedTempsToFree_` 通道，新增档 3（档 1=BSTR、档 2=VARIANT）⇒ 语句末发
+`vb6_ReleaseObject((void**)&t)`。序号 `comRecvTempSeq_` 独立（`cgen_state.inc` +
+`cgen_base_generate_prologue.inc` 归零），不占 `tempCounter_`，存量 `_vs`/`_e`/`_ag` 编号零移动。
+
+### 三、读数（夹具 `tests/b151_chain_read_ref`，x64 与 x86 八枚逐条相同）
+
+| 行 | 含义 | 改前 | 改后 |
+|---|---|---|---|
+| A2-held-tag | 嵌套对象读 `Set h = p.Child.Held` 的值 | 7 | 7 |
+| B1-child-tag | 嵌套标量读 `v = p.Child.Tag` 的值 | 99 | 99 |
+| C1-two-level-tag | 两层链 `w = p.Child.Child.Tag` 的值 | 99 | 99 |
+| Y-box-made | 出厂 box 数 | 3 | 3 |
+| **Z-box-terms** | 根 + 两级子对象都 Terminate | **1** | **3** |
+| Z-item-terms | 写口打包那一枚（§11.110 在册） | 0 | 0 |
+
+连带：`tests/b149_chain_write` 的 `Z-box-terms` 由 1 变 **2** —— 它自己的嵌套读
+`Set h1 = o.Child.Held` 就是本刀这一格，针同步改了口径。
+
+### 四、发码面
+
+- 全清单 **814 行**（新夹具两行）；语料 **45 行**随本刀改码 —— 链读站点遍地
+  （TeeChart 系列、TreeView `Nodes(i).Text`、StatusBar `Panels(i).Text`、GUISample 的
+  `Parent.Name` 那一族），这正是这把尺一直在漏的地方；
+- 既有 6 行 vendor typelib 本机≠CI 差照旧不动，其中 4 行本次连同改码一起变了 ⇒ 值按
+  **CI 那份清单**登记（`git fetch <remote> ci/emit-manifest` 取 `emit-manifest.txt`），
+  不按本机；
+- 两个发码形状针同步改成新形状：`tv_emitc_shape`（接收者落 `_rrvN` 再递一层）与
+  `pd_parentsem_emitc`（`Parent` 交回的那一枚落 `_rrvN`，`Name` 从它读）。
+
+### 五、闸与连带
+
+- 九门 **9/9 rc=0**（`inputs=814 [.vbp=305 .bas=509]`，emitted=1574，exe sha=`3e0b4d6b55e6`）；
+- 既有桥夹具零回归：b144 九枚、b146 八枚、b147 十二枚、b148 十枚、b149 八枚（其中
+  `Z-box-terms` 1→2）、b150 六枚读数双架构逐条不变；b151 双架构一致；
+- 首推 `03830aea` 的 CI（run `45293640919`）三红：Emit manifest 报**存量 4 行**真变、
+  Tests(vbp #4/#7) 报两个发码形状针失配 —— 都是本刀的预期位移没登记完；
+  补推 `4cbde0a1`（清单 4 行按 CI 那份登记 + 两针改形）后 CI（run `45295861718`）= **22/22 success**。
+
+### 六、在册
+
+分账探针 `.temp/k150/p4` 里还剩一格：**链写时同一枚子对象另握在别的变量里**
+（`Set c = q.Child` … `Set q.Child.Held = it`）仍多留一枚；把释放顺序对调（先放 `c` 再链写）
+或写完之后才取子对象，都干净 —— 说明那是「两处各持一次」的记账而不是悬垂
+（链写之后 `Set h = c.Held` 照旧读得到 `tag=9`）。另：写口打包那一枚（`§11.110`）也仍在册。
+
+## §11.133（第一百五十二刀）`As Object` 字段出厂那一枚引用
+
+### 一、怎么撞上的
+
+§11.132 收工后，b149/b150/b151 的最后一行读数还停在 `Z-item-terms=0`：item 造出来、
+写进字段、局部变量也放掉了，可它**一次 Terminate 都没走**。前两把刀都把这枚记在
+`§11.110`（「`Set` 值侧只 `free` 结构体不清内容」）名下。这一刀把它拆开看：
+
+尺子 `.temp/k152/p10`（同一夹具两臂，每臂都在干净状态起）：
+
+| 臂 | 形状 | 改前 item-terms | 改后 |
+|---|---|---|---|
+| s | 单层写 `Set q.Held = it` → 放 `it` → 放 `q` | 0 | **1** |
+| t | 链写 `Set q.Child.Held = it` → 放 `it` → 放 `q` | 0 | **2** |
+
+`C3_COM_RC_TRACE=1` 下 item 那一枚包装器的进出账（单层那一臂，指针取末 6 位）：
+
+改前 —— `ADDREF cnt=2` / `RELEASE cnt=1`，少一发：
+
+```
+[189] FROM-INST W=…EC40B0 inst=…EB7D70 cls=B151Item
+[189] ADDREF  W=…EC40B0 cnt=2        ← Set it = Nothing 之前: 字段那一枚
+[189] RELEASE W=…EC40B0 cnt=1 owns=1 ← Set it = Nothing 放手
+[189] INVOKE  W=…EC48F0 cls=B151Box mem=Held argc=1
+        …放 q → Class_Terminate 走了, 但没有 item 的 RELEASE
+```
+
+改后 —— 同一臂 `ADDREF 2 / RELEASE 2`，最后一发是持有者出厂时字段放的那一下：
+
+```
+[189] RELEASE W=…EC48F0 cnt=0 owns=1 inst=…EB2880   ← 持有者出厂
+[189] RELEASE W=…EC40B0 cnt=0 owns=1 inst=…EB7D70   ← 字段那一枚（新）
+```
+
+即：写口那一枚**没有多 AddRef**（`vb6_ComSetRef` 那条路不打包，见 §11.129 末尾），
+缺的是**出厂**这一站 —— 前两把刀把账记错了行。这一刀纠正账面：
+`§11.110` 的「值侧打包」依然在册（`vb6_ComSetProp` 那一族，要一枚真走到 Pattern F 的靶），
+但 b149/b150/b151 的 `Z-item-terms` **不是它**，是字段出厂。
+
+### 二、改法
+
+`_Destroy`（`cgen_com.cpp`）逐字段做出厂时，三段判据只认得：数组、`String`、
+以及 `projectClsStructOfCType(mapTypeRef(...))` 答得出 `vb6_cls_X*` 的**类类型字段**。
+`As Object` / `As Collection` / 外部接口在 C 里是裸 `void*`，答不出类结构体 ⇒ 整支不出现在
+出厂体里。改前发码（`tests/b152_object_field_teardown` 的 `vb6_cls_B152Holder_Destroy`）：
+
+```c
+void vb6_cls_B152Holder_Destroy(vb6_cls_B152Holder* me) {
+    int32_t vb6_termErr = 0;
+    if (!me) return;
+    vb6_termErr = vb6_RunVbProtected((void(*)(void*))vb6_B152Holder_Class_Terminate, me);
+    vb6_Free(me);                       /* mHold / mSelf 一格都没出现在这里 */
+    ...
+}
+```
+
+改后同体多出一行（字段名按声明序，与腿②/腿③ 同一个问句）：
+
+```c
+    vb6_ReleaseObject((void**)&me->mHold);  /* 账 #305 §11.133: As Object 字段出厂放手 */
+```
+
+判据不开第二问：`projectClsStructOfCType(mapTypeRef(...))` 那一问照旧（类类型字段走原路），
+答不出类结构体时再问一句**声明名是不是字面量 `Object`**（`isObjectTypeName`，同一个文件里的
+静态小函数，六个字母大小写不敏感）。是，就发：
+
+```c
+    vb6_ReleaseObject((void**)&me->mHold);  /* 账 #305 §11.133: As Object 字段出厂放手 */
+```
+
+**闸只那一把字面量 `Object`**，不是「所有落 `void*` 的字段」—— 这一条是首推（`0b862965`）
+三红换来的：那一版按 `Vb6Type::Object || C 类型 == "void*"` 放闸，于是 `As <工程接口>`
+的字段（k175 的 `m_lv`，语义上是 `&instance->__iv_IK175` 那枚**视图**）也被写进了出厂体，
+而视图那一枚从来没 AddRef 过 ⇒ 出厂 Release 就是越权调用。三红各自的读数：
+
+| 红的作业 | 读数 | 根因 |
+|---|---|---|
+| `Tests (vbp #6)` | `[EMITC-ABSENT] k175_viewstmt_com_fallback_gone ... 还在场: vb6_ReleaseObject((void**)&me->m_lv)` | 正是上面那一条：k175 那条 absent 针原本钉的就是「旧晚绑定 fallback 不认得视图字段」，新行撞上了它 |
+| `Tests (compile #2)` | `CLASS-REFCOUNT-AUTHORITY FAIL - mapTypeRef(var.asType.get()) question sites = 7 (want exactly 6)` | 新分支多问了一次 `mapTypeRef`，破的是「同一问只有六处」那条普查 |
+| `Emit manifest (shape oracle)` | `tests/b132_typedcom_local_scope/B132Typed.vbp` 一行（本机 17448 / CI 17429） | b132 有 `Public K As Object`，本刀确实改了它；机器侧差异按 CI 那份登记 |
+
+**裸实例那一格**（`Set mSelf = Me` 之类，见 §11.126）由 `vb6_ReleaseObject` 自己的
+Fix 191 判据拦下 —— 非可分派只清指针、不解引用 `lpVtbl`，所以新加的这一行不会把
+「裸实例」当接口调 Release。夹具的第二臂就是这个钉子。
+
+### 三、新夹具 `tests/b152_object_field_teardown`
+
+`B152Holder`：`Private mHold As Object`（腿②/腿③ 已是 `vb6_ReleaseObject`）、
+`Private mSelf As Object`（裸实例那一格）。六枚针，x64 与 x86 同值：
+
+| 针 | 读数 | 意思 |
+|---|---|---|
+| `B152-A1-items` | 0 | 写进字段、放掉局部变量之后仍被字段握着 |
+| `B152-A2-held-tag` | 7 | 字段那一枚读得回（放手不是「先放后读」） |
+| `B152-Z-items` | **1** | 放掉持有者 ⇒ item Terminate（改前 0）← 本刀判据 |
+| `B152-B1-self-nothing` | False | 裸实例 `Me` 进字段后还认得出 |
+| `B152-B2-ok` | — | 出厂放手没有越权 Release ⇒ 走到这里 |
+| `B152-DONE` | — | — |
+
+### 四、发码面
+
+- 全清单 **816 行**（814 + 新夹具两行）；
+- **19 行**随本刀改码（全是「类里有字面量 `As Object` 字段」的那一族：b130/b131/b132/b133/b134
+  承载者、`Charts 2020` 六个 uc、`ucTreeView`、`VBFlexGridDemo`、`k3138`、`Gifcontrol`、
+  `dbgdlg`、`BalloonTooltips`、`ucSegmentedControl`、`ucSlider_2022`、b149/b150/b151）；
+- 窄口之前那一版（`0b862965`）还多改了 8 行 —— 那些是只有 `As <工程接口>` 字段的工程
+  （`b445_refcount`、`k2947_setview`、`k3060_setvariant`、`k3122_own_prop_set`、`ve_list` 等），
+  窄口后逐个回到原值；
+- 既有 6 行机器侧（b132、ctrlmscomm、GUISample ×3、TeeChart）登记 **CI 那份清单**的值
+  （`git fetch <remote> ci/emit-manifest`），本机照旧读不出同值。
+
+### 五、闸与连带
+
+- 九门 **9/9 rc=0**（`inputs=816 [.vbp=306 .bas=510]`，emitted=1574，exe sha=`4bb4e…`），
+- `check_class_refcount_authority.ps1` 那条普查在窄口后回到原答（`6 field-type questions`，
+  没有第七处 `mapTypeRef` 站点）；k175 那条 absent 针窄口后原样通过（`m_lv` 不出现在出厂体里）；
+- CI 三趟：首推 `0b862965`（宽口）run `45307425519` 三红（19 表那三行）；改窄口后
+  `a3f08841` run `45312597405` 只剩 `Emit manifest` 一红，差的就是 b132 一行（本机 17448 /
+  CI 17429 那位机器侧）；把那一行按 CI 那份登记（`c48339cd`）后 run `45314230404` = **22/22 success**。
+- 桥夹具双架构零回归：b144 九枚、b146 八枚、b147 十二枚、b148 十枚读数逐条不变；
+  b149 八枚、b150 六枚、b151 八枚只动 `Z-item-terms` 0→1，另有两针口径同步改口；
+- b144/b146/b147/b148 的 `Z` 行不变，说明这几族本来就没有「`As Object` 字段被漏放」的账。
+
+### 六、在册
+
+- `§11.110` 值侧打包（`vb6_ComSetProp` 那一族 `vb6_ComPackObject` 给 AddRef 之后没人放）：
+  仍在册，要一枚真走 Pattern F 的靶；- `.temp/k150/p4` 的 **V2** 那个盒子：取 `c = q.Child` → 链写 → 放 `c` → 放 `q`，
+  root 走了 Terminate 而 child 没有（V2b「先放 c 再链写」、V2c「链写后才取 c」都干净）。
+  本刀前后该探针读数逐条同值（`V2-box=1 / V2b=3 / V2c=5`）⇒ 与字段出厂无关，
+  是「两处各持一次」的记账，仍在册；
+- `As Variant` 字段的出厂：`vb6_VARIANT` 槽那一格本刀没动（`VariantClear` 会连 BSTR
+  一起放，语料面比 `As Object` 大得多），另开一刀。
+
+## §11.134（第一百五十三刀）`As Variant` 字段的读写两站
+
+### 一、怎么撞上的
+
+上一刀（§11.133）收尾时明确记着「`As Variant` 字段的出厂本刀没动，另开一刀」。照那条
+接着做，先量 —— 读数却是**反的**：
+
+`.temp/k153` 的 A 臂（`Set h.V = it` → 放 `it` → 读回 → 放 `h`）在改前就已经
+`Z-terms=1`，item 明明走了一次 `Class_Terminate`。可是
+`vb6_cls_B153Holder_Destroy` 里一个字都没有（只有 `vb6_Free(me)`）。在
+`Class_Terminate` 里加一行打点之后真相出来了：
+
+```
+B153-A1-terms=0
+B153-A2-held-tag=5
+[b153-term tag=5]     ← 死在 Set got = Nothing 这一句, 不是死在持有者出厂
+B153-Z-terms=1
+```
+
+RC 账（item 包装器指针最后 6 位）：
+
+```
+INVOKE holder V argc=1      ← Set h.V = it
+ADDREF item cnt=2           ← 写口 VariantAssign 取的那一枚（槽持有）
+RELEASE item cnt=1          ← Set it = Nothing
+INVOKE holder V argc=0      ← Set got = h.V
+RELEASE item cnt=1 → 0      ← 改前: 读出去的那一枚**没有**取引用,
+                              放它就把槽里还握着的那一具拆了 ⇒ 槽里留悬垂
+```
+
+所以这里不是「漏」，是**悬垂**：①读出去那一枚 `Variant` 与字段**共用**同一个对象；
+②出厂那一站不清槽，槽随 `vb6_Free(me)` 一起消失时那一枚也彻底丢了。两站成对。
+
+### 二、改法 ①：读出去那一枚要取引用
+
+`V = mV`（Property Get 体，两边都是 Variant）改前发码：
+
+```c
+vb6_VariantClear(&vb6_ret_V);
+vb6_ret_V = vb6_VariantFromValue(me->mV);   /* ← _Generic 对 vb6_VARIANT 落 Identity 浅拷贝 */
+```
+
+`vb6_VariantFromValue` 对 `vb6_VARIANT` 实参落 `vb6_VariantIdentity`（纯浅拷贝:
+不 AddRef、不拷 BSTR）—— 这一格本身是**故意的**（函数返回 / 集合取回那些临时量靠它
+按值交回来，多拷一次就多一枚引用）。错在**站点把字段当成了「自有」**。
+
+判据住在一处（`variantRhsOwnsValue`，意思是「右值自己持有这份值吗 —— 那就不用再拷」）。
+改前它只把**本地** Variant 变量当槽:
+
+```cpp
+if (rhs && rhs->kind == ASTNodeKind::IdentifierExpr) {
+    if (knownVariantVars_.count(...name...) > 0) return false;
+}
+```
+
+类里的字段在 AST 里是一枚**裸 IdentifierExpr**（不带 `me->`），`knownVariantVars_`
+里没有它 ⇒ 落到 `return true`（「自有」）⇒ 浅拷贝。改后按**字段表**问两句:
+
+```cpp
+if (rhs && !exprHasLateBoundComRead(rhs)) {
+    if (rhs->kind == ASTNodeKind::IdentifierExpr) {
+        // 裸名 = 本模块字段 (隐式 me->): 问类成员表
+        if (classVariantMembers_.count(nm) || classVariantMembers_.count("m_" + nm))
+            return false;
+    } else if (rhs->kind == ASTNodeKind::MemberAccessExpr) {
+        // Me.f / <类引用>.f: 问 driver 注入的工程级字段档表
+        if (!cls.empty() && classFieldIsVariantSlot(cls, ma.memberName)) return false;
+    }
+}
+```
+
+口径一句话：**只有调用**（函数 / Property Get 交回的临时量）才「自有」；字段这些
+**槽**是借来的，必须深拷贝。改后发码:
+
+```c
+vb6_VariantAssign(&vb6_ret_V, vb6_VariantFromValue(me->mV));
+```
+
+**这一格第一版判错了门**：首版按「源码里长得像左值 + `inferExprType` 答 Variant」判
+（IdentifierExpr / MemberAccessExpr 一律算槽），本地六枚形状针位置都对，推上去
+CI 直接红六处 —— `cvp_emitc_variant_fallback`（`at.value` 那种晚绑定读）与
+b251/b252/b253/b254/b255（On Error 站的 `_vsN` 暂存）钉的正是**所有权转移**那一形:
+
+```
+missing: v = vb6_VariantFromComResult(vb6_ComGetProp(at, L"value"));
+missing: if (_e0 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _vs0; }
+missing: me->f = vb6_VariantFromValue(o);
+```
+
+晚绑定成员读交回的是一枚**新造**的 Variant（`vb6_VariantFromComResult` /
+`vb6_ComGet*Prop`），`_vsN` 是 On Error 站自己刚写进去的暂存 —— 两者都是「转移」，
+按槽判会变成「深拷贝 + 原来那一枚没人放」。于是加 `!exprHasLateBoundComRead(rhs)`
+这道门，并把「像左值」换成「查得到是一枚 Variant 字段」。六针恢复，b153 读数不变。
+
+### 三、改法 ②：出厂清槽
+
+`_Destroy` 的逐字段放手补一档（与 §11.133 的 `As Object` 同一处，判据换成
+`Vb6Type::Variant`）:
+
+```c
+vb6_VariantClear(&me->mV);  /* 账 #305 §11.134: Variant 字段出厂清槽 */
+```
+
+`vb6_VariantClear` 就是与写口 `vb6_VariantAssign` 成对的那一半（写口 Clear + 深拷贝，
+出厂清槽），对空槽是空转 —— 工厂里 `As Variant` 字段初始化就是 `vb6_VariantEmpty()`。
+
+### 四、新夹具 `tests/b153_variant_field_teardown`
+
+`B153Holder`：`Private mV As Variant` + Get/Let/Set 三站 + `PutText`（槽里放串）+
+`TextLen`（类内读回）。八枚针，x64 与 x86 同值:
+
+| 针 | 改前 | 改后 | 意思 |
+|---|---|---|---|
+| `A1-terms` | 0 | 0 | 写进槽、放掉局部变量后 item 仍被槽握着 |
+| `A2-held-tag` | 5 | 5 | 槽里读得回 |
+| `A3-terms` | **1** | **0** | 读回并放掉那一枚之后 item 仍活着 ← 悬垂那一条的判据 |
+| `Z-terms` | 1 | 1 | 放掉持有者 ⇒ 出厂清槽 ⇒ Terminate（改前是「早死」，不是「晚死」） |
+| `B1-len` | 1 | 1 | 槽里放标量 7，清槽不弄坏 |
+| `B2-len` | 4 | 4 | 槽里放串 `"abcd"` |
+| `C1-terms` | **1** | **2** | 两枚持有者各握一枚 ⇒ A(1)+C(1) ← 漏的判据 |
+| `DONE` | — | — | — |
+
+C 臂必须两枚持有者都在：改前 C 那一枚从头到尾没被退（`Z` 上只有 A 的 1），
+改后 C 结束在 `Set q = Nothing` 那一句（栈式记账: `New`(1) → p 槽(2) → q 槽(3) →
+`Set it2 = Nothing`(2) → p 出厂(1) → q 出厂(0)）。
+
+### 五、发码面
+
+- 全清单 **818 行**（816 + 新夹具两行）；
+- **14 行**随本刀改码: b168/b169/b170/b171/b172/b173 那一族槽夹具、`b433`、`setcls`、
+  `ve_list`、`ucSlider_2022`、`ucTreeView`、`Charts 2020`、`dbgdlg`、`VBFlexGridDemo`；
+- 既有 6 行机器侧（b132、ctrlmscomm、GUISample ×3、TeeChart）本机≠CI 差照旧不动 ——
+  用**改前编译器**逐行重算过: 这 6 行改前改后同值，本刀对它们零影响。
+
+记账口径补一句：首版把「像左值的 Variant 右值」全判成槽时，清单里有 41 行动；
+收窄到字段表之后只剩 14 行 —— 那 27 行的差**不是**本刀的语义，是首版判门过宽顺手
+带出来的（`test_late_*`、`dict_native` 这些正是靠「转移」才对的）。
+
+### 六、闸与连带
+
+- 九门 **9/9 rc=0**（`inputs=818 [.vbp=307 .bas=511]`，emitted=1574）；
+- 相邻桥夹具零回归: b144 九枚、b146 八枚、b147 十二枚、b148 十枚、b149 八枚、
+  b150 六枚、b151 八枚、b152 六枚读数逐条不变；
+- CI 22/22（`99511f8f`）。
+
+### 七、在册
+
+- `vb6_VariantFromValue` 对 `vb6_VARIANT` 实参仍是 `vb6_VariantIdentity`（浅拷贝）——
+  **本刀没动 RTL**：那一格是「临时量按值交回」用的，动它就多拷一枚引用。这一刀只把
+  「字段」这一族从它射程里挪出去（判据落在站点上，不住 RTL）；
+- 形如 `Set c->f = o`（`o` 是 `As Variant` **形参**）仍走 `vb6_VariantFromValue(o)`
+  浅拷贝 —— `setcls` 那格的形状针钉的就是它。参数槽与字段槽是两笔账，本刀只动了
+  读出口与出厂，写口的形参那一族另开一刀；
+- `§11.110` 值侧打包（`vb6_ComSetProp` 那一族 `vb6_ComPackObject` 给 AddRef 之后没人放）:
+  仍在册，要一枚真走 Pattern F 的靶；
+- `.temp/k150/p4` 的 V2 盒子记账（两处各持一次）仍在册，与本刀无关（读数前后同值）；
+- `.temp/k153/p1` 里记着一格: `n = h2.V`（晚绑定读 Variant 属性直接赋给 Long）会发
+  `vb6_VariantToLong(vb6_ComGetIntProp(h2, L"V"))` —— 属性读的交回值已经是 `int32_t`，
+  外面再套一层 `VariantToLong` 是 C2440（编译不过，不是运行期错）。这一格还没开门，
+  只是记在册。
+
+## §11.135（第一百五十四刀）晚绑定属性写口的工程类实参
+
+### 一、怎么撞上的
+
+上一刀收尾时在册里留了一句：`Set c->f = o`（`o` 是 `As Variant` **形参**）仍走浅拷贝。
+照那条去量 —— 先造一枚最小探针（`.temp/k154/p1`）：`B154Box` 有
+`Property Set Item(ByVal it As B154Item)`，主程序两腿，早绑定 `Set box.Item = it` 与
+晚绑定 `Set o.Item = it`（`o` 是 `As Object`，值来自 `Set o = box`）：
+
+```
+A1-held=11     ← 早绑定: 存住了
+B1-held=0      ← 晚绑定: 读回 Nothing
+Z-terms=1
+```
+
+读数不是"晚一点"或"少一枚引用"，是**整枚对象被丢了**。加一枚探针打印
+（`C3_DBG_PUTARG`，量完即撤）能看到服务端那一侧：
+
+```
+[PUTARG] mem=Item ik=8 argc=1 [0]vt=9 p=0000015ED57FE380 want[0]=9
+```
+
+`vt=9`（VT_DISPATCH）、`want[0]=9` ⇒ `vb6_ComArgNormalize` 走的是"同档借用"那一支，
+换算什么都没丢；实参进了适配器，出了适配器就成 NULL 了。
+
+### 二、根因：适配器剥壳那一问只认包装器
+
+工程类的 Property Set 在 `com_entry.c` 里落成一枚适配器，工程类 ByVal 形参那一臂是：
+
+```c
+provided = "(vb6_cls_X*)vb6_ComObject_GetInstance(((VARIANT*)args[0])->pdispVal)";
+```
+
+`vb6_ComObject_GetInstance` 的语义是「**我们自己的包装器** → 裸实例，其余答 NULL」。
+而**同一工程内**的调用点递给 `vb6_ComSetRef` 的是一枚**裸实例**
+（`vb6_ComSetRef(o, L"Item", it)`，`it` 本身就是 `vb6_cls_B154Item*`，从没包装过）
+⇒ 剥壳答 NULL ⇒ 服务端形参收到 `Nothing` ⇒ 属性写把整枚对象丢掉，`S_OK` 照常返回。
+
+判据的**另一口径**早就住在 RTL 里：
+
+```c
+void* vb6_ComObject_UnboxVb6Instance(void* v) {
+    if (!vb6_ComObject_IsVb6Wrapper(v)) return v;   /* 非包装器: 原样交回 */
+    void* inst = vb6_ComObject_GetInstance(v);
+    return inst ? inst : v;
+}
+```
+
+（它的注释写着：For Each 项目类那一路、`cgen_com.cpp` 那些调用点用的就是它。）
+适配器换用它：
+
+```c
+provided = "(vb6_cls_X*)vb6_ComObject_UnboxVb6Instance(((VARIANT*)args[0])->pdispVal)";
+```
+
+一处改，写口（Property Set）与**所有**带工程类 ByVal 形参的公开方法一起修好 ——
+适配器是它们共用的那一格。
+
+### 三、读数
+
+新夹具 `tests/b154_late_prop_set`（九针），x64 与 x86 同值:
+
+| 针 | 改前 | 改后 | 意思 |
+|---|---|---|---|
+| `A1-nothing` | False | False | 早绑定写口对照 |
+| `A2-held` | 11 | 11 | 同上 |
+| `B1-nothing` | **True** | **False** | 晚绑定写口存住了 ← 判据 |
+| `B2-held` | **-1** | **11** | 同上（-1 是夹具里"槽是 Nothing"的记号） |
+| `C1-nothing` | True | False | 放掉调用方那一枚后盒子还握着 |
+| `C2-held` | -1 | 11 | 同上 |
+| `Z-terms` | 1 | 1 | 盒子放手 ⇒ 字段出厂放手 ⇒ item Terminate |
+| `Z-made` | 1 | 1 | — |
+
+`Z` 两档同值不是"本刀没动它"，而是改前那一枚**从没进过盒子**（调用方一放手就 Terminate），
+改后是**盒子握着、随盒子出厂**才 Terminate —— 次数一样，路径不同，`B`/`C` 那一对才是判据。
+
+第一次推送时 CI 在这个夹具上红了两处（x64/x86 各一），原因不在语义：
+夹具打印的是 `A1-nothing=…`，而针写成 `B154-A1-nothing=…`。给输出补上前缀后重推。
+
+### 四、发码面
+
+- 清单 **820 行**（818 + 新夹具两行）；
+- 本刀那一行改在**项目级** `com_entry.c`（适配器），不在清单覆盖的逐输入产物里 ⇒
+  既有 818 行零移动（除 6 行机器侧在册），`cmp.ps1` 只列那 6 行；
+- 九门 9/9 rc=0（`inputs=820 [.vbp=308 .bas=512]`）；相邻桥夹具 b144…b153 读数逐条不变；
+- CI 22/22（`1ada4d7e`）。
+
+### 五、在册（本刀量到、未修）
+
+- **工程类属性置空那一站**：`Set box.Item = Nothing` 发成
+
+  ```c
+  vb6_ReleaseObject((void**)(&(void*){vb6_B154Box_prop_get_Item(box)}));  /* Set Nothing */
+  ```
+
+  拿 **getter** 的返回值去 Release —— `prop_set_Item` 一次都没调，属性没被清空
+  （探针里 `B0-cleared` 一直是 False）。`Fix 056b` 那条改写只认 `prop_set_` / `prop_let_`
+  前缀，而 `emitExpr` 给属性左值发的是 `prop_get_Item(box)` ⇒ 前缀对不上，落到下面
+  "对调用结果 Release"那条通用路。
+- **晚绑定读带类型的属性**：`o.Held`（`Property Get Held() As Long`）发成
+  `vb6_CStrLong(vb6_ComGetStringProp(o, L"Held"))` —— 用 **String** 那一枚读臂读 Long，
+  读回垃圾（实测 `B3-late-held=595138088`）。写口修好之后，这一格是同一族里剩下的一半。
+- `Set c->f = o`（`o` 是 `As Variant` **形参**）仍走 `vb6_VariantFromValue` 浅拷贝
+  （`setcls` 那格形状针钉着它）—— 参数槽与字段槽两笔账。
+- `§11.110` 值侧打包、`.temp/k150/p4` 的 V2 记账照旧在册。
+
+
+## §11.136（第一百五十五刀）工程类属性置空要点名 setter
+
+### 一、撞见
+
+上一刀（§11.135）在册第一笔：`Set box.Item = Nothing`（`box` 是工程类）改前发成
+
+```c
+vb6_ReleaseObject((void**)(&(void*){vb6_B154Box_prop_get_Item(box)}));  /* Set Nothing */
+```
+
+拿 **getter** 的返回值去 Release。实测两个症状：
+
+- **语义**：`prop_set_Item` 一次都没调 ⇒ 属性根本没被清空（探针 `P1-cleared=False`）；
+- **引用账**：逐站点打点（`.temp/k155/p3`，改前二进制）看到 item 的 `Terminate` **一次都没发生**
+  （`PT2=0 … PT8=0, Z-terms=0`，改后同一处 `PT8=1`）。
+
+第二条的机理不是"多减一格"，是**多加一格漏在那**：getter 交回的是**自持**引用
+
+```c
+vb6_ret_Item = (vb6_cls_B155Item*)vb6_ComObject_UnboxVb6Instance((void*)(me->mIt));
+if (vb6_ret_Item) vb6_cls_B155Item_AddRef(vb6_ret_Item);   /* ← 自持 */
+```
+
+而 `vb6_ReleaseObject`（`vb6com.c`）对**类实例指针**根本不 Release：
+
+```c
+IUnknown* pUnk = (IUnknown*)(*objPtr);
+if (vb6_ComIsDispatchable(pUnk)) {           /* ← Fix 191 那道闸 */
+    pUnk->lpVtbl->Release(pUnk);
+}
+*objPtr = NULL;
+```
+
+裸类实例不是可分派对象（首字段是引用计数，不是 vtable）⇒ `IsDispatchable` 判否 ⇒
+那一 Release **什么也没做**，getter 的 AddRef 就漏在账上。于是：属性没清空（槽还握着），
+而 item 的计数永远多一格 ⇒ 盒子出厂时收不干净，`Terminate` 不来。
+
+### 二、为什么改写没接上
+
+置空走的是 `cgen_setlet_set_prop.inc` 里最早的那一支：先 `emitExpr(*node.target)`，
+再对求值结果套 `vb6_ReleaseObject`，指望主路（`Fix 056b`）把文本里的 `prop_get_`
+前缀改写成 `prop_let_` / 保持 `prop_set_`。
+
+而 `emitExpr` 给**属性左值**发的本来就是 `prop_get_Item(box)` —— 左值那一路只有
+`prop_get_` 这一个名字可用（写口没有"取引用"这回事）。`Fix 056b` 只认
+`prop_set_`/`prop_let_` 前缀 ⇒ 前缀对不上 ⇒ 一路落到"对调用结果 Release"那条通用路，
+静默发错。**这不是漏了一个分支，是问错了对象：拿文本去认语义。**
+
+### 三、修：置空之前先问符号
+
+在那一支早退**之前**加一段，用与 Set 值那一支**同一张表**（`lookupModuleByKind`）问符号：
+
+```cpp
+if (node.target->kind == ASTNodeKind::MemberAccessExpr) {
+    Symbol* psN = symTab_.lookupModuleByKind(ma.memberName, SymbolKind::PropertySet);
+    ...
+    if (okN) {
+        c_.emitLine(cProcName("prop_set_" + ma.memberName, psN->access, objClsN)
+                    + "(" + objN + ", NULL);  /* Set Nothing (property setter) */");
+        return;
+    }
+}
+```
+
+`okN` 的闸与 Set 值那一支同源，一条不少：
+
+| 闸 | 为什么 |
+|---|---|
+| 推不出类名（晚绑定 `Object`/`Variant`） | 成员的 C 存储是 `void*`，直发等于当实例指针用 ⇒ 交给 COM `SetRef` |
+| `knownFormControls_` 命中 | 控件属性不属该类，`lookupModuleByKind` 全局按名会误命中他类同名属性 |
+| `hostPseudoIsObject` 命中 | `UserControl`/`Ambient`/`VBA` 等宿主伪对象同理 |
+| `inferUdtTypeOfExpr` 非空 | 接收者是 UDT 值/字段链，成员必是结构体字段，永远不是类属性 |
+| 外部符号且 `sourceModule != 接收者类` | 只剩"属性确实属于这个类"才直发 |
+
+晚绑定那一腿没被这个改动碰到：`Set o.Item = Nothing` 照旧发 `vb6_ComSetRef(o, L"Item", NULL)`
+—— 夹具 `P2-cleared=True` 两档都对，就是钉这一条。
+
+### 四、读数
+
+新夹具 `tests/b155_prop_set_nothing`（八针），x64 与 x86 同值：
+
+| 针 | 改前 | 改后 | 意思 |
+|---|---|---|---|
+| `P1-held` | 11 | 11 | 置空前存住 |
+| `P1-cleared` | **False** | **True** | 置空后 `ItemIsNothing` ← 语义判据 |
+| `P2-cleared` | True | True | 晚绑定置空经 COM 派发（对照，堵住"顺手把晚绑定改成直发"） |
+| `P3-held` | 11 | 11 | 置空后再写还能用 |
+| `P4-nothing` | False | False | 放掉调用方那一枚后盒子还握着 |
+| `Z-terms` | **0** | **1** | item Terminate ← 账判据 |
+| `Z-made` | 1 | 1 | — |
+| `DONE` | — | — | — |
+
+`P1-cleared` 与 `Z-terms` 是一行发错踩出来的两件事：前者是语义（写口没点名），后者是账
+（getter 那枚自持引用被一个对裸实例无效的 Release 顶掉）。本刀两件一起回正。
+
+### 五、发码面
+
+- 清单 **822 行**（820 + 新夹具两行，接在 b154 两行之后）；
+- 全语料 **零移动**：存量 820 行里没有一处 `Set <工程类>.Prop = Nothing`，`cmp.ps1` 只列
+  那 6 行机器侧在册（b132 / ctrlmscomm / GUISample×3 / TeeChart）；
+- 九门 9/9 rc=0（`inputs=822 [.vbp=309 .bas=513]`）；相邻夹具 b144…b154 读数逐条不变。
+
+### 六、在册（未修）
+
+- **`vb6_ReleaseObject` 对裸类实例是空转**：本刀只是绕开了它踩的那一格（置空不再走那条路）；
+  但"把类实例塞进 `void*` 再交给 `vb6_ReleaseObject`"仍然到处都能写出来，写一次漏一格。
+  真修要问的是"这个 `void*` 是谁的、该怎么放手"，不是再加一道闸。
+- **晚绑定读带类型的属性**：`o.Held`（`Property Get Held() As Long`）仍发成
+  `vb6_CStrLong(vb6_ComGetStringProp(o, L"Held"))` —— 用 **String** 那一枚读臂读 Long，
+  读回垃圾（§11.135 实测 `B3-late-held=595138088`）。写口这一族（Set 值 / Set 置空）已修，
+  读口这一半是同一张属性表上剩下的那半。
+- `Set c->f = o`（`o` 是 `As Variant` **形参**）仍走 `vb6_VariantFromValue` 浅拷贝
+  （`setcls` 那格形状针钉着它）—— 参数槽与字段槽两笔账。
+- `§11.110` 值侧打包、`.temp/k150/p4` 的 V2 记账照旧在册。
+
+## §11.137（第一百五十六刀）已是 BSTR 的晚绑定读不再套 CStr
+
+### 一、撞见
+
+上一刀（§11.136）在册第二笔：晚绑定读带类型的属性发成
+`vb6_CStrLong(vb6_ComGetStringProp(o, L"Held"))`。造探针（`.temp/k156/p1`，
+`B156Box` 有 `Property Get Held() As Long`、`Property Get Note() As String`）量到：
+
+```
+B156-Q1=11        赋给 Long
+B156-Q2=12        Long + 1
+B156-Q3=eq        与字面量比
+B156-Q4=hi        String 属性赋给 String
+B156-Q5=128849432 拼串里的裸值 ← 一个指针值（x86 打 14248540）
+```
+
+Q1~Q4 都对，只有 Q5 是垃圾 —— 而 Q5 正是**最普通的一句** `Debug.Print "…" & o.Held`。
+
+### 二、两站各说一套
+
+读口（`resolveComMarkerForPack`，`packFnHint` 为空那一支）按"不知道类型就当 String"发
+`vb6_ComGetStringProp`。**这一步本身没错**：RTL 那一枚内部是
+
+```c
+BSTR result = vb6_ComUnpackBSTR(pv);   /* vt != VT_BSTR 时 VariantChangeType(…, VT_BSTR) */
+```
+
+`VT_I4` 折成 `"11"`、`VT_BOOL` 折成 `"True"` —— 值是对的。
+
+错在**拼串侧**：`wrapToBSTR` 拿 `inferExprType` 的答案选格式化函数，而 `inferExprType` 走
+的是"按**裸成员名**查模块符号"那条兜底 —— 这个工程里 `Held` 唯一，答 Long ⇒
+`vb6_CStrLong(...)` ⇒ 把 BSTR 指针当 `int32_t` 交给格式化。同一句 `o.Held`：
+**读口说是串、拼串侧说数**，两边都不问对面。
+
+### 三、修：不新开判据，登记进那张老表
+
+`isBstrReturningCall`（`cgen_expr_binary_util.cpp` 的 `kBstrReturningCalls`）本来就是
+"这个调用交回的就是 BSTR，别再折一层"那张表（Fix 100a/100d 那一族的老账：
+`vb6_GetListItem` / `vb6_GetImageListKeyAt` / `vb6_StatusBar_GetPanelText` …）。
+把 `vb6_ComGetStringProp(` 登记进去，`wrapToBSTR` 在数值清单之后、类型推断之前直通：
+
+```cpp
+if (isBstrReturningCall(expr)) return expr;
+```
+
+于是 Q5 的发码从
+
+```c
+vb6_CStrLong(vb6_ComGetStringProp(o, L"Held"))
+```
+
+变成
+
+```c
+vb6_ComGetStringProp(o, L"Held")
+```
+
+—— 值由 RTL 那一步 `VariantChangeType` 说话，上层不再二次解释。
+
+### 四、读数
+
+新夹具 `tests/b156_late_typed_prop_read`（六针），x64 与 x86 同值：
+
+| 针 | 改前 | 改后 | 意思 |
+|---|---|---|---|
+| `Q1` | 11 | 11 | 赋给 Long → `ComGetIntProp`（本来就对） |
+| `Q2` | 12 | 12 | 参与算术 → `ComGetIntProp` |
+| `Q3` | eq | eq | 与字面量比（走 `ComGetDoubleProp`，C30-11 后记那条口径） |
+| `Q4` | hi | hi | String 属性赋给 String → `ComGetStringProp` 直通 |
+| `Q5` | **128849432**（x86 14248540） | **11** | 拼串里的裸值 ← 判据 |
+| `DONE` | — | — | — |
+
+### 五、发码面
+
+- 清单 **822→824**（新夹具两行）；
+- 存量 **86 行 CHG**，全是"把包在 `vb6_CStrXxx(vb6_ComGetStringProp(…))` 外层的那一层
+  CStr 解开"，没有删行、没有别的位移；
+- 41 个受影响工程逐个 `--output-dir` 重建，**0 失败** —— 确认没把 BSTR 塞进要 VARIANT 的槽；
+- **一条形状钉跟着改了形**：`tv_emitc_shape` 原钉
+  `vb6_CStr(vb6_VariantFromValue(vb6_ComGetStringProp(_rrv…`（比较上下文先包 VARIANT 再折回串），
+  现在同一处是 `vb6_StrCmp(vb6_ComGetStringProp(_rrv…`（直通给 `vb6_StrCmp`，它收 BSTR）。
+  同一条判据的**另一半没动**：数值成员仍钉 `vb6_ComGetDoubleProp(_rrv` —— 挡住"为了修字符串
+  把两档一起改成 BSTR"那种反向过度修正；
+- 九门 9/9 rc=0（`inputs=824 [.vbp=310 .bas=514]`）。
+
+### 六、第一次推送红的两处（记账）
+
+1. `Emit manifest (shape oracle)` —— 4 行机器侧（b132 / GUISample×3）在 CI 那台机器上随本刀
+   一起变了哈希（它们本来就含晚绑定读的产物）。按老规矩**以 CI 为准**：把 CI 产出的
+   `emit-manifest.txt` 那 4 行灌回期望，本地与 CI 的 824 行逐行 COMPARE = 0 差异。
+2. `Tests (vbp #7)` —— 就是上面那条形状钉，钉的是**改前**的形。
+
+### 七、在册（未修）
+
+- **`Dim v As Variant: v = o.Held` 仍是 Variant(BSTR `"11"`)，不是 Variant(Long 11)** ——
+  值对、型别不对。这一格要的是"读口按声明类型选臂"，本刀只把"已经读成 BSTR"那一头的二次
+  折叠摆正；型别保真要另开一刀（与 `n = o.Held` 那条 C2440 同一族）。
+- `Set c->f = o`（`o` 是 `As Variant` **形参**）仍走 `vb6_VariantFromValue` 浅拷贝。
+- `vb6_ReleaseObject` 对**裸类实例**是空转（§11.136 在册第一笔）。
+- `§11.110` 值侧打包、`.temp/k150/p4` 的 V2 记账照旧在册。
+
+## §11.139（第一百五十七刀）声明为 Variant 的晚绑定读不再按目标档钉型别
+
+### 一、撞见
+
+上一刀（§11.137）在册第一笔写得明明白白：`v = o.Held` 读进 Variant 时**型别不对**，
+而且它和"`n = o.Held` 那条 C2440 同一族"。这一刀来收那一族。
+
+先造探针量 §11.138（晚绑定读进 Variant 的型别保真）——`.temp/k157/p1`，`B157Box` 有
+`Property Get Num() As Long` / `Txt() As String` / `Flag() As Boolean` / `Rate() As Double`，
+四句 `v = o.Num` 之类。**读数全对**：
+
+```
+N-type=3 val=11     VT_I4
+T-type=8 val=hi     VT_BSTR
+B-type=11 val=True  VT_BOOL
+D-type=5 val=1.5    VT_R8
+```
+
+发码是 `vb6_VariantFromComResult(vb6_ComCall(o, L"Num", NULL, 0))` —— 服务端交回什么就是什么，
+型别一点没丢。所以 §11.138 那条**在册项本身是错的推理，量不到病**，不修；本刀改收真正会发病的那一支。
+
+那个真正发病的形状在 `.temp/k158/p1`：`B158Box` 有 `Property Get V() As Variant` 与
+`Property Let V(ByVal x As Variant)`，主程序（`o As Object`，晚绑定）：
+
+```vb
+Dim n As Long
+Dim s As String
+box.V = 11
+n = o.V          ' L1
+n = o.V + 1      ' L2
+s = CStr(o.V)    ' L3
+```
+
+**整份工程编不过，rc=1**：
+
+```
+B158Main.c(26): error C2440: 无法从 'int32_t' 转换为 'vb6_VARIANT'
+```
+
+发码两形：
+
+```c
+n  = vb6_ChkLong(vb6_VariantToLong(vb6_ComGetIntProp(o, L"V")));          /* L1 */
+n  = vb6_ChkLong(vb6_VariantToLong(vb6_VarAddV(
+       vb6_VariantFromValue(vb6_ComGetIntProp(o, L"V")),                  /* L2 */
+       vb6_VariantInt((int16_t)(1)))));
+```
+
+### 二、两站各说一套
+
+- **读口**（`resolveComValue(unpackType)`）按**目标档**发码：目标 `Long` ⇒
+  `vb6_ComGetIntProp`。这一发内部已经做过 `VariantChangeType(…, VT_I4)` 与 `VarClear`，
+  C 类型**就是 `int32_t`** —— 它对"值"这件事答得完全正确。
+- **consumer 站**按**声明档**：`inferExprType(o.V)` 走"按裸成员名查模块符号"的兼底，属性
+  声明是 `Variant`，于是这一句又被当成"手里揣着整只 Variant"，套上
+  `vb6_VariantToLong(...)`（L2 更先在算术那一站被改道成 `vb6_VarAddV`，用
+  `vb6_VariantFromValue(int32_t)` 装箱）。
+
+两边都不问对面。**同一句 `o.V`：读口说是 `int32_t`、consumer 说是 `vb6_VARIANT`。**
+
+### 三、先试的那条路（失败，记账）
+
+第一反应是让**读口**服从声明档：只要成员声明为 Variant 就一律走通用读口
+`vb6_VariantFromComResult(vb6_ComGetProp(...))`，把整只 Variant 交出去。这条路**编得过、
+读数也对**（L1=11 L2=12 L3=11 L4=42 L5=8/42），而且和 L3 那句一直在用的形状同一个出口。
+
+但夹具读数把它按住了：
+
+```
+b144: A2-terms=1 → 0   B2-terms=1 → 0   C1-terms=2 → 0   D1-terms=3 → 0   E1=4 → 0   Z=4 → 0
+b153: Z-terms=1 → 0    C1-terms=2 → 1
+```
+
+`terms` 是夹具数项目类 `Terminate` 的次数。整只 Variant 被交到**标量消费点**以后没人
+`vb6_VariantClear`，里面揣着的那一份对象引用就再也不放 —— 引用计数漏了，实例永不
+`Terminate`。这条路会把晚绑定读的所有对象寿命拖坏，**回收**。
+
+### 四、修：判据只看"已经发出来的那一段文本"
+
+落点不是"按声明档选臂"，而是**不让 consumer 二次解释一个已经交回标量的读**。新增一枚
+共用判据（`cgen_helpers.inc` 声明 / `cgen_util_classtype.cpp` 定义）：
+
+```cpp
+bool CCodeGen::isScalarComReadText(const std::string& cExpr) {
+    return cExpr.compare(0, 18, "vb6_ComGetIntProp(") == 0
+        || cExpr.compare(0, 21, "vb6_ComGetDoubleProp(") == 0
+        || cExpr.compare(0, 23, "vb6_ComGetLongPtrProp(") == 0;
+}
+```
+
+三处消费点复用同一问：
+
+1. `toLongIfVariant` —— 需要 `int32_t` 的上下文（整除/索引/For 上下界…）直通：
+   ```cpp
+   if (isScalarComReadText(cExpr)) return cExpr;
+   ```
+2. `cgen_assign_value_sem.inc` 的 `valueIsVariant` 支（`n = o.V` 这一形就落在这里）：
+   ```cpp
+   if (isScalarComReadText(value)) { c_.emitLine(target + " = " + value + ";"); return; }
+   ```
+3. `cgen_expr_binary.cpp` 的 `routeOperand86` —— 不进 Variant 算术改道（否则 L2 会被
+   `vb6_VarAddV(vb6_VariantFromValue(int32_t), …)` 装箱）：
+   ```cpp
+   if (isScalarComReadText(cExpr)) return false;
+   ```
+
+判据的纪律与 §11.137 同一条：**信发生过的事，不信对它的描述**（文本是发生过的事，
+`inferExprType` 是描述）。收窄到数值三档，是因为**能命中这三档的以前一律是 C2440** ——
+对今天能编译的表达式零影响，这一点由全语料清单逐行验过（见第五节）。
+
+改后发码：
+
+```c
+n = vb6_ChkLong(vb6_ComGetIntProp(o, L"V"));                    /* L1 */
+n = vb6_ChkLong((vb6_ComGetIntProp(o, L"V") + 1));              /* L2 按 C 整数算 */
+vb6_BSTR_AssignFromVariant(&s,                                  /* L3 一字未动 */
+     vb6_VariantFromValue(vb6_VariantFromComResult(vb6_ComGetProp(o, L"V"))));
+```
+
+L3 那句原本就是按 Variant 走的（String 上下文没触发目标档钉型别），本刀没碰它 ——
+这正是"收窄"的意思。
+
+### 五、读数
+
+新夹具 `tests/b158_late_variant_prop_read`（六针），x64 与 x86 同值：
+
+| 针 | 改前 | 改后 | 意思 |
+|---|---|---|---|
+| `L1` | **编不过** | 11 | Variant 属性读进 Long |
+| `L2` | **编不过** | 12 | 参与算术（不再被装箱进 `VarAddV`） |
+| `L3` | 编不过 | 11 | `CStr(o.V)`（这一形本来就对，本刀不碰） |
+| `L4` | 编不过 | 42 | 盒里揣串时按 VB6 隐式转换取数 |
+| `L5` | 编不过 | `8/42` | 读进 Variant，型别仍是服务端那一档 |
+| `DONE` | — | — | — |
+
+**回归读数（改前改后逐字相同）**：
+
+```
+b144  A2-terms=1  B2-tag=8  B2-terms=1  C1-terms=2  D1-terms=3  E1-terms=4  Z-terms=4  Z-tag=8
+b146  A1-terms=1  B1-tag=7  B2-terms=0  C1-alive=0  C2-terms=1  Z-terms=2  Z-made=3
+b148  A2-self-tag=5  A3-tag=6  B2-fresh-tag=11  B3-item-terms=1  C2-held-tag=77  C3-item-terms=2
+      Z-box-terms=0  Z-item-made=2  Z-item-terms=2
+b153  A1-terms=0  A2-held-tag=5  A3-terms=0  Z-terms=1  B1-len=1  B2-len=4  C1-terms=2
+```
+
+这四份是第三节那条弯路**当场**掀翻的夹具；本刀改完它们与本次改动前一字不差。
+
+### 六、发码面
+
+- 清单 **824→826**（新夹具 `.bas` 与 `.vbp` 两行，行数 1357）；
+- 全语料 826 行，**只有 6 条机器侧行移动**（b132、ctrlmscomm、GUISample×3、
+  TeeChart/DisplayProject）—— 按老规矩**以 CI 为准**，本地与 CI 逐行 COMPARE = 0 差异；
+  其余 820 行逐字未动（其中 5 条 b 系列 `.vbp` 行在第三节那条弯路上曾移动过，改回收窄之后
+  **回到原值**）；
+- 九门 9/9 rc=0（`inputs=826 [.vbp=311 .bas=515]`；`emit-manifest` 1357 行）；
+- CI 22/22（run 45363102958，sha `861851d0`）。
+
+### 七、在册（未修）
+
+- `§11.138`（"晚绑定读进 Variant 的型别保真"）**量不到病**：`VariantFromComResult(ComCall(...))`
+  把服务端交回的 VT 原样留着（第一节四行读数）。这条从在册里划掉，不是待修项。
+- 本刀只管**数值三档**的读：`vb6_ComGetStringProp` 进数值上下文（`n = o.Note`，Note 声明
+  String）仍是另一族，没动；`vb6_ComGetObjectProp` 同理。
+- `Set c->f = o`（`o` 是 `As Variant` **形参**）仍走 `vb6_VariantFromValue` 浅拷贝。
+- `Set obj.Prop = Nothing`（控件伪对象那一档）未动。
+- `vb6_ReleaseObject` 对**裸类实例**是空转（§11.136 在册第一笔）。
+- `§11.110` 值侧打包、`.temp/k150/p4` 的 V2 记账照旧在册。
+
+## §11.140（第一百五十八刀）声明档说话：浮点属性读不再被目标档截断
+
+### 一、撞见
+
+上一刀（§11.139）修的是"声明为 Variant 的成员被 consumer 二次包装"。收尾时把同一族的
+下一问摆出来：**声明为具体档（String / Double）的成员，读口按目标档发码会不会把值本身弄坏？**
+
+探针 `.temp/k159/p1`（`B159Box` 有 `Property Get S() As String` = `"101"`、
+`Property Get D() As Double` = `1.5`、`Property Get O() As Object`），主程序 `o As Object`：
+
+```vb
+n = o.S       ' S1
+n = o.S + 1   ' S2
+d = o.S       ' S3
+d = o.D       ' S4
+n = o.D       ' S5
+v = o.S       ' S6
+Set it = o.O  ' S7
+```
+
+**整份工程编不过，rc=1**：
+
+```
+B159Main.c(44): error C2440: 无法从 'double' 转换为 'BSTR'
+```
+
+发码（改前）：
+
+```c
+n = vb6_ChkLong(vb6_ComGetIntProp(o, L"S"));                              /* S1 对 */
+n = vb6_ChkLong(vb6_CStrDbl(vb6_Val(vb6_ComGetIntProp(o, L"S")) + 1.0));  /* S2 */
+vb6_Dbl_AssignFromBSTR(&d, vb6_ComGetDoubleProp(o, L"S"));                 /* S3 ← C2440 */
+d = vb6_ComGetDoubleProp(o, L"D");                                        /* S4 对 */
+n = vb6_ChkLong(vb6_FltToLng(vb6_ComGetIntProp(o, L"D")));                /* S5 */
+```
+
+### 二、三笔账，一个根
+
+| 形 | 病 | 性质 |
+|---|---|---|
+| S3 `d = o.S` | 读口发 `DoubleProp`（double），consumer 按**声明档 String** 发 `Dbl_AssignFromBSTR`（要 BSTR） | 编译期 C2440 |
+| S2 `n = o.S + 1` | 读口发 `IntProp`（int32），consumer 按声明档 String 走 Fix 113g 的"串+数"形，`vb6_Val(<int32>)` 把整数当 `wchar_t*` 解引用 | **运行期 0xC0000005** |
+| S5 `n = o.D` | 读口按**目标档 Long** 发 `IntProp`，RTL 内 `VariantChangeType(…, VT_I4)` **当场把 1.5 截成 1**；consumer 那侧的 `FltToLng` 再圆也圆不回来（真 VB6 是 `CInt(1.5)` = **2**） | 静默错值 |
+
+三笔都是同一句：**同一件"这个值是什么型别"的事，读口按目标档说、consumer 按声明档说。**
+
+S5 那笔是最要命的一类 —— 它不吵不闹，只是把小数丢了。而且它证明了一件事：
+**截断发生在读口，consumer 再圆也救不回来**，所以这一类只能由读口让路。
+
+### 三、修：让读口服从声明档（只服浮点那一档）
+
+`resolveComValue` 在按目标档发码之前先问一次成员的声明档（`lookupModule(memberName)`，
+与 `inferExprType` 的兼底**同一个符号源**）：
+
+```cpp
+std::string unpackEff = unpackType;
+if (unpackEff == "Int" || unpackEff == "Long" || unpackEff == "Boolean"
+    || unpackEff == "Double" || unpackEff == "Single") {
+    const Symbol* ms140 = symTab_.lookupModule(memberName);
+    if (ms140 && (ms140->type == Vb6Type::Double || ms140->type == Vb6Type::Single
+                  || ms140->type == Vb6Type::Currency || ms140->type == Vb6Type::Date)) {
+        unpackEff = "Double";
+    }
+}
+```
+
+于是 S5 变成 `vb6_ChkLong(vb6_FltToLng(vb6_ComGetDoubleProp(o, L"D")))` —— 取整交给
+consumer 那一站（它本来就按声明档准备了 `FltToLng`），答案是 2。
+
+另外两笔在 consumer 侧收口，判据用的还是上一刀那枚 `isScalarComReadText`（只认已发出的文本）：
+
+- `cgen_assign_value_sem.inc` 的 Double←String 支：右值已经是裸 double 读 ⇒ 直接
+  `target = value;`，不走 `vb6_Dbl_AssignFromBSTR`；
+- `cgen_expr_binary.cpp` 的 Fix 113g（"串 + 数"那一形）：某一侧是裸标量读 ⇒ 它**不是串**，
+  不进 `vb6_Val` 那一形，让 VB6 的数值加法直接算。
+
+### 四、试过但退回的一条
+
+顺手试过把**声明为 String** 的成员也改成读口发 `StringProp`（"谁声明谁说话"的彻底版）。
+编译**过**了，但 S1 当场报 **错误 6 Overflow**：consumer 那一站按"我收到的就是数"发的
+`vb6_ChkLong(...)`，拿到 BSTR 就是**指针当整数**。这一族要 consumer 各站配合折数
+（`vb6_CStrLong` 等），不是读口一句话能收的，**本刀不碰，记账在册**。
+
+### 五、读数
+
+新夹具 `tests/b159_late_decl_typed_read`（九针），x64 与 x86 同值：
+
+| 针 | 改前 | 改后 | 意思 |
+|---|---|---|---|
+| `S1` | 101 | 101 | String 属性读进 Long |
+| `S2` | **AV 0xC0000005** | 102 | 参与算术（不再把 int 递给 `vb6_Val`） |
+| `S3` | **编不过** | 101 | String 属性读进 Double |
+| `S4` | 1.5 | 1.5 | Double 属性读进 Double |
+| `S5` | **1** | **2** | Double 属性读进 Long（`CInt(1.5)`=2） |
+| `S6` | 8/101 | `8/101` | 读进 Variant，型别保真（§11.138 那条口径） |
+| `S7` | 77 | 77 | Object 属性读出来再取成员 |
+| `Z-terms` | — | 1 | 对象寿命（引用计数没被本刀动过） |
+| `DONE` | — | — | — |
+
+老夹具回归读数**逐字相同**：
+
+```
+b144  A2-terms=1 B2-tag=8 B2-terms=1 C1-terms=2 D1-terms=3 E1-terms=4 Z-terms=4 Z-tag=8
+b146  A1-terms=1 B1-tag=7 B2-terms=0 C1-alive=0 C2-terms=1 Z-terms=2 Z-made=3
+b148  A2-self-tag=5 A3-tag=6 B2-fresh-tag=11 B3-item-terms=1 C2-held-tag=77 C3-item-terms=2
+      Z-box-terms=0 Z-item-made=2 Z-item-terms=2
+b153  A1-terms=0 A2-held-tag=5 A3-terms=0 Z-terms=1 B1-len=1 B2-len=4 C1-terms=2
+b158  L1=11 L2=12 L3=11 L4=42 L5=8/42
+```
+
+### 六、发码面
+
+- 清单 **826→828**（新夹具 `.bas` 与 `.vbp` 两行，行数 1359）；
+- 全语料 828 行，**只有 6 条机器侧行移动**（b132、ctrlmscomm、GUISample×3、TeeChart），
+  以 CI 为准；其余逐字未动 —— 说明存量语料里"声明档查得到符号"的晚绑定读，本来就都是
+  同档读写，本刀只动到那些**跨档**的形状；
+- 九门 9/9 rc=0（`inputs=828 [.vbp=312 .bas=516]`）；
+- CI 22/22（run 45370730242，sha `ecee5fc9`）。
+
+### 七、在册（未修）
+
+- **声明为 String 的成员读进数值档**（`n = o.S`）：读口若服声明档，consumer 各站不折数
+  会报 6（第四节实测）；要 consumer 全线配合，另开一刀。当前读口仍按目标档发，S1 这种
+  "串是纯数字"的情形答案正确，但 `n = o.Note`（`"abc"`）会走 RTL 的宽松折数。
+- **本刀只服浮点档**：声明为 Integer/Byte/Boolean 的成员仍按目标档发码（同一族，尚未量到病）。
+- `Set c->f = o`（`o` 是 `As Variant` **形参**）仍走 `vb6_VariantFromValue` 浅拷贝。
+- `Set obj.Prop = Nothing`（控件伪对象那一档）未动。
+- `vb6_ReleaseObject` 对**裸类实例**是空转（§11.136 在册第一笔）。
+- `§11.110` 值侧打包、`.temp/k150/p4` 的 V2 记账照旧在册。
+
+## §11.141（第一百五十九刀）晚绑定写进 Boolean 形参要有 CBool 那一步
+
+### 一、撞见
+
+前两刀修的都是**读**口。这一刀把写口（`o.Prop = 值`）的跨档一样量一遍：探针
+`.temp/k160/p1`，`B160Box` 有 `S As String` / `D As Double` / `I As Integer` / `B As Boolean`
+四个属性，主程序 `o As Object`：
+
+```vb
+o.D = 2        ' W1
+o.S = 2        ' W2
+o.D = "3.5"    ' W3
+o.I = 2.5      ' W4
+o.B = 7        ' W5
+n = box.B      ' W6
+o.I = "42"     ' W7
+o.I = <Variant 9.75>  ' W8
+```
+
+八笔里**七笔对**，一笔错：
+
+```
+B160-W1=2   B160-W2=2   B160-W3=3.5   B160-W4=2
+B160-W5=True
+B160-W6=7      ← 真 VB6 是 -1
+B160-W7=42  B160-W8=10
+```
+
+（顺带记：`o.I = 2.5` 答 2、`o.I = 9.75` 答 10 —— 四舍六入五成双那一套在写口是对的一档。）
+
+### 二、根因：Boolean 形参借了 VT_I4 那一档
+
+晚绑定写走 `vb6_ComSetProp` ⇒ 服务端 `IDispatch::Invoke`。入站实参在
+`vb6comserver_obj.c` 里按 `method->paramVts` 归一化到**形参声明档**，而生成本表的那一问
+是 `cDispatchArgVt`：
+
+```cpp
+if (t == Vb6Type::Long || t == Vb6Type::Integer || t == Vb6Type::Byte ||
+    t == Vb6Type::Boolean) return "VT_I4";
+```
+
+Boolean 被并进 VT_I4，于是 7 原样落进槽，读臂再读 `lVal` 存进 `m_B`（本仓 Boolean 的
+存储是 int16/int32，真值 **-1**，与 `vb6_CBool` 同口径）。**VB6 里"数值 → Boolean 形参"
+是一次 CBool 换算（非零即 -1）**，借 VT_I4 就地透传等于把这次换算整段跳过。
+
+### 三、修：成对的两处，缺一不可
+
+1. `cDispatchArgVt`：Boolean → **VT_BOOL**，换算那一步交给 `vb6_ComArgNormalize`
+   （内部 `VariantChangeType`，`VT_I4 7 → VARIANT_TRUE`、`BSTR "12" → VARIANT_TRUE`、
+   `BSTR "abc"` 换不动 ⇒ `DISP_E_TYPEMISMATCH` ⇒ 客户端折成 VB 13，与 VB6 同号）；
+2. `cgen_util_dllentry_collect.inc` 的 ByVal Boolean 读臂：**读 `boolVal` 并折成本仓的
+   -1/0**：
+
+   ```cpp
+   provided = "(((VARIANT*)args[i])->boolVal ? -1 : 0)";
+   ```
+
+   只改第一处不改第二处不行：槽变成 VT_BOOL 以后 `lVal` 读到的是 `VARIANT_BOOL` 之外
+   的字节（高位不是符号扩展），那是另一个坑。
+
+ByRef Boolean 不在这一刀：`cDispatchArgVt` 对 ByRef 本来就答 `VB6_ARGVT_SKIP`（不归一化），
+读臂保持 `&lVal` 原样。
+
+### 四、读数
+
+新夹具 `tests/b160_late_bool_arg`（十针），x64 与 x86 同值：
+
+| 针 | 改前 | 改后 | 意思 |
+|---|---|---|---|
+| `W1` | 2 | 2 | 数值 → Double 属性 |
+| `W2` | 2 | 2 | 数值 → String 属性（存 `"2"`） |
+| `W3` | 3.5 | 3.5 | 串 → Double 属性 |
+| `W4` | 2 | 2 | Double → Integer 属性（2.5 → 2） |
+| `W5` | True | True | 数值 → Boolean 属性（存成 True） |
+| `W6` | **7** | **-1** | Boolean 属性 → Long（VB6 真值） |
+| `W7` | 42 | 42 | 串 → Integer 属性 |
+| `W8` | 10 | 10 | Variant 9.75 → Integer 属性 |
+| `Z` | 2/3.5 | 2/3.5 | 读回两个属性 |
+| `DONE` | — | — | — |
+
+老夹具回归读数逐字相同（b144 / b146 / b148 / b153 / b158 / b159）。
+
+### 五、发码面与第一次 CI 红
+
+- 清单 **828→830**（新夹具 `.bas` 与 `.vbp` 两行，1361 行）；
+- 全语料 830 行，只有 6 条机器侧行移动（b132、ctrlmscomm、GUISample×3、TeeChart），以 CI 为准；
+- 九门 9/9 rc=0；
+- 第一次 CI 红在两处 `Tests (vbp #6)/(vbp #7)` 的 `[DISPATCH] b220_inbound_argvt`
+  ——§B219 那一刀按"Boolean 借 VT_I4 就地透传"钉下的两颗针：
+
+  ```
+  改前期望: VTARG=EchoBool:i giving=VT_I4  … val=40
+            VTARG=EchoBool:s giving=BSTR(12) … val=12
+  CI 实测:  val=-1 / val=-1
+  ```
+
+  两发 **-1** 正是 CBool 语义（真实 VB6 里 `EchoBool(40)` / `EchoBool("12")` 都是 True），
+  于是把那两颗钉改口 -1 并把改前/改后的由来写进注释（`run_tests.ps1` 那一段）；
+- 第二次 CI **22/22**（run 45390455157，sha `365531c8`）。
+
+### 六、在册（未修）
+
+- ByRef Boolean 形参未归一到 VT_BOOL（`cDispatchArgVt` 对 ByRef 一律 SKIP，读臂 `&lVal`）；
+- 声明为 String 的成员读进数值档（§11.140 第六节那一条）；
+- 声明为 Integer/Byte 的成员仍按目标档发读臂（同族未量到病）；
+- `Set c->f = o`（Variant 形参）浅拷贝、`Set obj.Prop = Nothing`（控件伪对象档）、
+  `vb6_ReleaseObject` 对裸类实例空转、`§11.110` 值侧打包照旧在册。
+
+## §11.142（第一百六十刀）窄整型形参的入站收窄要报错误 6
+
+### 一、撞见
+
+上一刀（§11.141）修的是 Boolean 形参的入站换算。同一张表上紧挨着的一格还没人问：
+**Integer / Byte 形参收到超范围的值会怎样？** 探针 `.temp/k161/p1`
+（`Property Let I(ByVal x As Integer)`，先 `box.I = 7`）：
+
+```vb
+o.I = 40000
+```
+
+```
+B160-R1=no-error val=-25536
+```
+
+真 VB6 是 **错误 6 Overflow**，且目标保持 7 不变。C3 既没报错，还把 40000 静默存成
+**-25536** —— 这正是 VB6 里最容易被漏掉的那种"值坏了但程序继续跑"。
+
+### 二、根因：和上一刀同一张表、同一个毛病
+
+`cDispatchArgVt` 当时写的是
+
+```cpp
+if (t == Vb6Type::Long || t == Vb6Type::Integer || t == Vb6Type::Byte ||
+    t == Vb6Type::Boolean) return "VT_I4";
+```
+
+把 Integer / Byte 一起并进 VT_I4 就地透传 —— 收窄换算（`VariantChangeType` VT_I4→VT_I2）
+整段跳过，服务端读臂再把这个 40000 塞进 `int16_t`。**三档一起并进 VT_I4 是"省一次换算"，
+代价是把 VB6 的溢出语义一起省掉了。**
+
+### 三、修：四处成对
+
+1. `cDispatchArgVt`：`Integer → VT_I2`、`Byte → VT_UI1`（让换算真的发生，
+   越界时 oleaut32 自己答 `DISP_E_OVERFLOW`）；
+2. 读臂（`cgen_util_dllentry_collect.inc`）：ByVal Integer 读 **`iVal`**、Byte 读 **`bVal`**
+   —— 槽已经是窄档，继续读 `lVal` 会带上高位的垃圾字节；Long 维持 `lVal`；
+   **ByRef 三档一律不动**（`cDispatchArgVt` 对 ByRef 本答 `VB6_ARGVT_SKIP`，槽还是调用方那份）；
+3. `vb6_ComArgNormalize`：失败时把**原因 hr** 记进一枚静态并经
+   `vb6_ComArgNormLastHr()` 交回（以前一律折成 `DISP_E_TYPEMISMATCH`，
+   于是越界和"类型不匹配"被压成同一个号）；服务端 Invoke 把这一枚原样返回；
+4. 客户端 `vb6_HresultToErrNum`（唯一那张表）增一格
+   `0x8002000A DISP_E_OVERFLOW → 6`。
+
+### 四、读数
+
+新夹具 `tests/b161_narrow_arg_overflow`（八针），x64 与 x86 同值：
+
+| 针 | 改前 | 改后 | 意思 |
+|---|---|---|---|
+| `I1` | ok 4000 | ok 4000 | Integer 合法写入 |
+| `I2` | **no-error（存成 -25536）** | **err6 val=4000** | Integer 正向越界：报 6 且目标不变 |
+| `I3` | 同 I2 | err6 val=4000 | 负向越界 |
+| `Y1` | ok 200 | ok 200 | Byte 合法写入 |
+| `Y2` | **no-error（存成 44）** | **err6 val=200** | Byte 越界 |
+| `L1` | ok 2000000000 | ok 2000000000 | Long 宽档不受影响 |
+| `DONE` | — | — | — |
+
+老夹具回归读数逐字相同（b144 / b146 / b148 / b153 / b158 / b159 / b160）。
+
+### 五、发码面与第一次 CI 红
+
+- 清单 **830→832**（新夹具 `.bas` 与 `.vbp` 两行，1363 行）；
+- 全语料 832 行，只有 6 条机器侧行移动（b132、ctrlmscomm、GUISample×3、TeeChart）；
+- 九门 9/9 rc=0；
+- 第一次 CI 红在 `Tests (compile #2)` 的 `[STATIC] disp_inbound_argvt_authority`：
+
+  ```
+  FAIL R2 vb6_ComArgNormalize defined  = 2, want 1
+  FAIL R2 vb6_ComArgNormalize declared = 2, want 1
+  ```
+
+  本刀新加的两枚 helper 起名 `vb6_ComArgNormalizeSetLastHr` / `vb6_ComArgNormalizeLastHr`，
+  前缀与"唯一出口"同一个词，被那道门数成第二份。**门是对的，名字挑错了** ——
+  改名 `vb6_ComArgNormLastHrSet` / `vb6_ComArgNormLastHr`，三处同步；
+- 第二次 CI **22/22**（run 45398364506，sha `e3026449`）。
+
+### 六、在册（未修）
+
+- **ByRef 形参整体**：`cDispatchArgVt` 对 ByRef 一律 `VB6_ARGVT_SKIP`（不换算），
+  于是 ByRef Integer 收 40000 仍然不会被拦。要收这一族得先量清楚 ByRef 槽的标签与回写口径。
+- 声明为 String 的成员读进数值档（§11.140 第六节）；
+- `Set c->f = o`（Variant 形参）浅拷贝、`Set obj.Prop = Nothing`（控件伪对象档）、
+  `vb6_ReleaseObject` 对裸类实例空转、`§11.110` 值侧打包照旧在册。
+
+## §11.143 续（第一百六十一刀 · 修补）：引用要按签名说话
+
+### 一、第一次 CI 红
+
+`Tests (vbp #5)` 报 `[GUI] czUI ... FAIL (exit=13)` —— tests/czUI-main 的表单在
+`UserControl_ReadProperties` 里当场倒。查发码：那一族只多了 7 处
+`vb6_ComPackBSTRRef(...)`，全在 `With PropBag` 里（6 处 `WriteProperty` + 1 处
+`ReadProperty`，`PropBag As Object` 晚绑定到 `MSSTDFMT.PropertyBag`）。
+
+**真 VB6 客户端在这里不会递引用**：`PropBag` 的签名来自 typelib（`WriteProperty(PropName,
+ByVal Value As Variant)`），编译器照签名按值发。我们晚绑定没有签名，把「带型变量一律递
+VT_BYREF|型」这条口径套到了所有对端上 —— 对**自己家的服务端**是对的（本刀要修的就是那
+一格），对**外部 OCX** 就是 13。
+
+### 二、落点：把「有没有签名」这一问交回运行时
+
+`vb6_ComNarrowArgs` 本来就是 ComCall 进 Invoke 之前那一趟「按形参表对表」的闸
+（原先只管 VT_R4/R8 → typedef LONG 的收窄）。本刀给它加第二件事：
+
+| 对端 | 判据 | 处理 |
+|---|---|---|
+| 有 ITypeInfo | 形参带 `PARAMFLAG_FOUT` | 真 ByRef ⇒ 保留引用 |
+| 有 ITypeInfo | 形参不带 FOUT | ByVal ⇒ 降成值副本 |
+| 无 ITypeInfo + 本仓工程类服务端 | `vb6_ComObject_IsVb6Wrapper` 或 `vb6_FindProjectClassDescRaw` | 保留引用（回写走 `vb6_ByRefScalarWriteBack`） |
+| 无 ITypeInfo + 其它 | 上一条不成立 | 降成值副本（与改前同形） |
+
+第三行那半边是本地实测补上的：第一版只问包装器，而 ComCall 走到这里时接收者可能已经被
+剥壳成**裸类实例**（`vb6_FindProjectClassDescRaw` 那张登记表），于是自己的服务端被当成
+外部 OCX 降值 —— 夹具 S1 当场退回 `hi`。两个形都认才是全的。
+
+### 三、`vb6_ComArgNormalize` 的跳过再收一层
+
+「引用形的 pointee 已等于声明档就不换算」只对 `vb6_VariantBorrowIntoSlot` 真搬过的那
+七档（I4/I2/R8/R4/BOOL/UI1/BSTR）成立。其余形（典型 `BYREF|VT_VARIANT`）入槽那臂本就
+不接（槽留 Empty），跳过换算等于把引用变体读成空 —— 那一档必须继续走
+`VariantChangeType` 解引用。
+
+### 四、一次假的「回归」（记在册，免得下次再踩）
+
+修补过程中出现了「夹具 S1~S6 全部退回按值」的现象，一路查到最后是**构建缓存**：
+`Copy-Item` 恢复备份会**连时间戳一起恢复**，恢复出来的 `cgen_util_com.cpp` 比 `.obj` 还旧
+⇒ `cmake --build` 判定无需重编，跑的是实验版二进制。判据不是「build 打印 rc=0」，而是
+**发出来的文本**：`--emit-c` 里那一行到底是 `vb6_ComPackBSTRRef(&s)` 还是
+`vb6_ComPackBSTR(s)`。这和 §11.142 那条「判据只信已经发出来的文本」是同一句话。
+
+### 五、读数与判据面
+
+- 夹具 `tests/b162_byref_string_arg`（x64 = x86）：
+  `S1=5/hi-ok  S2=3/new  S3=0/[]  S4=4/keep  S5=4/loop  S6=3/-ok  S7=42  DONE`；
+  S4 是 ByVal 对照（服务端按值收，不回写），S5 是体里不改（串必须完好），S7 是数值那六档对照。
+- 外部 typelib 那一档另用 `Scripting.FileSystemObject` 对表：`FileExists` / `GetFileName`
+  正常、串不丢、连发两次稳定。
+- 两道门同步到七档：`check_byref_scalar_writeback.ps1` 的 R3/R4（入槽/出站 switch 各 7 条）、
+  `check_byref_arg_pack_authority.ps1` 的 R1（六枚 Ref 打包器）/R3（第六档映射）/R5
+  （vbp 夹具两格）。
+- 清单 832→834（1365 行）；九门 9/9；CI **22/22**（run 45497421693，sha `ac7fd7d0`）。
+
+### 六、在册（本刀之后仍在）
+
+- 引用形只认「裸标识符 / me->字段」这一形状：`o.M arr(i)`、`o.M box.S` 这类实参仍按值发，
+  写回不回来（VB6 会回来）—— 要收这一族得先给「数组元素/成员访问」一个可取址的发射形。
+- 无 typelib 的**外部** VB6 ActiveX DLL 收 ByRef String 时，本刀按「值」发（与改前同形）：
+  写回仍然不回来。要收它得有一条真正可靠的「对端是本仓服务端」之外的分辨法。
+- 入槽那一份副本在「同一发里别的实参换算失败」时会漏一枚串（该路径已报错退出），记小额。
+
+## §11.144（第一百六十二刀）引用形不只裸标识符：数组元素、类字段、With 成员
+
+### 一、在册那条病
+
+上一刀把 ByRef 的**出站**（String 出站回写）收口之后，账上剩这一条：晚绑定实参的
+「引用形」只认 `^(\w+|me->\w+)$` 两种文本，`o.Bump arr(i)` 与 `o.Bump box.S` 都按值发，
+体里的写回落空（VB6 里这两形都该回写）。先说清为什么当初只认裸标识符：`&expr` 对
+函数调用是非法的，而晚绑定实参那一列里绝大多数"看起来像左值"的东西其实是**调用**
+（属性读 `vb6_X_prop_get_Y(base)`、控件默认属性折叠、`Db.Rs` 那种 voidptr 链）。
+
+### 二、先量可取址形（不改代码先看 --emit-c）
+
+探针 `.temp/k163/p1`（一个类 + 一个模块，六站 `o.Bump ...`），发出来的文本：
+
+| 站 | 实参 | 发射文本 |
+|----|------|----------|
+| A1 | `la(1)`（局部静态数组） | `vb6_ComPackValue(VB6_SA_AT(BSTR, la, 1))` |
+| A2 | `arr(1)`（模块级数组） | `vb6_ComPackBSTR(VB6_SA_AT(BSTR, arr, 1))` |
+| A3 | `box.S`（Public String 字段） | `vb6_ComPackBSTR(box->S  /* class var .S field */)` |
+| A4 | `g`（模块级裸串，基线） | `vb6_ComPackBSTRRef(&g)` |
+| A5 | `box.Tag`（属性） | `vb6_ComPackBSTR(vb6_B163Box_prop_get_Tag(box))` |
+| A6 | `With box` 内 `o.Bump .S` | `vb6_ComPackBSTR(_vb6_with_0->S  /* With class .S field */)` |
+
+`VB6_SA_AT(type, arr, idx)` 展开是 `(*(type*)vb6_SaElemPtr(...))`（`vb6rtl_array.h:213`）
+—— 一枚真左值，`&` 合法。`box->S` 也是左值。A5 是调用，`&` 非法，必须继续按值。
+
+注意 A1 的打包器是 `ComPackValue`（`inferExprType` 对局部静态数组元素答 Variant），
+而 A2 是 `ComPackBSTR` —— 「打包器」这一格对同一个语义形给两个答案，不能拿它当判据。
+
+### 三、两形各问一处权威
+
+- **数组元素**（`expr.kind != IdentifierExpr` 且文本是 `VB6_SA_AT(BSTR, <载体>, <下标>)`）：
+  宏的首参就是元素档，文本本身就是证据。这一问在本仓已有五处消费点
+  （`cgen_expr_call_arg_variant.inc` ×2 / `cgen_expr_call_conv_numeric.inc` /
+  `cgen_expr_call_builtin_pre.inc` 等），不是新发明。命中即
+  `vb6_ComPackBSTRRef(&VB6_SA_AT(...))`。
+- **类字段 / With 成员**：`MemberAccessExpr` 用 `inferClassTypeOfExpr(*ma.object)` 得宿主类，
+  `WithMemberExpr` 从 `withObjectInfoStack_` 栈顶取宿主类（且必须 `kind == ClassInstance`，
+  `void*` 那一档的 With 临时量不是类实例指针）。两形都再问同一组两句：
+  `resolveClassMemberCall(cls, member).empty()`（成员不是方法/属性）+ `classFieldIsBstrSlot(cls, member)`
+  —— 与赋值站 §B168 那条「BSTR 槽」判据同源、同一个否决。
+
+仍按值（在册）：属性读（不可取址，VB6 是经 Let 写回）、控件默认属性折叠、`Db.Rs` 那种
+voidptr 对象成员链、数组本体。
+
+### 四、第一次 CI 红：把尾注当判据
+
+第一版成员那一形是**读发射文本的尾注**（正则匹配 `base->field  /* class var .F field */`）
+再借打包器的答案当型。CI `Tests (compile #1)` 立刻红：
+
+```
+[STATIC] variant_slot_store ... FAIL
+FAIL R5d 名单外的新文件 cgen_util_com.cpp x1 —— 又有人把那句尾注当判据了
+```
+
+这条门逐文件钉死 `class var .` 的处数，原意正是「谁在提这句文本都算，因为这一族就是从
+读尾注长出来的」。两处都不干净：尾注是 `classFieldReadExpr` 的输出而不是字段的声明，
+打包器的答案只是这一发的产物。于是改成问声明表（`classFieldIsBstrSlot`），
+`comByRefArgExpr` 那枚 `packFn` 形参一并撤掉，三处消费点回到原签名。
+
+### 五、读数
+
+夹具 `tests/b163_byref_addr`（x64 = x86 同形）：
+
+```
+B163-A1=la-ok   局部静态数组元素
+B163-A2=ma-ok   模块级数组元素
+B163-A3=new     动态数组元素（ReDim 后）
+B163-A4=fs-ok   类实例 Public String 字段
+B163-A5=ws-ok   With 块里的成员
+B163-A6=pt      属性读（保持按值，在册）
+B163-A7=mg-ok   模块级裸变量（第一百六十一刀的基线）
+B163-A8=tw-ok-ok 同一元素连发两次（回写后槽里仍是能用的串）
+B163-DONE
+```
+
+### 六、账与门
+
+- manifest：corpus 834 → 836（`tests/b163_byref_addr` 两枚），行数 1365 → 1367；
+  真动到的既有行只有 `Charts 2020/ucChartBar` 与 `ucTreeMaps` 两份（各多出按引用的一发），
+  另 6 条仍是机器侧的已知差（CI 那份是判据）。
+- 门 `check_byref_arg_pack_authority.ps1` 加 R7 四条：数组元素那一形只此一处判、
+  类字段那一形问声明表、With 成员同一问、新夹具两格（x64 + x86）。
+- 九门 9/9。CI 22/22（run 45510100696）。
+
+### 七、这一刀之后仍在册的相邻欠项
+
+- 属性读当 ByRef 实参仍按值（VB6 经 Let 写回）—— 要动得先有一条「读-改-写」的
+  双程发射，不是判据问题。
+- 数值五档的引用形同样只认裸标识符（`o.Inc arr(i)` 的 `Long` 元素仍按值）——
+  这一刀的落点只开了 String 档，数值那五档要跟 `VT_BYREF|VT_I4/R8/...` 的宽度一起看。
+- ByRef Boolean 未归一、无 typelib 的外部 VB6 ActiveX DLL 收 ByRef String 仍按值。
+
+## §11.145（第一百六十三刀）数值五档的引用形：数组元素与类字段
+
+### 一、在册那条病的另一半
+
+§11.144 只把 String 那一档开给了「数组元素 / 类字段 / With 成员」。数值五档
+（Long / Integer / Boolean / Single / Double）当 ByRef 实参时仍然只认裸标识符与
+`me->字段`，于是 `o.Inc arr(i)`、`o.Inc box.N`、`o.FlipB bl(1)` 一律按值发，体里的
+写回落空。
+
+### 二、先量：文本里的 C 型**分不出**档
+
+探针 `.temp/k164/p1` 九站 + 后补八站，`--emit-c` 发出来：
+
+| 实参 | 发射文本 |
+|------|----------|
+| `ln(1)`（Long 数组） | `vb6_ComPackValue(VB6_SA_AT(int32_t, ln, 1))` |
+| `in1(1)`（Integer 数组） | `vb6_ComPackValue(VB6_SA_AT(int16_t, in1, 1))` |
+| `bl(1)`（Boolean 数组） | `vb6_ComPackValue(VB6_SA_AT(int16_t, bl, 1))` |
+| `dn(1)`（Double 数组） | `vb6_ComPackValue(VB6_SA_AT(double, dn, 1))` |
+| `dt(1)`（Date 数组） | `vb6_ComPackValue(VB6_SA_AT(double, dt, 1))` |
+| `ba(1)`（Byte 数组） | `vb6_ComPackValue(VB6_SA_AT(uint8_t, ba, 1))` |
+| `cu(1)`（Currency 数组） | `vb6_ComPackValue(VB6_SA_AT(int64_t, cu, 1))` |
+| `box.N` / `box.I` / `box.D` / `box.S` | `vb6_ComPackInt/…(box->N  /* class var .N field */)` 等 |
+
+两处**同形不同档**：`int16_t` 既是 Integer 也是 Boolean，`double` 既是 Double 也是 Date。
+上一刀对 String 敢直接读文本首参（`VB6_SA_AT(BSTR, …)` 没有二义），数值这一族不能这么读
+—— 按 I2 给 Boolean 打写回、按 R8 给 Date 打写回，都是**静默错值**，比漏回写更坏。
+
+### 三、落点：文本只当形状证据，档问声明侧
+
+- **数组元素**：从 `VB6_SA_AT(<C型>, <载体>, <下标>)` 里只取**载体名**（剥 `me->` 与
+  `(*...)`，与发码那一处的写法对齐），再问 `arrayElemTypes_`，落空回模块符号表
+  （`sym->isArray` 取 `sym->type`）—— 与 `cgen_expr_call_prelude.inc` 发这一格时
+  **同一条链**，不是另抄一张表。
+- **类字段 / With 成员**：问 `classFieldKind(类, 字段)`，与 §11.144 的 String 那一问是
+  同一个出口（`classFieldIsBstrSlot` 就是它的一个投影，这一刀改用投影的母函数）。
+
+「VB 型 → 按引用打包器」这张配对表收成一处 `kComPackRefTiers`（cgen_util_com.cpp），
+裸标识符 / 数组元素 / 类字段三个消费点都问 `comByRefPackFnForVbType`；裸标识符那一支
+原来的六档 switch 并进来，Integer 的宽度问句（`knownIntVars_`，因为 `inferExprType` 对
+Integer 答 Long）原样保留。
+
+只接 RTL 真有的六枚（Int / Integer / Bool / Single / Double / BSTR）。Byte 没有 UI1 那一档、
+Currency 没有 CY、Date 没有 DATE —— 一律交回按值：宁可漏回写，也不能按错标签写回。
+
+### 四、读数
+
+夹具 `tests/b164_byref_numeric_addr`（x64 = x86 同形）：
+
+```
+B164-N1=11     局部 Long 数组元素
+B164-N2=21     模块级 Long 数组元素
+B164-N3=31     类实例 Public Long 字段
+B164-N4=41     模块级裸 Long（基线）
+B164-N5=51     Integer 数组元素（2 字节）
+B164-N6=61     Integer 类字段
+B164-N7=71.5   Double 数组元素
+B164-N8=81.5   Double 类字段
+B164-N9=90.5   Single 类字段（R4 不是 R8）
+B164-N10=True  Boolean 数组元素（int16_t 靠声明表分档）
+B164-N11=True  Boolean 类字段
+B164-N12=1     Byte 数组元素仍按值（在册：无 UI1 档）
+B164-N13=5     属性读仍按值（在册：不可取址）
+B164-N14=2     同一元素连发两次
+B164-DONE
+```
+
+### 五、第一次 CI 红：两处登记
+
+1. `[STATIC] variant_slot_store` 报 `R8 名单外的新问点 cgen_util_com.cpp x2`——ByRef
+   实参那一问确实在问 `classFieldKind`（类字段 + With 成员各一次），那张名单要登记。
+   这两站与读侧那三站是**同一个出口的不同消费点**，不是新抄一份答案。
+2. `Emit manifest (shape oracle)` 报 `哈希不同 2`：`guisample/vb6ref/src/{vc6,vs2015}/GUISample.vbp`。
+   这两行属机器侧（本机 MSVC 与 CI 二进制出码不同），本地登记脚本一直跳过；这一刀真动到
+   了它们的发码，于是按 CI 那份 oracle 登记（`git show github/ci/emit-manifest:emit-manifest.txt`），
+   替换后本地 expected 与 CI 清单逐行比对 0 差。
+
+顺带踩到本仓一条老坑：手写 `emit-manifest.expected.txt` 时用无 BOM 的 UTF-8，
+`check_manifest_coverage.ps1` 的 K2 立刻红 —— 那份文件 PS 5.1 按 UTF-8 读，BOM 不能丢。
+
+### 六、账与门
+
+- manifest：corpus 836 → 838（`tests/b164_byref_numeric_addr` 两枚），行数 1367 → 1369；
+  存量行真动到的只有 GUISample 那两份（另 4 条机器侧行不变）。
+- 门 `check_byref_arg_pack_authority.ps1`：R3 六条改指配对表行、R7 两条改指 `classFieldKind`、
+  新增 R8 三条（表只一处 / 三处消费点 / 新夹具两格）。
+- 门 `check_variant_slot_store.ps1`：R8 名单加 `cgen_util_com.cpp` = 2。
+- 九门 9/9。CI 22/22（run 45516917680）。
+
+### 七、这一刀之后仍在册的相邻欠项
+
+- Byte / Currency / Date 的引用形（RTL 侧要先有 `VT_UI1|BYREF` / `VT_CY|BYREF` /
+  `VT_DATE|BYREF` 三枚打包器与写回臂）。
+- 属性读当 ByRef 实参仍按值（VB6 经 Let 写回）—— 要一条「读-改-写」的双程发射。
+- Boolean 数组元素拼串折出来是 `-1` 而不是 `True`（读路径，与本刀的回写无关）。
+- ByRef Boolean 未归一、无 typelib 的外部 VB6 ActiveX DLL 收 ByRef String 仍按值。
+
+## §11.146（第一百六十四刀）引用形补上 Byte / Currency / Date
+
+### 一、缺口
+
+§11.145 之后「按引用的打包器」只有六枚：`VT_BYREF|` I4 / I2 / R4 / R8 / BOOL / BSTR。
+Byte、Currency、Date 三型当 ByRef 实参仍按值发，体里的写回落空 —— 这一族在 RTL 侧
+本来就没有对应的 `*Ref` 打包器，也没有入槽/写回那两臂，是**真缺口**，不是判据问题。
+
+### 二、RTL 侧（三处）
+
+1. 打包器（`vb6com_pack.c` / `vb6com.h`）：
+   `vb6_ComPackByteRef(uint8_t*)` / `vb6_ComPackCurRef(int64_t*)` /
+   `vb6_ComPackDateRef(double*)`，分别递 `VT_BYREF|VT_UI1` / `VT_CY` / `VT_DATE`，
+   指针直指调用方那枚槽。
+2. `vb6_VariantBorrowIntoSlot`：加 `case VT_CY`（搬 `pcyVal->int64`）、
+   `case VT_DATE`（搬 `*pdate`）两臂 —— 本仓 Currency 住 `cyVal`（int64）、
+   Date 住 `dblVal`（与「序列号在 dblVal」的既有约定一致）。
+3. `vb6_ByRefScalarWriteBack`：加同名的两臂，出站写回对端 pointee。
+   `vb6_ComArgNormalize` 的 `unwrapped` 名单随之加 CY / DATE（入槽已搬过，不再换算）。
+
+### 三、发码侧
+
+`kComPackRefTiers` 六档 → 九档，数组元素与类字段两个消费点自动跟着走。
+入站读臂改成**按声明档自己的那一格**取址：Long→`&lVal`、Integer→`&iVal`、
+Byte→`&bVal`、Currency→`&cyVal`、Date→`&dblVal`。以前 Long/Integer/Byte 一律 `&lVal`
+—— union 同偏移，靠「写入总在偏移 0」侥幸成立，形参型别对不上（C4133）。
+
+### 四、刻意不开的一格：货币数组元素
+
+`o.IncC ca(1)` 仍按值。不是漏档，是两边表示不一致：标量 Currency 的 C 档是 `double`
+（Fix 126 值语义，放大整数只存在于 VT_CY 变体里），而数组元素档是 `int64_t`
+（`mapSaElemCType`）。按 CurRef 递过去，服务端按值语义写回一枚 double 到 int64 槽，
+读出来是位模式垃圾（实测 `4608308318706860032`）。在册欠项：要把 `vb6_sa_currency`
+的存法与元素档一起改，不在这一刀偷开一档。
+
+### 五、读数
+
+夹具 `tests/b165_byref_byte_cur_date`（x64 = x86 同形）：
+
+```
+B165-Y1=7        Byte 数组元素
+B165-Y2=7        Byte 类字段
+B165-Y3=7        Byte 模块级裸变量（基线）
+B165-C1=10       Currency 数组元素（仍按值，在册）
+B165-C2=21       Currency 类字段
+B165-C3=31       Currency 模块级裸变量
+B165-T1=ok       Date 数组元素（按日期比较判，避开格式化差异）
+B165-T2=ok       Date 类字段
+B165-T3=ok       Date 模块级裸变量
+B165-Y4=7        同一 Byte 元素连发两次
+B165-DONE
+```
+
+b164 的 N12 由 `1` 变 `7` —— Byte 那一格本就是本刀的目标，针随之更新。
+
+### 六、第一次 CI 红：外部对端不收引用形
+
+```
+[TEXT] dict_native ... FAIL
+  ocx: d101|date_key: same=True asnum=True asstr=False
+  c3 : d101|date_key: same=True asnum=False asstr=False
+```
+
+根因在出站：`vb6_ComNarrowArgs` 的「降值」只认 R8/R4（收窄）和 `BYREF|BSTR`（§11.143），
+新开的三档它一概不认识 ⇒ 原样递给 `Scripting.Dictionary`，`Dict.Exists key` 收到引用形
+日期，判等变成 false（oracle 那侧是 VT_DATE 值，答 true）。
+
+按 §11.143 同一条口径补齐 —— 引用形只对**我们自己的服务端**有意义：
+
+- 新增 `vb6_ComDemoteNewRef`：把 `BYREF|{UI1,CY,DATE}` 就地改成值形（拷 pointee）。
+- 没有 ITypeInfo：对端既不是包装器也不是工程类实例 ⇒ 逐枚降值。
+- 有 ITypeInfo：按该形参的 `PARAMFLAG_FOUT` 决定，声明了出参才保留引用。
+- 只降这三档；I4/I2/R4/R8/BOOL 的引用形是 §B224 之后的老路径，这一刀不碰。
+
+### 七、账与门
+
+- manifest：corpus 838 → 840（b165 两枚），行数 1369 → 1371。
+  存量行真动到的：`b433`（两枚）、`dict_native`（两枚）—— 都是这三型新按引用发的地方。
+- 门 `check_byref_arg_pack_authority.ps1`：R1 六枚 → 九枚；新增 R3 五条
+  （三档映射、货币数组元素不开、表里正好九档）。
+- 九门 9/9；`tests/dict_native/run_compare.ps1` = PASS（70 行逐字一致）。
+  CI 22/22（run 45523956970）。
+
+### 八、这一刀之后仍在册的相邻欠项
+
+- 货币数组元素与标量不一个表示（上节）。
+- 属性读当 ByRef 实参仍按值（VB6 经 Let 写回）—— 要一条「读-改-写」的双程发射。
+- Boolean 数组元素拼串折出来是 `-1` 而不是 `True`（读路径）。
+- ByRef Boolean 未归一、无 typelib 的外部 VB6 ActiveX DLL 收 ByRef String 仍按值。
+
+## §11.147（第一百六十五刀）属性读当 ByRef 实参：读-改-写
+
+### 一、缺口
+
+§11.146 之后「按引用发的实参」只差最后一格：属性读。`o.Inc box.Tag`（`o As Object`，
+`Tag` 是带 Get/Let 的属性）落到 `comByRefArgExpr` 的属性那一格交回空串 ⇒ 按值打包，
+体里的写回落空。实测 `.temp/k166/p1`：`b.Tag = 40` 经 `o.Inc b.Tag` 之后仍是 40。
+
+### 二、真 VB6 的三步
+
+属性没有地址，VB6 不递属性本身，而是：**拷进临时量 → 递它的地址 → 调用回来经 Let 写回**。
+这一刀就把这三步发射出来：
+
+```c
+int32_t _pb0 = vb6_B166Box_prop_get_Tag(b);
+vb6_ComVarFree((void*)vb6_ComCall(o, L"Inc", (void*[]){vb6_ComPackIntRef(&_pb0)}, 1));
+vb6_B166Box_prop_let_Tag(b, _pb0);
+```
+
+### 三、判据（三件同时成立）
+
+1. 文本必须是**单实参**的属性读 `vb6_<类>_prop_get_<成员>(<base>)`。
+   带索引的 Read 属性（`base` 里带顶格逗号或括号）不在这一族，在册。
+2. 该类的同名成员必须**既有 Get 又有 Let** —— 只读属性写不回去。
+   两问都在同一次符号表遍历里做（`SymbolKind::PropertyGet` / `PropertyLet`），
+   型取 Get 的 **`sym->type`**，与「Function/PropertyGet 读自己的名字走返回槽」同一条口径
+   （载荷里只有 `memberReturnTypes`，那是源码原样的型名，不是 Vb6Type）。
+3. 打包器仍问 `comByRefPackFnForVbType`（§11.145 那张九档表），不在这一格另开一份。
+
+### 四、发射位置
+
+- 台账 `comPropWrites_`（一对 `decl` / `setter` 字符串）只住 `cgen_state.inc` 一处。
+- `visit(CallStmt)`：`decl` 在调用**前**发（读那一半），`setter` 在调用**后**、且在
+  §11.102 的 `ErrSerial` 守卫**里面**发 —— 「命中即整句中止」的口径下，调用被跳过时
+  属性也不该变；收尾在 `CallArgScope102` 的析构里统一清表。
+- 这条通道对「晚绑定目标」与「早绑定目标」的语句位置调用都成立，因为两路都走同一个
+  `visit(CallStmt)` 尾巴。
+
+### 五、刻意不开两档（在册）
+
+- **String 属性**：临时量要管 BSTR 所有权（get 给的那份谁释放 / Let 收的是拷贝还是转移）。
+- **Currency 属性**：C 档是 `double`（值语义），Let 形参未必同宽 —— 与 §11.146 货币数组元素
+  那格同一个根因。
+
+两格都留在「按值」这一侧，夹具里各有一枚反面证人。
+
+### 六、读数
+
+`tests/b166_prop_byref`（x64 = x86 逐行相同）：
+
+```
+B166-P1=41          Long 属性，第一次
+B166-P2=42          同一格连发两次（写回的值要能当下一轮的入参）
+B166-P3=21          Integer 属性
+B166-P4=31.5        Double 属性
+B166-P5=7           Byte 属性
+B166-P6=True        Boolean 属性（Not 之后回写）
+B166-P7=2020,1,3    Date 属性（Year/Month/Day 数值取值器，不钉区域设置形状）
+B166-P8=ab          String 属性 —— 反面证人，仍按值
+B166-P9=xyz         真变量对照
+```
+
+`b164` 的 N13 由 `5` 变 `6` —— 那一格本来就是「属性读不可取址，仍按值」的负对照，
+本刀翻面，夹具注释与针一起改。
+
+### 七、第一次 CI 红：夹具钉了区域设置形状的串
+
+```
+FAIL fixture ... pins locale-shaped literal(s): B166-P7=2020-01-03
+  -- but its source builds them with NEITHER explicit format string NOR numeric date getters.
+```
+
+原来那一针是 `Format(b.Tm, "yyyy-mm-dd")`。日期格式串跟系统区域设置走，换一台机器就是
+另一种写法。改成数值取值器：
+
+```vb
+Debug.Print "B166-P7=" & Year(b.Tm) & "," & Month(b.Tm) & "," & Day(b.Tm)
+```
+
+读数变 `2020,1,3`，两台逐行相同。
+
+### 八、账与门
+
+- 门 `check_byref_arg_pack_authority.ps1` 新增 R9 八条：台账只住一处、读/写两半各一处、
+  `CallArgScope102` 收尾、`PropertyGet` + `PropertyLet` 两问各一次、String/Currency 不开、
+  夹具两格；R8 的消费点数 4 → 5（多了属性读这一处）。
+- manifest：corpus 840 → 842，行数 1371 → 1373。存量只有 `b164` 一枚真变；另外六行
+  （`b132`、`ctrlmscomm`、`GUISample×3`、`TeeChartChartDisplay`）是本机 typelib 侧的
+  known-diff，**CI 是 oracle**。
+- 九门 9/9；CI 22/22（run 45538735210）。
+
+### 九、这一刀之后仍在册的相邻欠项
+
+- **String / Currency 属性**两档（上节）。
+- **带索引的 Read 属性**（`o.Inc box.Item(i)`）不在这一族。
+- **早绑定接收者**那一形：`b.Inc b.Tag`（`b` 是带型类变量，直接调 `vb6_B166Box_Inc`）
+  仍发 `(&(int32_t){vb6_B166Box_prop_get_Tag(b)})` —— 拷进去了没有拷回来，
+  实测 `.temp/k166/p2` 的 `Q1=40`（应为 41）。它走的是**早绑定实参发射器**
+  （`cgen_expr_call_arg_emit.inc` 的复合字面量那一族），不是本系列这条线；
+  要修得让那条发射器也登记同一张台账 —— 可以复用本刀的 `comPropWrites_`，
+  但需要那一族先认识「这枚实参是属性读」。
+- 上几刀留下的：货币数组元素、ByRef 布尔未归一、无 typelib 的外部 VB6 DLL 收 ByRef
+  String 仍按值、Boolean 数组元素拼串折 `-1`。
+
+## §11.148（第一百六十六刀）早绑定接收者那一形也走读-改-写
+
+### 一、缺口
+
+§11.147 把「属性读当 ByRef 实参」的读-改-写补给了晚绑定那一支：`o.Inc b.Tag`
+（`o As Object`，实参按 `VT_BYREF|T` 发）。早绑定接收者那一形没覆盖 ——
+`b.Inc b.Tag`（`b As B166Box`，直接调 `vb6_B166Box_Inc`）发的是
+
+```c
+vb6_B166Box_Inc(b, (&(int32_t){vb6_B166Box_prop_get_Tag(b)}));
+```
+
+拷进去了没有拷回来：被调方的写回落在复合字面量上就没了。实测 `.temp/k166/p2`：
+`Q1=40`（应为 41）、`Q2=30`（应为 31.5）。
+
+### 二、一位主人，两个发射器
+
+这一问提成 `CCodeGen::comPropReadWriteArg(expr, argText, outVt, outVar)`
+（定义在 `cgen_util_com.cpp`，声明在 `cgen_helpers.inc`）。判据三条与上一刀相同：
+
+1. 文本必须是**单实参**的属性读 `vb6_<类>_prop_get_<成员>(<base>)`；
+2. 该类的同名成员必须**既有 Get 又有 Let**；型取 Get 的返回型 `sym->type`；
+3. 打包器要在按引用那一族里（§11.145 那张九档表）。String / Currency 两档仍不开。
+
+两处消费点：
+
+- **晚绑定**：`comByRefArgExpr` 调它，交回 `vb6_ComPackXxxRef(&_pbN)`（与上一刀同形）。
+- **早绑定**：`cgen_expr_call_arg_emit.inc` 的复合字面量那一族在落 `(&(ctype){...})`
+  之前问同一句，成立就交 `&_pbN`。**只接同型那一格**（`mapType(属性型) == 形参 C 型`）：
+  型不一致时（Long 属性接 Integer 形参那种）仍走老路 —— C 侧的隐式换算本来就在那里做，
+  硬接会改掉换算行为。
+
+### 三、发射与收尾仍只有一处
+
+台账 `comPropWrites_` 住 `cgen_state.inc`，两行由 `visit(CallStmt)` 那条尾巴发：
+`decl` 在调用前、`setter` 在调用后且在 §11.102 的 `ErrSerial` 守卫**里面**。
+
+新加一道闸 `comPropWriteWindow_`：只有语句位置那棵被调方表达式树里才登记。属性读出现在
+**表达式上下文**（赋值右值 / 内建函数实参 / `Debug.Print` 实参）时没有「调用之后」这个
+位置，登记了没人发那两行就是 C2065 —— 那一族仍按值，在册。
+
+### 四、读数
+
+`tests/b166_prop_byref`（x64 = x86 逐行相同）：
+
+```
+B166-P1=41  B166-P2=42  B166-P3=21  B166-P4=31.5  B166-P5=7
+B166-P6=True  B166-P7=2020,1,3  B166-P8=ab  B166-P9=xyz     ← 晚绑定那一族
+B166-Q1=41   Long 属性，早绑定（改前 40）
+B166-Q2=31.5 Double 属性，早绑定（改前 30）
+B166-Q3=ab   String 属性反面证人，两族都仍按值
+```
+
+### 五、账与门
+
+- `check_byref_arg_pack_authority.ps1` 的 R9 扩到十三条：问句定义 1 / 声明 1 / 两个消费点、
+  早绑定只接同型、开窗 1 + 关窗 2；R8 的消费点 5 → 6。
+- manifest：corpus 842 不变；b166 两行按当前 C3.exe 重新登记（其余六行是本机 typelib 侧的
+  known-diff，CI 是 oracle）。
+- 九门 9/9；CI 22/22（run 45543339265）。
+
+### 六、这一刀之后仍在册的相邻欠项
+
+- **String / Currency 属性**两档（所有权 / 宽度）。
+- **带索引的 Read 属性**（`o.Inc box.Item(i)`）。
+- **表达式上下文里的属性读实参**（`x = o.F(b.Tag)` / `MsgBox o.F(b.Tag)`）—— 没有
+  「调用之后」这个位置，要修得先有一条「表达式内调用之后」的发射道。
+- 早绑定那一族的**型不一致**一格（Long 属性接 Integer 形参）仍按值。
+- 上几刀留下的：货币数组元素、ByRef 布尔未归一、无 typelib 的外部 VB6 DLL 收 ByRef
+  String 仍按值、Boolean 数组元素拼串折 `-1`。
+
+## §11.149（第一百六十七刀）String 属性也走读-改-写，临时量的 BSTR 归调用方退
+
+### 一、缺口
+
+§11.147 / §11.148 两刀把「属性读当 ByRef 实参」的读-改-写补给了数值五档（`Long`/`Integer`/
+`Single`/`Double`/`Boolean`）与 `Byte`/`Date`，String 与 Currency 两档一直 `return false`
+按值发。String 那一档卡在**所有权**：`prop_get` 交回来的是一枚新分配的 `BSTR`，拷进临时量
+以后谁退？不收这条线就只能每次调用漏一条串。
+
+### 二、两条前提查清了
+
+`tests/b166_prop_byref` 的发码里（`.temp/k167/t.c`）：
+
+```c
+BSTR vb6_B166Box_prop_get_Label2(vb6_cls_B166Box* me) {
+  BSTR vb6_ret_Label2 = NULL;
+  vb6_BSTR_Assign(&vb6_ret_Label2, me->m_Name);   /* 拷一份 → 新分配, 归调用方 */
+  return vb6_ret_Label2;
+}
+void vb6_B166Box_prop_let_Label2(vb6_cls_B166Box* me, BSTR v) {
+  vb6_BSTR_Assign(&me->m_Name, v);                /* 也是拷一份 → 不接手所有权 */
+}
+```
+
+两头都是**拷一份**：get 交出的新串归调用方，let 收下的是值不接手。所以临时量必须由调用方退 ——
+这就是这一刀唯一新增的一行。
+
+### 三、改法
+
+- `ComPropWriteBack` 多一格 `release`（空 = 标量档，值语义，没有可退的）。
+- `comPropReadWriteArg` 只对 Currency 仍 `return false`；String 那一档给 `release` 填
+  `vb6_BSTR_Free(_pbN);`。
+- `visit(CallStmt)` 的尾巴在 102 守卫**关掉之后**发这一行：守卫没放行时调用被跳过，临时量里
+  仍是 get 新分配的那枚串，更得退。（setter 仍在守卫**里**：跳过调用时属性不该变。）
+- 发出来的三段（`tests/b166_prop_byref` 的 Q3，早绑定）：
+
+```c
+BSTR _pb10 = vb6_B166Box_prop_get_Label2(b);
+vb6_B166Box_Append(b, &_pb10, _own_1);
+vb6_B166Box_prop_let_Label2(b, _pb10);
+vb6_BSTR_Free(_pb10);
+```
+
+顺带修掉一处旧漏：改前这一形发 `(&(BSTR){vb6_B166Box_prop_get_Label2(b)})`，那枚 get 出来的
+串**从来没退过**，每次调用漏一条。
+
+### 四、读数
+
+`tests/b166_prop_byref`（x64 = x86 逐行相同）：
+
+```
+B166-P8=abcd   晚绑定 String 属性（改前 ab）
+B166-Q3=abcd   早绑定 String 属性（改前 ab）
+其余 W1..W2 / P1..P7 / P9 / Q1..Q2 与上一刀逐行相同
+```
+
+### 五、账与门
+
+- `check_byref_arg_pack_authority.ps1`：`R9 string/cur props by value` 换成
+  `R9 currency prop by value`（String 已开），新增三条 —— `R9 string prop release`
+  （退还那一行只许一处）、`R9 release field`（台账多一格）、`R9 release emitted`
+  （发在守卫**外**）。
+- 九门 9/9；CI 22/22（run 45548994502）。
+
+### 六、仍在册的相邻欠项
+
+- **Currency 属性**：`double` 值语义与数组元素那档 `int64_t` 不是一个表示，和 §11.146
+  货币数组元素同一张欠项。
+- **带索引的 Read 属性**（`o.Inc box.Item(i)`）。
+- **表达式上下文里的属性读实参**（`x = o.F(b.Tag)` / `MsgBox o.F(b.Tag)`）—— 没有
+  「调用之后」这个位置，需要先有一条「表达式内调用之后」的发射道。
+- 早绑定那一族的**型不一致**一格（Long 属性接 Integer 形参）仍按值。
+- 上几刀留下的：货币数组元素、ByRef 布尔未归一、无 typelib 的外部 VB6 DLL 收 ByRef
+  String 仍按值、Boolean 数组元素拼串折 `-1`。
+
+## §11.150（第一百六十八刀）带索引的属性读也走读-改-写
+
+### 一、缺口
+
+§11.147/148/149 三刀把「属性读当 ByRef 实参」的读-改-写补给了**无索引**的属性（数值五档、
+`Byte`/`Date`、`String`）。带索引那一形一个都进不来，两处各卡一刀：
+
+1. 判据第一关只认 `ASTNodeKind::MemberAccessExpr`，而 `b.Slot(2)` 在 AST 上是
+   `IndexOrCallExpr`（`callee` = `MemberAccessExpr(b, Slot)`）—— VB6 在解析阶段不区分
+   数组索引与函数调用。
+2. 实参文本的 base 一律拒绝含逗号，而 `vb6_B168Box_prop_get_Slot(b, 2)` 里就有顶层逗号。
+
+改前两族都按值发，写回落空（`.temp/k168/r0.c`）：
+
+```c
+vb6_B168Box_Bump(b, (&(int32_t){vb6_B168Box_prop_get_Slot(b, 2)}));
+vb6_ComCall(o, L"Bump", (void*[]){vb6_ComPackInt(vb6_ComCall(o, L"Slot", ...))}, 1)
+```
+
+### 二、改法
+
+- 成员名从 `callee` 上取：`comPropReadWriteArg`（唯一那位主人）与 `comByRefArgExpr`
+  的属性那一支都认 `IndexOrCallExpr` 这一形。
+- 实参文本按**括号深度**切：第一枚作 base（base 仍只接简单形 —— 不含括号，它是 Let 的
+  首参），其余原样当索引实参；Let 的调用形是 `let(base, <索引...>, tmp)`，取值形参在
+  最后，与 VB6 `Property Let` 的形参序一致。
+
+发码（早绑定 / 晚绑定各一枚）：
+
+```c
+int32_t _pb2 = vb6_B168Box_prop_get_Slot(b, 2);
+vb6_B168Box_Bump(b, &_pb2);
+vb6_B168Box_prop_let_Slot(b, 2, _pb2);
+---
+int32_t _pb3 = vb6_B168Box_prop_get_Slot(b, 2);
+vb6_ComVarFree((void*)vb6_ComCall(o, L"Bump", (void*[]){vb6_ComPackIntRef(&_pb3)}, 1));
+vb6_B168Box_prop_let_Slot(b, 2, _pb3);
+```
+
+### 三、读数
+
+`tests/b168_indexed_prop_byref`（x64 = x86 逐行相同）：
+
+```
+B168-S1=11     单索引，早绑定（改前 10）
+B168-S2=12     单索引，晚绑定接收者 + 带型属性读
+B168-S3=1002   两个索引实参（Pair 的 Let 取值形参在最后）
+B168-S4=ab!    String 档带索引（临时量的 BSTR 照旧归调用方退）
+B168-S5=31     索引本身是表达式（1 + 1 + 1）
+```
+
+### 四、账与门
+
+- `check_byref_arg_pack_authority.ps1`：R9 新增四条 —— `indexed prop recognized = 2`
+  （主人 + 晚绑定各一处）、`index args split = 1`、`index let order = 1`、
+  `indexed prop fixture = 2`。
+- 九门 9/9；CI 22/22（run 45563322745）。
+- manifest：corpus 842 → 844（新增夹具两行，按路径序中插在 `b168_cvf` 之后），其余
+  838 行逐字节相同。
+
+### 五、仍在册的相邻欠项
+
+- **索引实参会被求值两次**（Get 一次、Let 一次）：`b.Bump b.Slot(Inc())` 那种带副作用的
+  索引式与真 VB6 未比对，先按这条口径记着。
+- **晚绑定接收者上的属性读**：`o.Bump o.Slot(2)` 里 `o.Slot(2)` 本身走 `vb6_ComCall`，
+  不是 `_prop_get_` 文本，进不了这一族（要先把晚绑定读落进一枚可写回的 Variant 槽）。
+- **Currency 属性**：与货币数组元素同一张欠项（`double` 与 `int64_t` 表示不一致）。
+- **表达式上下文里的属性读实参**（`x = o.F(b.Tag)` / `MsgBox o.F(b.Tag)`）—— 没有
+  「调用之后」这个位置，需要先有一条「表达式内调用之后」的发射道。
+- 早绑定那一族的**型不一致**一格（Long 属性接 Integer 形参）仍按值。
+- 上几刀留下的：货币数组元素、ByRef 布尔未归一、无 typelib 的外部 VB6 DLL 收 ByRef
+  String 仍按值、Boolean 数组元素拼串折 `-1`。
+
+## §11.151（第一百六十九刀）With 块里的属性读也走读-改-写；型不一致不再「假登记」
+
+这一刀两件，都是上一刀之后逐形探出来的。
+
+### 一、With 块：改前一个都不成立
+
+```vb
+With b
+    .Inc .Tag
+End With
+```
+
+改前发的是
+
+```c
+vb6_B169Box_Inc((void*)_vb6_with_0, (&(int32_t){vb6_B169Box_prop_get_Tag(_vb6_with_0)}));
+```
+
+写回落空。两处各卡一刀：
+
+1. `.Tag` 在 AST 上是 `WithMemberExpr` —— 只有成员名，没有 object 可推型；而这一问只认
+   `MemberAccessExpr`。带索引的 `.Slot(2)` 的 `callee` 也是 `WithMemberExpr`。
+2. base 那一段被「不许含括号」一票否决：`With b` 里的 `.Slot(2)` 的 base 是
+   `(void*)_vb6_with_6`（带一层强转）。
+
+改法：
+
+- **主人自己认形**：`MemberAccessExpr` / `IndexOrCallExpr`（callee 为 `MemberAccessExpr`
+  或 `WithMemberExpr`）/ `WithMemberExpr` 三形都收，成员名从各自那一格取。
+- **类名三级退**：能推型就推型 → 推不出问 `withObjectInfoStack_`（With 主体的
+  `className`）→ 再退一步从发码文本 `vb6_<Cls>_prop_get_<M>` 里取名字。**型依旧问声明侧**
+  （§11.145 那条口径没变：名字只是定位，档来自符号表）。
+- **base 放宽只放一种**：一个括号包着的强转 + 后面紧跟不带括号的剩余文本。其余仍拒。
+
+读数（`tests/b169_with_prop_byref`，x64 = x86）：`W1=41`（改前 40）、`W4=ab!`（改前 ab）、
+`W5=11`（With + 带索引，改前 10）。
+
+### 二、早绑定型不一致那一格是「假登记」
+
+`b.IncI b.Tag`（Long 属性接 Integer 形参）改前发：
+
+```c
+int32_t _pb1 = vb6_B169Box_prop_get_Tag(b);
+vb6_B169Box_IncI(b, (&(int16_t){vb6_B169Box_prop_get_Tag(b)}));
+vb6_B169Box_prop_let_Tag(b, _pb1);      /* ← 把未动的值又写了一遍 */
+```
+
+台账先登记、调用点随后发现自己用不上（型不一致只接同型），于是临时量成了孤儿：被调方的
+写回落在复合字面量上丢掉，属性却被 Let 白叫一次（有副作用的 Let 就会现形）。
+
+改法：`comPropReadWriteArg` 多一个 `wantCType`，非空即「调用点已经定了形参 C 型」，
+型不一致**当面交回 false**、一个字都不登记；早绑定那一路把 `cType` 递进去。
+
+型不一致这一格本身仍按值（`W2=40` 是证人）—— 要开得先有「按形参型造临时量 + 两向换算」
+的账（VB6 在那里是「拷临时量 + 换算」，不是拒绝）。
+
+### 三、账与门
+
+- `check_byref_arg_pack_authority.ps1` R9 新增四条：`with-prop asks stack = 1`、
+  `want-ctype gate = 1`、`want-ctype from caller = 1`、`with-prop fixture = 2`。
+- 九门 9/9；CI 22/22（run 45570526384）。
+- manifest：corpus 844 → 846（新夹具两行，按路径序插在 `b169_cfw` 之后）；存量移动 3 行
+  —— `VBFlexGridDemo.vbp`（2 处 `WriteProperty` 的 `Enabled` / `OLEDropMode`）、
+  `ucSegmentedControl/SegmentedControl.vbp`（With 里 `ItemCaption`/`ItemValue`/
+  `ItemToolTipText`/`ItemTag`/`ItemDisabled`/`ItemDropDown`）、
+  `ucTreeView/Proyecto1.vbp`（`OLEDropMode` 一处）。三份都用「停工本机重编旧源码」作基线
+  A/B 逐行对过：抹掉临时量编号后差异只剩那几组
+  `<C型> _pbN = …_prop_get_…; <call 递 &_pbN>; …_prop_let_…; [vb6_BSTR_Free(_pbN);]`。
+
+### 四、仍在册的相邻欠项
+
+- **型不一致那一格**（Long 属性接 Integer 形参）：按形参型造临时量 + 两向换算，未开。
+- **索引实参求值两次**（Get 一次、Let 一次）：带副作用的索引式与真 VB6 未比对。
+- **晚绑定接收者上的属性读**：`o.Bump o.Slot(2)` 里 `o.Slot(2)` 走 `vb6_ComCall`，不是
+  `_prop_get_` 文本 —— 要先把晚绑定读落进一枚可写回的 Variant 槽。
+- **Currency 属性 / 货币数组元素**：`double` 与 `int64_t` 表示不一致，同一张欠项。
+- **表达式上下文里的属性读实参**（`x = o.F(b.Tag)` / `MsgBox o.F(b.Tag)`）—— 没有
+  「调用之后」这个位置，需要先有一条「表达式内调用之后」的发射道。
+- 上几刀留下的：ByRef 布尔未归一、无 typelib 的外部 VB6 DLL 收 ByRef String 仍按值、
+  Boolean 数组元素拼串折 `-1`。
+
+## §11.152（第一百七十刀）属性读与形参型不一致时的真换算
+
+上一刀把「早绑定型不一致」的假登记修掉了，但那一格本身仍按值：`b.IncI b.Tag`（Long 属性
+接 Integer 形参）体里的加一丢掉，`W2=40` 就是证人。这一刀把换算打开。
+
+真 VB6 的语义不是「拒绝」，是**拷一枚形参型的临时量、递它的地址、回来再换算写回属性**。
+于是 `comPropReadWriteArg` 的 `wantCType` 从「合不上就回 false」改成「按它造临时量 +
+两向换算」：
+
+- 声明型 = 形参 C 型；读入值按「属性 C 型 → 形参 C 型」换算，写回值按反向换算。
+- 换算梯只住一处 `narrowArgText(expr, toC, fromC)`：整型目标走 RTL 的验界函数
+  （`vb6_ChkInt` / `vb6_ChkByte` / `vb6_ChkLong`，越界即 VB6 Error 6）；浮点 → 整型走
+  `vb6_FltToLng`（VB6 的取整，半值远离零，不是 C 的截断）再验界；放大型只加 C 强转。
+- String 那一档不换算（BSTR 没有数值换算可言），Currency 仍整档不开。
+- 早绑定调用点不再自己比 `mapType`，把 `cType` 递进去就完事。
+
+发码（`tests/b170_prop_byref_narrow`，六种配对）：
+
+```c
+int16_t _pb0 = vb6_ChkInt((int32_t)(vb6_B170Box_prop_get_L1(b)));
+vb6_B170Box_IncI(b, &_pb0);
+vb6_B170Box_prop_let_L1(b, vb6_ChkLong((int64_t)(_pb0)));
+...
+int32_t _pb5 = vb6_ChkLong(vb6_FltToLng(vb6_B170Box_prop_get_D1(b)));
+```
+
+读数（x64 = x86 逐行相同）：`T1=41 T2=8 T3=21 T4=21 T5=2.5 T6=5 T7=unchanged`。
+T6 用 3.7 而不是 3.2 —— 把「取整」与「截断」分开：取整 4 + 1 = 5，截断会得 4。
+
+门 `check_byref_arg_pack_authority.ps1`：R9 里「want-ctype gate = 1」（拒绝那一格）换成
+`conv skips string = 1`，另加 `narrow conv decided / decl / let / ladder` 四条与
+`narrow fixture = 2`；`early-bound site` 那条改成认新的递参形。九门 9/9。
+
+manifest：corpus 846 → 848；存量移动 1 行 = `tests/b169_with_prop_byref`（W2 从按值变换算）。
+
+## §11.153（第一百七十一刀）Currency 属性的拼串原来按 Long 发
+
+```vb
+b.C1 = 10.5
+Debug.Print "Q=" & b.C1        ' 改前 "10"，改后 "10.5"
+```
+
+而 `Dim c As Currency` 的**局部变量**同一形一直是对的。根因不是「Currency 没支持」，是
+**同一只值两条路两个答案**：
+
+- 变量那一形：符号档走 `Vb6Type::Double`（Currency 的 C 承载就是 double，Fix 126）⇒ `CStrDbl`；
+- **属性读**那一形：经 `memberReturnTypes` 得到 `Vb6Type::Currency`
+  （`cgen_util_type.cpp:652`）⇒ `wrapToBSTR` 的分档 switch **没有 Currency 臂** ⇒ 落
+  default 的 `vb6_CStrLong((int64_t)double)`，10.5 截成 10。
+
+修法只补一条臂，不另开格式化路：
+
+```c
+case Vb6Type::Currency: return "vb6_CStrDbl(" + expr + ")";
+```
+
+发码（`tests/b171_currency_prop_str`）：
+
+```c
+vb6_CStrDbl(vb6_B171Box_prop_get_C1(b))          /* Q1 属性读 */
+vb6_CStrDbl(vb6_B171Main_Cur())                  /* Q4 Function ... As Currency */
+vb6_CStrDbl(vb6_B171Box_prop_get_C1(_vb6_with_0))/* Q7 With 里的属性读 */
+```
+
+读数（x64 = x86）：`Q1=10.5 Q2=11.5 Q3=10.5 Q4=20.25 Q5=11.5 Q6=7.25 Q7=11.5`。
+Q3（Double 属性）与 Q6（局部 Currency 变量）是改前就对的两枚对照，钉住不许回退。
+
+顺带把 `b165_byref_byte_cur_date` 的两根针改成真值（C2 `21` → `21.25`、C3 `31` → `31.25`）
+—— 那两根针以前把截断后的数当期望值钉住了；Currency **数组元素** C1 仍打 10
+（`int64_t` 缩放的表示不一致，在册，本刀不碰）。
+
+门 `check_implicit_cstr_station.ps1` 加 R16：Currency 臂恰好 1 条、不许再出现
+`case Vb6Type::Currency: return "vb6_CStrLong`、臂数 ≥ 16（少一条就落 default）、b171 夹具两格。
+九门 9/9；CI 22/22（run 45588642245）。
+
+manifest：corpus 848 → 850；存量移动 1 个夹具（b165 两行）。
+
+### 附：CI 点名器的一条假红
+
+同一轮 CI 里出现过四条 `##[error][GUI] ... pixels: PASS ...` —— 用例其实过了。机制：
+`Test-GuiVbpCase` 用 `-NoNewline` 打前缀，先落地的是像素夹具那一行
+（`pixels: PASS tc_px ...`），最后才是 `PASS (window=...)`；点名器只认「尾巴以 PASS/SKIP
+开头」，于是过的用例被判成没判过。修法只动报表面：尾巴认可选的 `pixels:` 前缀。
+本机用六条真实排版自证（两条 pixels: PASS 由点头变不点，三条 FAIL 照点）；CI 22/22
+（run 45583802369）。
+
+### 仍在册（本两刀新增）
+
+- **Currency 赋值未圈到 4 位小数**：VB6 的 Currency 每次赋值会先圈到 4 位；本仓的 double
+  承载不圈。与「数组元素 `int64_t` 缩放」是同一张表示层欠项的两个面。
+- **拼串格式化的档位清单要跟着 Vb6Type 走**：这一刀是「少一条臂」，同类风险在于以后新增
+  档位忘了加臂 —— R16 的「臂数 ≥ 16」只兜得住不回退，兜不住新档。
+
