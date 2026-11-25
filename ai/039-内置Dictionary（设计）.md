@@ -9653,3 +9653,97 @@ vb6_B169Box_prop_let_Tag(b, _pb1);      /* ← 把未动的值又写了一遍 */
   「调用之后」这个位置，需要先有一条「表达式内调用之后」的发射道。
 - 上几刀留下的：ByRef 布尔未归一、无 typelib 的外部 VB6 DLL 收 ByRef String 仍按值、
   Boolean 数组元素拼串折 `-1`。
+
+## §11.152（第一百七十刀）属性读与形参型不一致时的真换算
+
+上一刀把「早绑定型不一致」的假登记修掉了，但那一格本身仍按值：`b.IncI b.Tag`（Long 属性
+接 Integer 形参）体里的加一丢掉，`W2=40` 就是证人。这一刀把换算打开。
+
+真 VB6 的语义不是「拒绝」，是**拷一枚形参型的临时量、递它的地址、回来再换算写回属性**。
+于是 `comPropReadWriteArg` 的 `wantCType` 从「合不上就回 false」改成「按它造临时量 +
+两向换算」：
+
+- 声明型 = 形参 C 型；读入值按「属性 C 型 → 形参 C 型」换算，写回值按反向换算。
+- 换算梯只住一处 `narrowArgText(expr, toC, fromC)`：整型目标走 RTL 的验界函数
+  （`vb6_ChkInt` / `vb6_ChkByte` / `vb6_ChkLong`，越界即 VB6 Error 6）；浮点 → 整型走
+  `vb6_FltToLng`（VB6 的取整，半值远离零，不是 C 的截断）再验界；放大型只加 C 强转。
+- String 那一档不换算（BSTR 没有数值换算可言），Currency 仍整档不开。
+- 早绑定调用点不再自己比 `mapType`，把 `cType` 递进去就完事。
+
+发码（`tests/b170_prop_byref_narrow`，六种配对）：
+
+```c
+int16_t _pb0 = vb6_ChkInt((int32_t)(vb6_B170Box_prop_get_L1(b)));
+vb6_B170Box_IncI(b, &_pb0);
+vb6_B170Box_prop_let_L1(b, vb6_ChkLong((int64_t)(_pb0)));
+...
+int32_t _pb5 = vb6_ChkLong(vb6_FltToLng(vb6_B170Box_prop_get_D1(b)));
+```
+
+读数（x64 = x86 逐行相同）：`T1=41 T2=8 T3=21 T4=21 T5=2.5 T6=5 T7=unchanged`。
+T6 用 3.7 而不是 3.2 —— 把「取整」与「截断」分开：取整 4 + 1 = 5，截断会得 4。
+
+门 `check_byref_arg_pack_authority.ps1`：R9 里「want-ctype gate = 1」（拒绝那一格）换成
+`conv skips string = 1`，另加 `narrow conv decided / decl / let / ladder` 四条与
+`narrow fixture = 2`；`early-bound site` 那条改成认新的递参形。九门 9/9。
+
+manifest：corpus 846 → 848；存量移动 1 行 = `tests/b169_with_prop_byref`（W2 从按值变换算）。
+
+## §11.153（第一百七十一刀）Currency 属性的拼串原来按 Long 发
+
+```vb
+b.C1 = 10.5
+Debug.Print "Q=" & b.C1        ' 改前 "10"，改后 "10.5"
+```
+
+而 `Dim c As Currency` 的**局部变量**同一形一直是对的。根因不是「Currency 没支持」，是
+**同一只值两条路两个答案**：
+
+- 变量那一形：符号档走 `Vb6Type::Double`（Currency 的 C 承载就是 double，Fix 126）⇒ `CStrDbl`；
+- **属性读**那一形：经 `memberReturnTypes` 得到 `Vb6Type::Currency`
+  （`cgen_util_type.cpp:652`）⇒ `wrapToBSTR` 的分档 switch **没有 Currency 臂** ⇒ 落
+  default 的 `vb6_CStrLong((int64_t)double)`，10.5 截成 10。
+
+修法只补一条臂，不另开格式化路：
+
+```c
+case Vb6Type::Currency: return "vb6_CStrDbl(" + expr + ")";
+```
+
+发码（`tests/b171_currency_prop_str`）：
+
+```c
+vb6_CStrDbl(vb6_B171Box_prop_get_C1(b))          /* Q1 属性读 */
+vb6_CStrDbl(vb6_B171Main_Cur())                  /* Q4 Function ... As Currency */
+vb6_CStrDbl(vb6_B171Box_prop_get_C1(_vb6_with_0))/* Q7 With 里的属性读 */
+```
+
+读数（x64 = x86）：`Q1=10.5 Q2=11.5 Q3=10.5 Q4=20.25 Q5=11.5 Q6=7.25 Q7=11.5`。
+Q3（Double 属性）与 Q6（局部 Currency 变量）是改前就对的两枚对照，钉住不许回退。
+
+顺带把 `b165_byref_byte_cur_date` 的两根针改成真值（C2 `21` → `21.25`、C3 `31` → `31.25`）
+—— 那两根针以前把截断后的数当期望值钉住了；Currency **数组元素** C1 仍打 10
+（`int64_t` 缩放的表示不一致，在册，本刀不碰）。
+
+门 `check_implicit_cstr_station.ps1` 加 R16：Currency 臂恰好 1 条、不许再出现
+`case Vb6Type::Currency: return "vb6_CStrLong`、臂数 ≥ 16（少一条就落 default）、b171 夹具两格。
+九门 9/9；CI 22/22（run 45588642245）。
+
+manifest：corpus 848 → 850；存量移动 1 个夹具（b165 两行）。
+
+### 附：CI 点名器的一条假红
+
+同一轮 CI 里出现过四条 `##[error][GUI] ... pixels: PASS ...` —— 用例其实过了。机制：
+`Test-GuiVbpCase` 用 `-NoNewline` 打前缀，先落地的是像素夹具那一行
+（`pixels: PASS tc_px ...`），最后才是 `PASS (window=...)`；点名器只认「尾巴以 PASS/SKIP
+开头」，于是过的用例被判成没判过。修法只动报表面：尾巴认可选的 `pixels:` 前缀。
+本机用六条真实排版自证（两条 pixels: PASS 由点头变不点，三条 FAIL 照点）；CI 22/22
+（run 45583802369）。
+
+### 仍在册（本两刀新增）
+
+- **Currency 赋值未圈到 4 位小数**：VB6 的 Currency 每次赋值会先圈到 4 位；本仓的 double
+  承载不圈。与「数组元素 `int64_t` 缩放」是同一张表示层欠项的两个面。
+- **拼串格式化的档位清单要跟着 Vb6Type 走**：这一刀是「少一条臂」，同类风险在于以后新增
+  档位忘了加臂 —— R16 的「臂数 ≥ 16」只兜得住不回退，兜不住新档。
+
