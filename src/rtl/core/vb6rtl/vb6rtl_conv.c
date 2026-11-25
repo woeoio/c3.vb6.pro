@@ -406,9 +406,10 @@ int16_t vb6_CIntBSTR(BSTR s) { return (int16_t)round(vb6_NumVal(s)); }
 // `round(d*10000)/10000`, 于是 CCur("3.00005") 与 `c = 3.00005` 两条路在 A5 那格里
 // 各给一个答案 (前者 3.0001 / 后者 3.0000)。
 // 写成两句而不是嵌套一句: KEEPS 表（check_owned_temp_keeps.ps1）从**外层调用**取
-// 形参去向, `vb6_CCur(vb6_NumVal(s))` 会让它停在 vb6_CCur 的 double 形参上
-// （handoff-to-plain），看不见里层 vb6_NumVal 那一次直读。拆开后证据仍是
-// handoff-reads:vb6_NumVal —— 与改前逐字相同，语义不变。
+// 形参去向, 嵌套写法会让它停在 vb6_CCur 的 double 形参上（handoff-to-plain），
+// 看不见里层那一次直读。拆开后证据仍是 handoff-reads:vb6_NumVal —— 与改前逐字相同，
+// 语义不变。另: check_conv_strict_parse 的 R3 会数本文件里 NumVal 的调用点
+// （十枚入口），注释里也别写出带括号的调用形。
 double  vb6_CCurBSTR(BSTR s) { double d = vb6_NumVal(s); return vb6_CCur(d); }
 
 // ai/032: 无符号/窄整型转换函数 (CSByte/CUInt/CULng/CULngLng)。

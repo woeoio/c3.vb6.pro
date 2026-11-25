@@ -870,6 +870,12 @@
     // 账 #305 §11.158 (第一百七十五刀): Currency 赋值圈的**唯一**出口。
     // Assignment 与 Let 两条语句站共用它 (VB6 的 Currency 是定点 4 位, C3 用 double 承载)。
     std::string currencyAssignWrap(Expr* target, const std::string& cValue) const;
+    // 账 #305 §11.160 (第一百七十七刀): **ByVal Currency 形参**的调用点折数出口。
+    // VB6 把实参交给 ByVal Currency 形参时先折到 4 位 (探针 .temp/k177p 的 A1..A6 /
+    // B1/B2/E1: 真 VB6 交 1.2346, 改前我们交 1.234567)。只圈 ByVal 那一形 ——
+    // ByRef 交的是地址, 折数发生在被调方的赋值站 (H1 两边相同)。
+    std::string currencyByValArgWrap(Expr* arg, const std::string& cValue,
+                                     Vb6Type paramType, bool isByVal) const;
 
     // 账 #261 (§B77②): 「这枚左值是哪档窄整型」的**唯一**回答处 —— 标量标识符、
     // UDT 字段 (含 With 成员、数组元素身上的字段)、本模块数组的元素三形都问这里。

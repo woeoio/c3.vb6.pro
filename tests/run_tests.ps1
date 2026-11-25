@@ -12713,6 +12713,19 @@ $b179Needles = @(
 "B179-13=40000", "B179-DONE")
 Test-Vbp 'b179_currency_tie' "$Tests\b179_currency_tie\B179Res.vbp" $b179Needles
 Test-Vbp 'b179_currency_tie_x86' "$Tests\b179_currency_tie\B179Res.vbp" $b179Needles -Arch "x86"
+
+# 账 #305 §11.160 (第一百七十七刀): ByVal Currency 形参在**调用点**就折 4 位。
+# 探针 .temp/k177p 是真 VB6 编成 exe 后写出的 19 行读数; 两列都要钉 ——
+# 第一列 CStr(CLng(x*10000)) 会被 CLng 的四舍五入遮住 (A1 改前也是 12346),
+# 第二列 CStr(x) 才露尾巴 (改前 A1 打 1.234567, B2 打 10.123456)。
+$b180Needles = @(
+"A1=12346 | 1.2346", "A2=12345 | 1.2345", "A3=12346 | 1.2346", "A4=1 | 0.0001",
+"A5=30000 | 3", "A6=-12346 | -1.2346", "B1=12346 | 1.2346", "B2=101235 | 10.1235",
+"C1=12345 | 1.2345", "C2=12346 | 1.2346", "D1=12346 | 1.2346", "D2=12346 | 1.2346",
+"E1=12346 | 1.2346", "E2=12345 | 1.2345", "F1=12346 | 1.2346", "F2=30000 | 3",
+"G1=420000 | 42", "G2=70000 | 7", "H1=12346 | 1.2346", "PROBE-DONE")
+Test-Vbp 'b180_currency_byval' "$Tests\b180_currency_byval\B180Res.vbp" $b180Needles
+Test-Vbp 'b180_currency_byval_x86' "$Tests\b180_currency_byval\B180Res.vbp" $b180Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

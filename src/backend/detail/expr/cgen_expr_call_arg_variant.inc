@@ -811,6 +811,14 @@
                 argVal = isByRef ? ("&" + gtmp102) : gtmp102;
             }
         }
+        // 账 #305 §11.160 (第一百七十七刀): ByVal Currency 形参在调用点就折到 4 位。
+        // 出口只此一位 (currencyByValArgWrap): 与赋值站 §11.158 一样只问 RTL 的 vb6_CCur。
+        if (!isByRef && !calleeIsBuiltin && !calleeIsDeclare && !calleeParamIsArray
+            && i < calleeParams.size()) {
+            argVal = currencyByValArgWrap(
+                i < node.positional.size() ? node.positional[i].get() : nullptr,
+                argVal, calleeParams[i].type, calleeParams[i].isByVal);
+        }
         args.push_back(std::move(argVal));
     }
 

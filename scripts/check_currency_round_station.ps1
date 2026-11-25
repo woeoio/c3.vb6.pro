@@ -199,7 +199,7 @@ else {
 $conv10 = Read-File 'src/rtl/core/vb6rtl/vb6rtl_conv.c'
 if ($null -eq $conv10) { $bad += 'R10 vb6rtl_conv.c not found' }
 else {
-    if ($conv10 -notmatch 'double\s+vb6_CCurBSTR\(BSTR s\)\s*\{\s*return vb6_CCur\(vb6_NumVal\(s\)\);\s*\}') {
+    if ($conv10 -notmatch 'double\s+vb6_CCurBSTR\(BSTR s\)\s*\{\s*double d = vb6_NumVal\(s\); return vb6_CCur\(d\);\s*\}') {
         $bad += 'R10 vb6_CCurBSTR must go through vb6_CCur (single owner)'
     }
 }
@@ -258,5 +258,67 @@ Write-Host '  R9 single rounding (integer part split, only the small fraction ro
 Write-Host '  R10 CCur family shares one owner OK'
 Write-Host '  R11 no round(x*10000) left in RTL OK'
 Write-Host '  R12 b179 fixture + runner cells OK'
-Write-Host 'PASS currency_round_station (R1..R12)'
+
+# ---------- R13 ----------
+# §11.160 (第一百七十七刀): ByVal Currency 形参在**调用点**折数 —— 出口唯一，两条实参路
+# (位置 / 具名) 都走它；ByRef 不许圈 (交的是地址)，已折过的实参不许折第二次。
+$def13 = Read-File 'src/backend/cgen_util_type.cpp'
+if ($null -eq $def13) { $bad += 'R13 cgen_util_type.cpp not found' }
+else {
+    $n = ([regex]::Matches($def13, 'std::string CCodeGen::currencyByValArgWrap\(')).Count
+    if ($n -ne 1) { $bad += ('R13 currencyByValArgWrap definition = ' + $n + ', want 1') }
+    $i13 = $def13.IndexOf('std::string CCodeGen::currencyByValArgWrap(')
+    if ($i13 -ge 0) {
+        $body13 = $def13.Substring($i13, [Math]::Min(3000, $def13.Length - $i13))
+        if ($body13 -notmatch '!isByVal || paramType != Vb6Type::Currency') {
+            $bad += 'R13 the station must be ByVal-Currency only (ByRef hands over an address)'
+        }
+        if ($body13 -notmatch 'return "vb6_CCur\(" \+ cValue \+ "\)"') {
+            $bad += 'R13 the station must fold through vb6_CCur (no second scaling formula)'
+        }
+        if ($body13 -notmatch 'knownCurrencyVars_\.count\(lower\)') {
+            $bad += 'R13 Currency variables must not be folded twice (knownCurrencyVars_ gate)'
+        }
+    }
+}
+if ($null -ne $hdr1) {
+    $n = ([regex]::Matches($hdr1, 'std::string currencyByValArgWrap\(')).Count
+    if ($n -ne 1) { $bad += ('R13 declaration = ' + $n + ', want 1') }
+}
+$arg13 = Read-File 'src/backend/detail/expr/cgen_expr_call_arg_variant.inc'
+if ($null -eq $arg13) { $bad += 'R13 cgen_expr_call_arg_variant.inc not found' }
+else {
+    $n = ([regex]::Matches($arg13, 'currencyByValArgWrap\(')).Count
+    if ($n -ne 1) { $bad += ('R13 positional-arg station = ' + $n + ', want 1') }
+}
+$named13 = Read-File 'src/backend/detail/expr/cgen_expr_call_named_args.inc'
+if ($null -eq $named13) { $bad += 'R13 cgen_expr_call_named_args.inc not found' }
+else {
+    $n = ([regex]::Matches($named13, 'currencyByValArgWrap\(')).Count
+    if ($n -ne 1) { $bad += ('R13 named-arg station = ' + $n + ', want 1') }
+}
+foreach ($f in @('B180Main.bas', 'B180Res.vbp')) {
+    $p = Join-Path $repo ('tests/b180_currency_byval/' + $f)
+    if (-not (Test-Path -LiteralPath $p)) { $bad += ('R13 fixture file missing: ' + $f) }
+}
+if ($null -ne $run7) {
+    $n = ([regex]::Matches($run7, "Test-Vbp 'b180_currency_byval")).Count
+    if ($n -ne 2) { $bad += ('R13 b180 fixture cells = ' + $n + ', want 2 (x64 + x86)') }
+}
+$main13 = Read-File 'tests/b180_currency_byval/B180Main.bas'
+if ($null -eq $main13) { $bad += 'R13 B180Main.bas not found' }
+else {
+    if ($main13 -notmatch 'CStr\(x\)') {
+        $bad += 'R13 second column must print CStr(x): CLng alone hides the un-folded tail'
+    }
+    if ($main13 -notmatch 'TakeByVal2 1\.234567, "A1"') {
+        $bad += 'R13 witness A1 (1.234567 -> 1.2346) missing'
+    }
+}
+if ($bad.Count -gt 0) {
+    Write-Host ('FAIL currency_round_station: ' + ($bad -join ' | '))
+    exit 1
+}
+Write-Host '  R13 ByVal Currency call-site station (one owner, both arg paths, no ByRef fold) OK'
+Write-Host 'PASS currency_round_station (R1..R13)'
 exit 0

@@ -218,6 +218,14 @@
                     // 同 arg_emit 那一处: 装箱只走 boxToVariant 这一权威 (见该处注释)
                     argVal = boxToVariant(named.value.get(), argVal);
                 }
+                // 账 #305 §11.160 (第一百七十七刀): 具名实参走同一位出口
+                // (ByVal Currency 形参在调用点折数)。applyByRef 已给它加过 &，
+                // 那形 isByVal=false ⇒ 出口原样退回。
+                if (pi < calleeParams.size()) {
+                    argVal = currencyByValArgWrap(named.value.get(), argVal,
+                                                  calleeParams[pi].type,
+                                                  calleeParams[pi].isByVal);
+                }
                 if (pi < orderedArgs.size()) {
                     orderedArgs[pi] = std::move(argVal);
                     filled[pi] = true;

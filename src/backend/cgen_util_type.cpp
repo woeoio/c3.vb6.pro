@@ -2397,6 +2397,53 @@ std::string CCodeGen::currencyAssignWrap(Expr* target, const std::string& cValue
     return cValue;
 }
 
+std::string CCodeGen::currencyByValArgWrap(Expr* arg, const std::string& cValue,
+                                          Vb6Type paramType, bool isByVal) const {
+    /* 账 #305 §11.160 (第一百七十七刀): **ByVal Currency 形参在调用点就折数**。
+     * 真 VB6 探针 .temp/k177p（P177.bas，编译后写文件）读数:
+     *   A1 1.234567 -> 1.2346    B1 Double 1.234567 -> 1.2346
+     *   B2 10.123456 -> 10.1235  E1 Variant 1.234567 -> 1.2346
+     *   A4 0.00005 -> 0.0001     G1/G2 整数档原样
+     *   H1 ByRef x = x*1.0001 -> 1.2346（折在被调方赋值站，不在调用点）
+     * 改前 C3 把 double 原值直接交给 C 侧同为 double 的形参（C 类型相同 ⇒ 不发任何
+     * 换算），于是 A1 打 1.234567、B2 打 10.123456。
+     *
+     * 判据:
+     *   - 只认 ByVal Currency 形参；ByRef 交地址，不折（H1 两边本来就相同）；
+     *   - 实参已经是 Currency（inferExprType 答 Currency，或裸名在 knownCurrencyVars_
+     *     里 —— Currency 变量的 inferExprType 会答 Double）⇒ 已 4 位，不重复折；
+     *   - 整数档（Byte/Integer/Long/Boolean/LongLong…）交给 Currency 是精确的，不折；
+     *   - 已带 vb6_CCur( 前缀（String→Currency 那一站）不重复折；
+     *   - 地址/复合字面量（& 开头）不动。
+     * 折数只问 RTL 那一位主人 vb6_CCur（§11.159 起它又只问 vb6_CurrencyScale），
+     * 发码侧不另写 round。
+     */
+    if (!isByVal || paramType != Vb6Type::Currency || !arg) return cValue;
+    if (cValue.empty() || cValue[0] == '&') return cValue;
+    if (cValue.rfind("vb6_CCur(", 0) == 0) return cValue;
+    if (cValue.rfind("vb6_CurrencyScale(", 0) == 0) return cValue;
+
+    /* 裸名先问按名表: `Dim c As Currency` 的 inferExprType 答 Double（§11.158 实测）。 */
+    if (arg->kind == ASTNodeKind::IdentifierExpr) {
+        std::string lower = static_cast<const IdentifierExpr&>(*arg).name;
+        if (lower.compare(0, 4, "me->") == 0) lower = lower.substr(4);
+        else if (lower.size() > 4 && lower[0] == '(' && lower[1] == '*'
+                 && lower.back() == ')')
+            lower = lower.substr(2, lower.size() - 3);
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (knownCurrencyVars_.count(lower)) return cValue;
+    }
+
+    const Vb6Type vt = inferExprType(*arg);
+    if (vt == Vb6Type::Currency) return cValue;
+    /* 只折「带小数」的源档。整数档交给 Currency 是精确的；String 已由 String→Currency
+     * 那一站折过（F1/F2）；Unknown/Object 不碰（证不出，且可能是指针）。 */
+    if (vt != Vb6Type::Double && vt != Vb6Type::Single && vt != Vb6Type::Date
+        && vt != Vb6Type::Variant)
+        return cValue;
+    return "vb6_CCur(" + cValue + ")";
+}
+
 std::string CCodeGen::narrowCheckAssign(Expr* target, Expr* value,
                                         const std::string& cValue) const {
     if (!target || cValue.empty()) return cValue;
