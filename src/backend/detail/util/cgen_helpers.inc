@@ -1285,7 +1285,11 @@
     // 晚绑定实参 (comByRefArgExpr) 与早绑定实参 (复合字面量那一族) 问同一句。
     bool comPropReadWriteArg(Expr& expr, const std::string& argText,
                              Vb6Type& outVt, std::string& outVar,
-                             const std::string& wantCType = std::string());
+                             const std::string& wantCType = std::string(),
+                             Vb6Type wantVt = Vb6Type::Unknown);
+    // 账 #305 §11.156 (第一百七十三刀): 形参的**声明档**也递进来 —— `int16_t` 盖着
+    // Integer 与 Boolean (CStr 结果一个 "12" 一个 "True")、`double` 盖着 Date 与 Currency。
+    // 晚绑定调用点答 Unknown ⇒ 那一格不开 (本刀只接早绑定)。
     // 账 #305 §11.145 (第一百六十三刀): 「这枚 VB 型该按哪个 *Ref 打包器发」(空 = 没有那档，按值)。
     // 裸标识符 / 数组元素 / 类字段 三处共用它 —— 配对表只住 cgen_util_com.cpp 一处。
     std::string comByRefPackFnForVbType(Vb6Type vt) const;

@@ -1,0 +1,5 @@
+Type=Exe
+Module=B176Main; B176Main.bas
+Class=B176Box; B176Box.cls
+Startup="Sub Main"
+ExeName32="B176Res.exe"

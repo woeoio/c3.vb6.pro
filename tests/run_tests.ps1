@@ -12655,6 +12655,15 @@ $b175Needles = @(
 "B175-5=70", "B175-6=1.55", "B175-7=15", "B175-8=4", "B175-DONE")
 Test-Vbp 'b175_str_num_conv' "$Tests\b175_str_num_conv\B175Res.vbp" $b175Needles
 Test-Vbp 'b175_str_num_conv_x86' "$Tests\b175_str_num_conv\B175Res.vbp" $b175Needles -Arch "x86"
+
+# 账 #305 §11.156 (第一百七十三刀): String 属性读当**数值** ByRef 实参。
+# 改前这一格落到兜底复合字面量 (`(&(int32_t){prop_get_S1(b)})`), 写回全丢;
+# 改后两枚临时量 + 写回现造 BSTR。T1/T2/T3/T4 = Long/Integer/Double/Byte 形参,
+# T5 是同档对照。
+$b176Needles = @(
+"B176-1=13", "B176-2=41", "B176-3=3", "B176-4=11", "B176-5=12", "B176-DONE")
+Test-Vbp 'b176_str_prop_num_arg' "$Tests\b176_str_prop_num_arg\B176Res.vbp" $b176Needles
+Test-Vbp 'b176_str_prop_num_arg_x86' "$Tests\b176_str_prop_num_arg\B176Res.vbp" $b176Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

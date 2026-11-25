@@ -119,7 +119,9 @@ Expect 'R9 asks PropertyLet'         (Count-Pattern $utilC 'SymbolKind::Property
 Expect 'R9 currency prop by value' (Count-Pattern $utilC 'if \(propVt == Vb6Type::Currency\) return false;') 1 '在册: Currency 属性不开 (宽度)'
 # §11.149 (第一百六十七刀): String 那一档开了，但必须多一行「退临时量」—— get 与 let
 # 两头都是拷一份，所有权不接手。
-Expect 'R9 string prop release'    (Count-Pattern $utilC 'vb6_BSTR_Free\(" \+ tmp') 1 'String 临时量归调用方退'
+Expect 'R9 string prop release'    (Count-Pattern $utilC 'relText = \(propVt == Vb6Type::String \|\| toBstr155\)') 1 'String 临时量归调用方退'
+# §11.156: String 属性 → 数值形参那一格另有一枚源串临时量 (tmp + "s")。
+Expect 'R9 from-string release'    (Count-Pattern $utilC 'relText = "vb6_BSTR_Free\(" \+ tmpS \+ "\);"') 1 '源串那一枚也归调用方退'
 Expect 'R9 release field'         (Count-Pattern $stateInc 'std::string release;') 1 '台账多一格'
 Expect 'R9 release emitted'       (Count-Pattern $callCpp 'if \(!pw149\.release\.empty\(\)\) c_\.emitLine\(pw149\.release\);') 1 '放在 102 守卫**外** (跳过调用也得退)'
 Expect 'R9 prop fixture cases' ([regex]::Matches($h, "Test-Vbp 'b166_prop_byref")).Count 2 '两格: x64 + x86'
@@ -133,8 +135,8 @@ Expect 'R9 indexed prop fixture'   ([regex]::Matches($h, "Test-Vbp 'b168_indexed
 # withObjectInfoStack_；② 早绑定型不一致不得「假登记」—— 调用点用不上那枚临时量就不许台账里
 # 多出两行 (wantCType 非空即调用点已定型参 C 型)。
 Expect 'R9 with-prop asks stack'   (Count-Pattern $utilC 'wi\.kind == WithObjKind::ClassInstance\) cls = wi\.className;') 1 'With 主体的类名'
-Expect 'R9 conv skips string'      (Count-Pattern $utilC 'if \(conv152 && propVt == Vb6Type::String\) return false;') 1 'BSTR 不换算'
-Expect 'R9 want-ctype from caller' (Count-Pattern $argEmit 'pvt148, pvar148, cType\)') 1 '早绑定把形参 C 型递进去'
+Expect 'R9 conv skips string'      (Count-Pattern $utilC 'if \(conv152 && propVt == Vb6Type::String && !fromStr173\) return false;') 1 '型不明时仍不开 (§11.156)'
+Expect 'R9 want-ctype from caller' (Count-Pattern $argEmit 'pvt148, pvar148, cType,') 1 '早绑定把形参 C 型递进去'
 # §11.152 (第一百七十刀): 型不一致不再拒绝，改成「按形参 C 型造临时量 + 两向换算」。
 # 三处: 判据里算出 conv152 / 声明用形参型 + 换入 / Let 换回。换算梯只住 narrowArgText。
 Expect 'R9 narrow conv decided'   (Count-Pattern $utilC 'const bool conv152 = !wantCType\.empty\(\) && wantCType != propC;') 1 '型不一致 = 换算那一格'
@@ -148,7 +150,7 @@ Expect 'R9 with-prop fixture'      ([regex]::Matches($h, "Test-Vbp 'b169_with_pr
 Expect 'R9 prop-rw defined once'    (Count-Pattern $utilC '(?m)^bool CCodeGen::comPropReadWriteArg') 1 '定义只许一枚'
 Expect 'R9 prop-rw declared'        (Count-Pattern $helpers 'bool comPropReadWriteArg\(Expr& expr') 1 '声明在 cgen_helpers.inc'
 Expect 'R9 prop-rw two callers'     ((Count-Pattern $utilC 'comPropReadWriteArg\(') + (Count-Pattern $argEmit 'comPropReadWriteArg\(')) 3 '定义 1 + 两个消费点 (晚绑定/早绑定)'
-Expect 'R9 early-bound site'        (Count-Pattern $argEmit 'pvt148, pvar148, cType\)\) \{') 1 '早绑定那一族把形参 C 型递进去 (型不一致也接 —— 主人内部换算)'
+Expect 'R9 early-bound site'        (Count-Pattern $argEmit 'comPropReadWriteArg\(\*node\.positional\[i\]') 1 '早绑定那一族把形参 C 型/声明型递进去'
 Expect 'R9 statement window open'   (Count-Pattern $callCpp 'comPropWriteWindow_ = true;') 1 '只在语句位置开窗'
 Expect 'R9 statement window close'  (Count-Pattern $callCpp 'comPropWriteWindow_ = false;') 2 'emitExpr 之后 + CallArgScope102'
 
@@ -164,6 +166,18 @@ Expect 'R10 to-bstr frees'       (Count-Pattern $utilC 'propVt == Vb6Type::Strin
 Expect 'R10 assign string arm'   (Count-Pattern $typeCpp 'if \(vt == Vb6Type::String\) \{') 1 'narrowCheckAssign 的 String 源臂'
 Expect 'R10 fixture cases'       ([regex]::Matches($h, "Test-Vbp 'b175_str_num_conv")).Count 2 '两格: x64 + x86'
 Expect 'R5 absent lesion' ([regex]::Matches($h, 'vb6_ComPackInt\(&n\)')).Count 1 '改前那一形只许留在 Absent'
+
+# ---- R11 (§11.156 第一百七十三刀): String 属性 → 数值形参 ----
+# 两枚临时量 (BSTR 源 + 数值), 写回时现造一枚 BSTR 给 Let 并当场退; 选 CStr 档问形参声明型。
+Expect 'R11 wantVt parameter'   (Count-Pattern $utilC 'const std::string& wantCType, Vb6Type wantVt\) \{') 1 '形参声明型进主人'
+Expect 'R11 wantVt declared'    (Count-Pattern $helpers 'Vb6Type wantVt = Vb6Type::Unknown\);') 1 '声明默认 Unknown (晚绑定那一支不开)'
+Expect 'R11 wantVt from caller' (Count-Pattern $argEmit '\? calleeParams\[i\]\.type') 1 '早绑定把形参声明型递进去'
+Expect 'R11 from-string gate'   (Count-Pattern $utilC 'const bool fromStr173 = conv152 && propVt == Vb6Type::String &&') 1 'String 属性 → 数值形参那一格'
+Expect 'R11 unknown keeps old'  (Count-Pattern $utilC 'wantVt != Vb6Type::Unknown;') 1 '型不明就不开 (不拿 C 型猜)'
+Expect 'R11 two temps one decl' (Count-Pattern $utilC 'BSTR " \+ tmpS \+ " = " \+ argText') 1 'BSTR 源 + 数值临时量同一行'
+Expect 'R11 writeback bstr free' (Count-Pattern $utilC 'vb6_BSTR_Free\(" \+ tmp \+ "l\); \}') 1 '写回那枚 BSTR 现造现退'
+Expect 'R11 source bstr free'    (Count-Pattern $utilC 'relText = "vb6_BSTR_Free\(" \+ tmpS') 1 '源串归调用方退'
+Expect 'R11 fixture cases'      ([regex]::Matches($h, "Test-Vbp 'b176_str_prop_num_arg")).Count 2 '两格: x64 + x86'
 
 if ($fails.Count -gt 0) {
     Write-Host ('RED: ' + $fails.Count + ' guard(s) broken') -ForegroundColor Red

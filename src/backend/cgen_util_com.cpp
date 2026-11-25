@@ -1194,7 +1194,7 @@ static std::string cstrOfVt(const std::string& expr, Vb6Type vt) {
 
 bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
                                    Vb6Type& outVt, std::string& outVar,
-                                   const std::string& wantCType) {
+                                   const std::string& wantCType, Vb6Type wantVt) {
     outVt = Vb6Type::Unknown;
     outVar.clear();
     /* 只在语句位置那个窗口里登记: 其他上下文没有“调用之后”这个位置，
@@ -1334,9 +1334,14 @@ bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
     const bool conv152 = !wantCType.empty() && wantCType != propC;
     /* §11.155 (第一百七十二刀): 数值属性 → String 形参这一向开了 (以前它落到兜底强转，
      * 发 `BSTR _pb = ((BSTR)(get_N1(b)))` ⇒ 体里一拼串就 0xC0000005)。
-     * 反方向 (String 属性 → 数值形参) 仍在册: 它要两枚临时量 (BSTR + 数值) 且写回时
-     * 还得再遁一枚 BSTR —— 账上另开，本刀不偷开。 */
-    if (conv152 && propVt == Vb6Type::String) return false;  // 在册
+     * §11.156 (第一百七十三刀): 反方向 —— String 属性 → **数值**形参 —— 也接。
+     * 它要两枚临时量 (BSTR 源 + 数值) 且写回时还得再造一枚 BSTR 给 Let (它归调用方退)；
+     * 选 CStr 档必须问形参的声明型 (wantVt)：`int16_t` 盖着 Integer 与 Boolean ——
+     * CStr(12) 是 "12"、CStr(True) 是 "True"，C 型文本答不出这一格。
+     * 晚绑定调用点答 Unknown ⇒ 不开 (与 R8/R9 同口径: 型只问声明侧)。 */
+    const bool fromStr173 = conv152 && propVt == Vb6Type::String &&
+                            wantVt != Vb6Type::Unknown;
+    if (conv152 && propVt == Vb6Type::String && !fromStr173) return false;
     const bool toBstr155 = conv152 && wantCType == "BSTR";
     const std::string packFn = comByRefPackFnForVbType(propVt);
     if (packFn.empty()) return false;
@@ -1345,19 +1350,32 @@ bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
     const size_t lpInFn = letFn.find("_prop_get_");
     if (lpInFn == std::string::npos) return false;
     letFn = letFn.substr(0, lpInFn) + "_prop_let_" + letFn.substr(lpInFn + 10);
-    const std::string declC = conv152 ? wantCType : propC;
-    const std::string declVal = toBstr155
-        ? cstrOfVt(argText, propVt)
-        : (conv152 ? narrowArgText(argText, wantCType, propC) : argText);
-    const std::string setVal = conv152
-        ? (toBstr155 ? narrowArgText(tmp, propC, "BSTR")
-                     : narrowArgText(tmp, propC, wantCType))
-        : tmp;
-    comPropWrites_.push_back(ComPropWriteBack{
-        declC + " " + tmp + " = " + declVal + ";",
-        letFn + "(" + baseOnly + idxArgs + ", " + setVal + ");",
-        (propVt == Vb6Type::String || toBstr155)
-            ? "vb6_BSTR_Free(" + tmp + ");" : std::string()});
+    std::string declText, setText, relText;
+    if (fromStr173) {
+        /* 两枚临时量写在**一条 decl 行**上 (台账一格): BSTR 源先接住, 数值由
+         * narrowArgText 的 BSTR 臂折 (与赋值站同一个折数主人)。
+         * 写回那枚 BSTR 在 setter 里现造现退 —— 它只活到 Let 拷完为止。 */
+        const std::string tmpS = tmp + "s";
+        declText = "BSTR " + tmpS + " = " + argText + "; " + wantCType + " " + tmp +
+                   " = " + narrowArgText(tmpS, wantCType, "BSTR") + ";";
+        setText = "{ BSTR " + tmp + "l = " + cstrOfVt(tmp, wantVt) + "; " + letFn + "(" +
+                  baseOnly + idxArgs + ", " + tmp + "l); vb6_BSTR_Free(" + tmp + "l); }";
+        relText = "vb6_BSTR_Free(" + tmpS + ");";
+    } else {
+        const std::string declC = conv152 ? wantCType : propC;
+        const std::string declVal = toBstr155
+            ? cstrOfVt(argText, propVt)
+            : (conv152 ? narrowArgText(argText, wantCType, propC) : argText);
+        const std::string setVal = conv152
+            ? (toBstr155 ? narrowArgText(tmp, propC, "BSTR")
+                         : narrowArgText(tmp, propC, wantCType))
+            : tmp;
+        declText = declC + " " + tmp + " = " + declVal + ";";
+        setText = letFn + "(" + baseOnly + idxArgs + ", " + setVal + ");";
+        relText = (propVt == Vb6Type::String || toBstr155)
+            ? "vb6_BSTR_Free(" + tmp + ");" : std::string();
+    }
+    comPropWrites_.push_back(ComPropWriteBack{declText, setText, relText});
     outVt = propVt;
     outVar = tmp;
     return true;

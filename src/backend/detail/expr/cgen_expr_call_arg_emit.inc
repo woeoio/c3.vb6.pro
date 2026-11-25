@@ -1958,7 +1958,10 @@
                                     Vb6Type pvt148 = Vb6Type::Unknown;
                                     std::string pvar148;
                                     if (comPropReadWriteArg(*node.positional[i], argVal,
-                                                            pvt148, pvar148, cType)) {
+                                                            pvt148, pvar148, cType,
+                                                            i < calleeParams.size()
+                                                                ? calleeParams[i].type
+                                                                : Vb6Type::Unknown)) {
                                         argVal = "&" + pvar148;
                                         propRW148 = true;
                                     }
