@@ -9062,3 +9062,100 @@ B163-DONE
 - 数值五档的引用形同样只认裸标识符（`o.Inc arr(i)` 的 `Long` 元素仍按值）——
   这一刀的落点只开了 String 档，数值那五档要跟 `VT_BYREF|VT_I4/R8/...` 的宽度一起看。
 - ByRef Boolean 未归一、无 typelib 的外部 VB6 ActiveX DLL 收 ByRef String 仍按值。
+
+## §11.145（第一百六十三刀）数值五档的引用形：数组元素与类字段
+
+### 一、在册那条病的另一半
+
+§11.144 只把 String 那一档开给了「数组元素 / 类字段 / With 成员」。数值五档
+（Long / Integer / Boolean / Single / Double）当 ByRef 实参时仍然只认裸标识符与
+`me->字段`，于是 `o.Inc arr(i)`、`o.Inc box.N`、`o.FlipB bl(1)` 一律按值发，体里的
+写回落空。
+
+### 二、先量：文本里的 C 型**分不出**档
+
+探针 `.temp/k164/p1` 九站 + 后补八站，`--emit-c` 发出来：
+
+| 实参 | 发射文本 |
+|------|----------|
+| `ln(1)`（Long 数组） | `vb6_ComPackValue(VB6_SA_AT(int32_t, ln, 1))` |
+| `in1(1)`（Integer 数组） | `vb6_ComPackValue(VB6_SA_AT(int16_t, in1, 1))` |
+| `bl(1)`（Boolean 数组） | `vb6_ComPackValue(VB6_SA_AT(int16_t, bl, 1))` |
+| `dn(1)`（Double 数组） | `vb6_ComPackValue(VB6_SA_AT(double, dn, 1))` |
+| `dt(1)`（Date 数组） | `vb6_ComPackValue(VB6_SA_AT(double, dt, 1))` |
+| `ba(1)`（Byte 数组） | `vb6_ComPackValue(VB6_SA_AT(uint8_t, ba, 1))` |
+| `cu(1)`（Currency 数组） | `vb6_ComPackValue(VB6_SA_AT(int64_t, cu, 1))` |
+| `box.N` / `box.I` / `box.D` / `box.S` | `vb6_ComPackInt/…(box->N  /* class var .N field */)` 等 |
+
+两处**同形不同档**：`int16_t` 既是 Integer 也是 Boolean，`double` 既是 Double 也是 Date。
+上一刀对 String 敢直接读文本首参（`VB6_SA_AT(BSTR, …)` 没有二义），数值这一族不能这么读
+—— 按 I2 给 Boolean 打写回、按 R8 给 Date 打写回，都是**静默错值**，比漏回写更坏。
+
+### 三、落点：文本只当形状证据，档问声明侧
+
+- **数组元素**：从 `VB6_SA_AT(<C型>, <载体>, <下标>)` 里只取**载体名**（剥 `me->` 与
+  `(*...)`，与发码那一处的写法对齐），再问 `arrayElemTypes_`，落空回模块符号表
+  （`sym->isArray` 取 `sym->type`）—— 与 `cgen_expr_call_prelude.inc` 发这一格时
+  **同一条链**，不是另抄一张表。
+- **类字段 / With 成员**：问 `classFieldKind(类, 字段)`，与 §11.144 的 String 那一问是
+  同一个出口（`classFieldIsBstrSlot` 就是它的一个投影，这一刀改用投影的母函数）。
+
+「VB 型 → 按引用打包器」这张配对表收成一处 `kComPackRefTiers`（cgen_util_com.cpp），
+裸标识符 / 数组元素 / 类字段三个消费点都问 `comByRefPackFnForVbType`；裸标识符那一支
+原来的六档 switch 并进来，Integer 的宽度问句（`knownIntVars_`，因为 `inferExprType` 对
+Integer 答 Long）原样保留。
+
+只接 RTL 真有的六枚（Int / Integer / Bool / Single / Double / BSTR）。Byte 没有 UI1 那一档、
+Currency 没有 CY、Date 没有 DATE —— 一律交回按值：宁可漏回写，也不能按错标签写回。
+
+### 四、读数
+
+夹具 `tests/b164_byref_numeric_addr`（x64 = x86 同形）：
+
+```
+B164-N1=11     局部 Long 数组元素
+B164-N2=21     模块级 Long 数组元素
+B164-N3=31     类实例 Public Long 字段
+B164-N4=41     模块级裸 Long（基线）
+B164-N5=51     Integer 数组元素（2 字节）
+B164-N6=61     Integer 类字段
+B164-N7=71.5   Double 数组元素
+B164-N8=81.5   Double 类字段
+B164-N9=90.5   Single 类字段（R4 不是 R8）
+B164-N10=True  Boolean 数组元素（int16_t 靠声明表分档）
+B164-N11=True  Boolean 类字段
+B164-N12=1     Byte 数组元素仍按值（在册：无 UI1 档）
+B164-N13=5     属性读仍按值（在册：不可取址）
+B164-N14=2     同一元素连发两次
+B164-DONE
+```
+
+### 五、第一次 CI 红：两处登记
+
+1. `[STATIC] variant_slot_store` 报 `R8 名单外的新问点 cgen_util_com.cpp x2`——ByRef
+   实参那一问确实在问 `classFieldKind`（类字段 + With 成员各一次），那张名单要登记。
+   这两站与读侧那三站是**同一个出口的不同消费点**，不是新抄一份答案。
+2. `Emit manifest (shape oracle)` 报 `哈希不同 2`：`guisample/vb6ref/src/{vc6,vs2015}/GUISample.vbp`。
+   这两行属机器侧（本机 MSVC 与 CI 二进制出码不同），本地登记脚本一直跳过；这一刀真动到
+   了它们的发码，于是按 CI 那份 oracle 登记（`git show github/ci/emit-manifest:emit-manifest.txt`），
+   替换后本地 expected 与 CI 清单逐行比对 0 差。
+
+顺带踩到本仓一条老坑：手写 `emit-manifest.expected.txt` 时用无 BOM 的 UTF-8，
+`check_manifest_coverage.ps1` 的 K2 立刻红 —— 那份文件 PS 5.1 按 UTF-8 读，BOM 不能丢。
+
+### 六、账与门
+
+- manifest：corpus 836 → 838（`tests/b164_byref_numeric_addr` 两枚），行数 1367 → 1369；
+  存量行真动到的只有 GUISample 那两份（另 4 条机器侧行不变）。
+- 门 `check_byref_arg_pack_authority.ps1`：R3 六条改指配对表行、R7 两条改指 `classFieldKind`、
+  新增 R8 三条（表只一处 / 三处消费点 / 新夹具两格）。
+- 门 `check_variant_slot_store.ps1`：R8 名单加 `cgen_util_com.cpp` = 2。
+- 九门 9/9。CI 22/22（run 45516917680）。
+
+### 七、这一刀之后仍在册的相邻欠项
+
+- Byte / Currency / Date 的引用形（RTL 侧要先有 `VT_UI1|BYREF` / `VT_CY|BYREF` /
+  `VT_DATE|BYREF` 三枚打包器与写回臂）。
+- 属性读当 ByRef 实参仍按值（VB6 经 Let 写回）—— 要一条「读-改-写」的双程发射。
+- Boolean 数组元素拼串折出来是 `-1` 而不是 `True`（读路径，与本刀的回写无关）。
+- ByRef Boolean 未归一、无 typelib 的外部 VB6 ActiveX DLL 收 ByRef String 仍按值。
