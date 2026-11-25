@@ -867,6 +867,9 @@
     // 只在右值类型**可能**超出目标范围时套; 同宽/更窄的右值套上去是恒真的噪声。
     // 目标的窄整型档由下面那条出口答 (账 #261 起不再是"只认裸标识符")。
     std::string narrowCheckAssign(Expr* target, Expr* value, const std::string& cValue) const;
+    // 账 #305 §11.158 (第一百七十五刀): Currency 赋值圈的**唯一**出口。
+    // Assignment 与 Let 两条语句站共用它 (VB6 的 Currency 是定点 4 位, C3 用 double 承载)。
+    std::string currencyAssignWrap(Expr* target, const std::string& cValue) const;
 
     // 账 #261 (§B77②): 「这枚左值是哪档窄整型」的**唯一**回答处 —— 标量标识符、
     // UDT 字段 (含 With 成员、数组元素身上的字段)、本模块数组的元素三形都问这里。

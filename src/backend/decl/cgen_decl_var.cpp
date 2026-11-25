@@ -446,6 +446,9 @@ void CCodeGen::visit(VariableDecl& node) {
         // inferExprType 认成 Date (口径同 cgen_localdecl.cpp 的 Dim 分支)。
         if (resolveArrayElemType(node.asType.get()) == Vb6Type::Date)
             knownDateVars_.insert(lower);
+        // §11.158 第一百七十五刀: 模块级 `Private c As Currency` 同 double 型, 另登记。
+        if (resolveArrayElemType(node.asType.get()) == Vb6Type::Currency)
+            knownCurrencyVars_.insert(lower);
     } else if (cType == "BSTR") {
         std::string lower = node.name;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);

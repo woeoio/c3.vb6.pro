@@ -2365,9 +2365,45 @@ const char* CCodeGen::narrowCheckFnForVbType(Vb6Type t, int* bits) const {
     }
 }
 
+std::string CCodeGen::currencyAssignWrap(Expr* target, const std::string& cValue) const {
+    if (!target || cValue.empty()) return cValue;
+    /* 账 #305 §11.158 (第一百七十五刀): Currency 是**定点 4 位** (VT_CY = 值×10000)。
+     * C3 用 double 承载, 赋值站以前直接存原值 ⇒ `c = 10.123456` 打 10.123456,
+     * VB6 存 10.1235 (探针 .temp/k174/p1 的 P5)。折数只问 RTL 那一位主人 vb6_CCur
+     * (它也是 CCur() 的出口: round(v*10000)/10000) —— 两处口径必须同一份, 不手写 round。
+     * 两个站 (Assignment / Let) 共用这一枚: 它们在 AST 上是两条语句。
+     * 在册: 表达式**中间**的 Currency 运算仍按 double 走 (VB6 每步都圈), 本刀只圈赋值站。 */
+    if (inferExprType(*target) == Vb6Type::Currency)
+        return "vb6_CCur(" + cValue + ")";
+    /* 裸名那一形 inferExprType 答不到: Currency 与 Date 同族 —— C 层都是 double,
+     * 按 C 类型串登记时 inferExprType 只会回 Double (§11.158 探针实测: `Dim c As Currency`
+     * 的 inferExprType 回 Double=5)。所以这里问跟 Date 同一形状的那张按名表
+     * (knownCurrencyVars_, 在五处声明站与 knownDoubleVars_ 并存登记)。
+     * ⚠ 不查 symTab_: locals 在那里查不到 (探针实测 lookup/lookupLocal 均回 null)。
+     * 成员/属性/UDT 字段不走这条: 上面 inferExprType 那一问已答 (§11.153 同一枚证据)。 */
+    if (target->kind == ASTNodeKind::IdentifierExpr) {
+        std::string lower = static_cast<IdentifierExpr&>(*target).name;
+        if (lower.compare(0, 4, "me->") == 0) lower = lower.substr(4);
+        else if (lower.size() > 4 && lower[0] == '(' && lower[1] == '*'
+                 && lower.back() == ')')
+            lower = lower.substr(2, lower.size() - 3);
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (knownCurrencyVars_.count(lower))
+            return "vb6_CCur(" + cValue + ")";
+    }
+    /* 数组元素那一形**故意不在此列** (探针 .temp/k175/p2 的 M2)：Currency 数组的元素槽
+     * 是 `int64_t` 且**未按 10000 放大** (`VB6_SA_AT(int64_t, ca, 1) = 10.12…` → 打 10),
+     * 小数在存储层就被截掉了 —— 那是另一条腿，本刀圈不上它。留在册。 */
+    return cValue;
+}
+
 std::string CCodeGen::narrowCheckAssign(Expr* target, Expr* value,
                                         const std::string& cValue) const {
     if (!target || cValue.empty()) return cValue;
+    {
+        const std::string cur158 = currencyAssignWrap(target, cValue);
+        if (cur158 != cValue) return cur158;   // Currency 目标不进窄整型那一档
+    }
     // 账 #261: 目标的窄整型档只从上面那一处出口问来 (改前这里自带一道
     // `kind != IdentifierExpr` 的闸门, 成员/数组元素两形因此整片不经检查)。
     Vb6Type tt = narrowTargetTypeOf(target);

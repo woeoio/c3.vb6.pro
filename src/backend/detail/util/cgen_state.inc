@@ -201,6 +201,13 @@
     // 与 knownDoubleVars_ **并存**登记 (仿 Fix 117c 的 Single 双登记口径),
     // 消费点一律先判 Date, 以免既有 double 路径失去变量。
     std::unordered_set<std::string> knownDateVars_;
+    // 账 #305 §11.158 (第一百七十五刀): `As Currency` 在 C 层也是 double, 与 Date 同族
+    // —— 只按 C 类型串登记时 inferExprType 永远回 Double, 赋值站就分不出
+    // `Dim c As Currency` 与 `Dim d As Double`。VB6 的 Currency 是**定点 4 位**
+    // (VT_CY = 值×10000), 而赋值站以前直接存原值: `c = 10.123456` 打 10.123456,
+    // 真 VB6 存 10.1235。这张表只给一个消费点用 (currencyAssignWrap), 与
+    // knownDoubleVars_ **并存**登记 (口径同 Fix 175 的 Date)。
+    std::unordered_set<std::string> knownCurrencyVars_;
 
     // ai/022 W1: `As Boolean` 在 C 层是 int16_t / VBABOOL, 与 Integer/Long 同一登记串
     // ⇒ 只按 C 类型登记会让 inferExprType 永远看不见 Boolean: `CStr(b)`、`"x=" & b`、

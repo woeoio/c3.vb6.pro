@@ -2749,6 +2749,22 @@ function Test-ImplicitCstrStation {
     }
 }
 
+function Test-CurrencyRoundStation {
+    # 账 #305 §11.158 (第一百七十五刀): Currency 是定点 4 位 —— 赋值站圈数只许问
+    # RTL 的 vb6_CCur 一位主人, Assignment 与 Let 两站共用一枚出口。
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] currency_round_station ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_currency_round_station.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
 function Test-ParamArrayReclaim {
     $script:total++
     Write-Host -NoNewline "  [STATIC] paramarray_reclaim ... "
@@ -12673,6 +12689,17 @@ $b177Needles = @(
 "B177-5=True", "B177-6=False", "B177-DONE")
 Test-Vbp 'b177_bool_arr_str' "$Tests\b177_bool_arr_str\B177Res.vbp" $b177Needles
 Test-Vbp 'b177_bool_arr_str_x86' "$Tests\b177_bool_arr_str\B177Res.vbp" $b177Needles -Arch "x86"
+
+# 账 #305 §11.158 (第一百七十五刀): Currency 是定点 4 位 —— 赋值站圈掉第 5 位起。
+# 改前直接存原值 `c = 10.123456` 打 10.123456, VB6 存 10.1235。
+# 覆盖五处声明站 (局部/模块级/形参/UDT 字段/类属性) + Function 返回 + 显式 Let;
+# B178-11 是反向证人 (Double 目标不圈)。
+$b178Needles = @(
+"B178-1=10.1235", "B178-2=-1.2346", "B178-3=2.5", "B178-4=0",
+"B178-5=10.1235", "B178-6=10.1235", "B178-7=10.1235", "B178-8=10.1235",
+"B178-9=10.1235", "B178-10=10.1235", "B178-11=10.123456", "B178-DONE")
+Test-Vbp 'b178_currency_round' "$Tests\b178_currency_round\B178Res.vbp" $b178Needles
+Test-Vbp 'b178_currency_round_x86' "$Tests\b178_currency_round\B178Res.vbp" $b178Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
@@ -14166,6 +14193,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-ByRefScalarWriteBack }
     if (Enter-StaticShard) { Test-VariantToStringAuthority }
     if (Enter-StaticShard) { Test-ByRefArgPackAuthority }
+    if (Enter-StaticShard) { Test-CurrencyRoundStation }
     if (Enter-StaticShard) { Test-ConditionTruthAuthority }
     if (Enter-StaticShard) { Test-SelectCarrierAuthority }
     if (Enter-StaticShard) { Test-EventParamAbiAuthority }

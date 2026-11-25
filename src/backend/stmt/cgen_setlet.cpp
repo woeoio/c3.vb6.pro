@@ -345,9 +345,9 @@ void CCodeGen::visit(LetStmt& node) {
                     }
                 }
             }
-            c_.emitLine(target + " = " + convertedValue + ";  /* Let */");
+            c_.emitLine(target + " = " + currencyAssignWrap(node.target.get(), convertedValue) + ";  /* Let */");
         } else {
-            c_.emitLine(target + " = " + value + ";  /* Let */");
+            c_.emitLine(target + " = " + currencyAssignWrap(node.target.get(), value) + ";  /* Let */");
         }
     }
 }

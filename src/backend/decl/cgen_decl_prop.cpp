@@ -55,6 +55,7 @@ void CCodeGen::visit(PropertyDecl& node) {
     knownDoubleVars_.clear();
     knownSingleVars_.clear();
     knownDateVars_.clear();   // Fix 175
+    knownCurrencyVars_.clear();   // §11.158 第一百七十五刀
     knownBoolVars_.clear();     // ai/022 W1
     knownByteVars_.clear();     // 账 #123
     knownIntVars_.clear();       // ai/009 5.10
@@ -192,6 +193,8 @@ void CCodeGen::visit(PropertyDecl& node) {
                 // Fix 175: Date 形参额外登记 —— C 层 Date/Double 同型, 只按
                 // C 类型串分派会让 inferExprType 看不见 Date (打出序列号)。
                 if (paramType == Vb6Type::Date) knownDateVars_.insert(pLower);
+                // §11.158 第一百七十五刀: Currency 形参同属 double 承载, 需另登记。
+                if (paramType == Vb6Type::Currency) knownCurrencyVars_.insert(pLower);
             }
             else if (paramType == Vb6Type::Long || paramType == Vb6Type::Integer || paramType == Vb6Type::Boolean
                      || paramType == Vb6Type::Byte) {

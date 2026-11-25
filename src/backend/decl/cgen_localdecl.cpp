@@ -408,6 +408,10 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                 // inferExprType 只会回 Double → Print/拼接走 vb6_CStrDbl → 打出序列号。
                 if (resolveArrayElemType(var.asType.get()) == Vb6Type::Date)
                     knownDateVars_.insert(lower);
+                // §11.158 第一百七十五刀: `Dim c As Currency` 在 C 层同为 double,
+                // 另登记才能让赋值站认出「定点 4 位」(currencyAssignWrap)。
+                if (resolveArrayElemType(var.asType.get()) == Vb6Type::Currency)
+                    knownCurrencyVars_.insert(lower);
             }
 
             // 记录类类型变量名, 默认值用NULL
