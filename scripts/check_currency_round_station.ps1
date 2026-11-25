@@ -22,6 +22,13 @@
 #   R7 夹具在册：tests/b178_currency_round 的三份输入 + run_tests.ps1 里 x64/x86 两格。
 #   R8 反向证人还在：夹具里 Double 那一格必须钉 10.123456（不圈），否则「把 Currency 圈数
 #      顺手做成了全局格式化」这种改法看不出来。
+#   R9 折数只舍一次（§11.159）: 定标主人 vb6rtl_base.h 的 vb6_CurrencyScale 必须拆开缩放
+#      (trunc + 只对小量 round)，vb6_CCur 只负责除回去，且不得再出现 `round(v * 10000` ——
+#      探针 .temp/k176/p1 量到 A5/A8/A10/A12/A13 各偏一单位。
+#   R10 CCur 家族与 VT_CY 三个消费站同一主人: vb6_CCurBSTR / vb6_ComPackCur /
+#      vb6_VariantCur 都走 vb6_CurrencyScale，自己不许再写一份折数。
+#   R11 全 RTL 只允许**一处** `round(... * 10000)`，且必须在那个主人体内（注释不算）。
+#   R12 新夹具在册: tests/b179_currency_tie 三份输入 + runner x64/x86 两格。
 $ErrorActionPreference = 'Continue'
 $repo = Split-Path -Parent $PSScriptRoot
 
@@ -149,8 +156,7 @@ else {
 if ($bad.Count -gt 0) {
     Write-Host ('FAIL currency_round_station: ' + ($bad -join ' | '))
     exit 1
-}
-Write-Host '  R1 currencyAssignWrap single station OK'
+}Write-Host '  R1 currencyAssignWrap single station OK'
 Write-Host '  R2 Assignment station goes through it OK'
 Write-Host '  R3 Let station goes through it (2 emit sites) OK'
 Write-Host '  R4 knownCurrencyVars_ declaration + 3 clears OK'
@@ -158,5 +164,99 @@ Write-Host '  R5 five declaration stations register OK'
 Write-Host '  R6 no hand-written round/10000 in codegen OK'
 Write-Host '  R7 fixture + runner cells OK'
 Write-Host '  R8 Double reverse witness OK'
-Write-Host 'PASS currency_round_station (R1..R8)'
+
+# ---------- R9 ----------
+$base9 = Read-File 'src/rtl/core/vb6rtl/vb6rtl_base.h'
+if ($null -eq $base9) { $bad += 'R9 vb6rtl_base.h not found' }
+else {
+    if ($base9 -notmatch 'static inline int64_t vb6_CurrencyScale\(double v\)') {
+        $bad += 'R9 vb6_CurrencyScale owner not found in vb6rtl_base.h'
+    }
+    if ($base9 -notmatch 'const double ip = trunc\(v\);') {
+        $bad += 'R9 vb6_CurrencyScale must split the integer part (trunc)'
+    }
+    if ($base9 -notmatch 'round\(fp \* 10000\.0\)') {
+        $bad += 'R9 vb6_CurrencyScale must round only the small fractional product'
+    }
+}
+$misc9 = Read-File 'src/rtl/core/vb6rtl/vb6rtl_misc.c'
+if ($null -eq $misc9) { $bad += 'R9 vb6rtl_misc.c not found' }
+else {
+    $i = $misc9.IndexOf('double vb6_CCur(double v)')
+    if ($i -lt 0) { $bad += 'R9 vb6_CCur definition not found' }
+    else {
+        $body = $misc9.Substring($i, [Math]::Min(900, $misc9.Length - $i))
+        if ($body -notmatch 'vb6_CurrencyScale\(v\)') {
+            $bad += 'R9 vb6_CCur must go through vb6_CurrencyScale'
+        }
+        if ($body -match 'round\(\s*v\s*\*\s*10000') {
+            $bad += 'R9 vb6_CCur must not round the already-rounded product (double rounding)'
+        }
+    }
+}
+
+# ---------- R10 ----------
+$conv10 = Read-File 'src/rtl/core/vb6rtl/vb6rtl_conv.c'
+if ($null -eq $conv10) { $bad += 'R10 vb6rtl_conv.c not found' }
+else {
+    if ($conv10 -notmatch 'double\s+vb6_CCurBSTR\(BSTR s\)\s*\{\s*return vb6_CCur\(vb6_NumVal\(s\)\);\s*\}') {
+        $bad += 'R10 vb6_CCurBSTR must go through vb6_CCur (single owner)'
+    }
+}
+$pack10 = Read-File 'src/rtl/core/vb6com/vb6com_pack.c'
+if ($null -eq $pack10) { $bad += 'R10 vb6com_pack.c not found' }
+else {
+    if ($pack10 -notmatch 'vb6_CurrencyScale\(val\)') {
+        $bad += 'R10 vb6_ComPackCur must go through vb6_CurrencyScale'
+    }
+    $codePack = ($pack10 -split "`n" | Where-Object { $s = $_.Trim(); -not ($s.StartsWith('//') -or $s.StartsWith('*') -or $s.StartsWith('/*')) }) -join "`n"
+    if ($codePack -match 'llround\(') {
+        $bad += 'R10 vb6com_pack.c must not keep its own llround scaling'
+    }
+}
+$var10 = Read-File 'src/rtl/core/vb6rtl/vb6rtl_variant.h'
+if ($null -eq $var10) { $bad += 'R10 vb6rtl_variant.h not found' }
+else {
+    if ($var10 -notmatch 'v\.cyVal = vb6_CurrencyScale\(val\);') {
+        $bad += 'R10 vb6_VariantCur must go through vb6_CurrencyScale'
+    }
+}
+
+# ---------- R11 ----------
+# 全 RTL 只允许一处 round(...*10000): 就是那位主人自己。
+$ownerRound = 0
+$strayRound = 0
+Get-ChildItem -Path (Join-Path $repo 'src/rtl') -Recurse -Include *.c,*.h | ForEach-Object {
+    $isOwner = ($_.Name -eq 'vb6rtl_base.h')
+    $txt = [IO.File]::ReadAllText($_.FullName)
+    foreach ($line in ($txt -split "`n")) {
+        $s = $line.Trim()
+        if ($s.StartsWith('//') -or $s.StartsWith('*') -or $s.StartsWith('/*')) { continue }
+        if ($s -match 'round\(' -and $s -match '10000') {
+            if ($isOwner) { $script:ownerRound++ } else { $script:strayRound++ }
+        }
+    }
+}
+if ($strayRound -ne 0) { $bad += ('R11 hand-written round(x*10000) outside the owner = ' + $strayRound + ', want 0') }
+if ($ownerRound -ne 1) { $bad += ('R11 owner scaler lines = ' + $ownerRound + ', want 1') }
+
+# ---------- R12 ----------
+foreach ($f in @('B179Main.bas', 'B179Res.vbp')) {
+    $p = Join-Path $repo ('tests/b179_currency_tie/' + $f)
+    if (-not (Test-Path -LiteralPath $p)) { $bad += ('R12 fixture file missing: ' + $f) }
+}
+if ($null -ne $run7) {
+    $n = ([regex]::Matches($run7, "Test-Vbp 'b179_currency_tie")).Count
+    if ($n -ne 2) { $bad += ('R12 b179 fixture cells = ' + $n + ', want 2 (x64 + x86)') }
+}
+
+if ($bad.Count -gt 0) {
+    Write-Host ('FAIL currency_round_station: ' + ($bad -join ' | '))
+    exit 1
+}
+Write-Host '  R9 single rounding (integer part split, only the small fraction rounded) OK'
+Write-Host '  R10 CCur family shares one owner OK'
+Write-Host '  R11 no round(x*10000) left in RTL OK'
+Write-Host '  R12 b179 fixture + runner cells OK'
+Write-Host 'PASS currency_round_station (R1..R12)'
 exit 0

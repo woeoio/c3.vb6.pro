@@ -30,11 +30,22 @@
 
 // Fix 126: CCur 返回 Currency 的**值** (生成代码里 Currency 按 double 承载, 与 Date
 // 一致), 保留 4 位小数精度。放大整数 (值×10000) 只出现在 VT_CY 变体的 cyVal 里。
+//
+// 账 #305 §11.159 (第一百七十六刀): **不要两次舍入**。改前是
+//   `round(v * 10000.0) / 10000.0`
+// 乘积本身先被舍进 double —— 探针 `.temp/k176/p1` 实测 `3.00005 * 10000.0`
+// 正好落在 30000.5 上, round 再往上抬 ⇒ 3.0001; 真 VB6 交 3.0000 (A5)。
+// 同一个病在 A8/A10/A12/A13 上各偏一个单位, 而 A7 (真值本来就在半分之上的)
+// 两边相同 —— 所以这不是「取整方向变了一半」, 而是**舍的是乘积而不是原值**。
+//
+// 改法 = 拆开缩放 (整数部分精确×10000 + 小数部分唯一一次 round)，主人是
+// vb6rtl_base.h 的 vb6_CurrencyScale —— 这里只负责把定标整数除回去。
 #ifdef vb6_CCur
 #undef vb6_CCur   // vb6rtl_builtin.h 的 _Generic 宏在定义处必须关闭
 #endif
 double vb6_CCur(double v) {
-    return round(v * 10000.0) / 10000.0;
+    if (!isfinite(v)) return v;
+    return (double)vb6_CurrencyScale(v) / 10000.0;
 }
 
 long vb6_RGB(int32_t r, int32_t g, int32_t b) {

@@ -402,7 +402,10 @@ int32_t vb6_CLngBSTR(BSTR s) { return (int32_t)round(vb6_NumVal(s)); }
 // Fix 158q: CDbl/CInt/CCur 的 BSTR 实参 (UDT 单元格 .Text 等) —— 同 CLngBSTR.
 double  vb6_CDblBSTR(BSTR s) { return vb6_NumVal(s); }
 int16_t vb6_CIntBSTR(BSTR s) { return (int16_t)round(vb6_NumVal(s)); }
-double  vb6_CCurBSTR(BSTR s) { double d = vb6_NumVal(s); return round(d * 10000.0) / 10000.0; }
+// §11.159 (第一百七十六刀): 折数只问 vb6_CCur 一位主人 —— 改前这里自己又写了一遍
+// `round(d*10000)/10000`, 于是 CCur("3.00005") 与 `c = 3.00005` 两条路在 A5 那格里
+// 各给一个答案 (前者 3.0001 / 后者 3.0000)。
+double  vb6_CCurBSTR(BSTR s) { return vb6_CCur(vb6_NumVal(s)); }
 
 // ai/032: 无符号/窄整型转换函数 (CSByte/CUInt/CULng/CULngLng)。
 // 口径与上面 CInt/CLng/CByte 一致:

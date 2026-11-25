@@ -12700,6 +12700,19 @@ $b178Needles = @(
 "B178-9=10.1235", "B178-10=10.1235", "B178-11=10.123456", "B178-DONE")
 Test-Vbp 'b178_currency_round' "$Tests\b178_currency_round\B178Res.vbp" $b178Needles
 Test-Vbp 'b178_currency_round_x86' "$Tests\b178_currency_round\B178Res.vbp" $b178Needles -Arch "x86"
+
+# 账 #305 §11.159 (第一百七十六刀): Currency 折数不许**两次舍入**。
+# 改前 vb6_CCur 是 round(v*10000.0)/10000.0 —— 乘积先被舍进 double，探针
+# .temp/k176/p1 量到六格恰好落在「乘积= .5」上，于是各偏一个单位；A7 那格真值
+# 本来就在半分之上，两边相同。读数取真 VB6 的立即窗口，用 CStr(CLng(c*10000))
+# 钉成整数（不经过区域设置的小数点）。
+$b179Needles = @(
+"B179-1=101235", "B179-2=-12346", "B179-3=25000", "B179-4=0",
+"B179-5=30000", "B179-6=10001", "B179-7=1", "B179-8=20000",
+"B179-9=10002", "B179-10=-30000", "B179-11=12346", "B179-12=20002",
+"B179-13=40000", "B179-DONE")
+Test-Vbp 'b179_currency_tie' "$Tests\b179_currency_tie\B179Res.vbp" $b179Needles
+Test-Vbp 'b179_currency_tie_x86' "$Tests\b179_currency_tie\B179Res.vbp" $b179Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

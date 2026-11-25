@@ -2,10 +2,11 @@
 // 由 vb6com.c 按 COM 调用层次拆分而来 (纯搬移, 零行为改动)
 
 #include "vb6com.h"
+#include "vb6rtl_base.h"   /* §11.159: vb6_CurrencyScale (定标唯一主人, 与 vb6rtl 族同一份) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>   /* C30-10 第二十九刀: llround (Currency → VT_CY 定标) */
+#include <math.h>   /* §11.159: 定标已交给 vb6rtl_base.h 的 vb6_CurrencyScale */
 #include "vb6com_internal.h"
 
 
@@ -59,12 +60,13 @@ void* vb6_ComPackDouble(double val) {
 // VB6 的 Currency 是定点数, 交到 Variant 实参上就是 VT_CY; C3 内部用 double 表示
 // (vb6_CCur / vb6_CCurBSTR 都如此), 以前默认档把它当整数截断 —— 实测 CCur(1.5)
 // 到对端变成 VT_I4 1。这里按 VB6 精度换回 VT_CY。
-// 取整用 llround (四舍五入, 与 VB6 的 Currency 赋値口径一致)。
+// 取整口径只有一位主人: vb6rtl_base.h 的 vb6_CurrencyScale (§11.159) —— 改前这里是
+// `llround(val * 10000.0)`, 与 vb6_CCur 一样舍的是**乘积** (两个站各写一遍又各错一次)。
 void* vb6_ComPackCur(double val) {
     VARIANT* pv = (VARIANT*)calloc(1, sizeof(VARIANT));
     VariantInit(pv);
     pv->vt = VT_CY;
-    pv->cyVal.int64 = (LONGLONG)llround(val * 10000.0);
+    pv->cyVal.int64 = (LONGLONG)vb6_CurrencyScale(val);
     return (void*)pv;
 }
 

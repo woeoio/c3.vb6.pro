@@ -203,12 +203,12 @@ static inline vb6_VARIANT vb6_VariantDate(double val) {
 // 夹具 tests/dict_native 的 d121: ccur=5, 真组件 6)。这一档按 VB6 的 10000 倍定点
 // 换回 VT_CY —— 口径与 COM 实参那一站 (vb6com_pack.c 的 vb6_ComPackCur) 同一份,
 // 读取端 (ToDouble/ToLong/CStr/Format/比较/COM 包与拆) 本来就有 vtCurrency 臂。
-// 不用 llround 是为了本头不引入 <math.h>: 生成码到处 include 它。
+// 定标口径只有一位主人: vb6rtl_base.h 的 vb6_CurrencyScale (§11.159)。改前这里自己写了
+// `(int64_t)(scaled +/- 0.5)`, 与 vb6_CCur / vb6_ComPackCur 一样舍的是乘积 —— 三个站各写一遍。
 static inline vb6_VARIANT vb6_VariantCur(double val) {
     vb6_VARIANT v; memset(&v, 0, sizeof(v));
-    const double scaled = val * 10000.0;
     v.vt = vb6_vtCurrency;
-    v.cyVal = (int64_t)(scaled < 0 ? scaled - 0.5 : scaled + 0.5);
+    v.cyVal = vb6_CurrencyScale(val);
     return v;
 }
 
