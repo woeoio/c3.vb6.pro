@@ -10391,6 +10391,72 @@ tests/VBFlexGridDemo/VBFlexGridDemo.vbp  56 行
 3. **成员 / UDT 字段 / 晚绑定 COM 站**的 Currency 身份;
 4. **Decimal 组合**：`Decimal × Currency` 等未上真机量过，不猜。
 
+## §11.163（第一百八十刀）Currency 中间量每一步都圈 4 位
+
+真机探针 `.temp/k180p`（P183.bas）:
+
+```
+T1 c*2*1.0001        -> 5 Double 20.2490247     （Double 段不圈）
+T2 c+0.00004         -> 6 Currency 10.1235
+T3 c*1.00005         -> 5 Double 10.124006175
+T4 (c+0.00004)*2     -> 6 Currency 20.247       ★ 中间量先圈
+T5 c*1.0001*1        -> 5 Double 10.12451235
+T6 c/3*3             -> 5 Double 10.1235
+T7 CCur(c*2*1.0001)  -> 6 Currency 20.249
+T8 c+0.00004+0.00004 -> 6 Currency 10.1235      ★ 每一步都圈
+```
+
+### 病征
+
+改前 C3 只在**末尾**（装箱/赋值）圈一次 —— T4 打 `20.2471`、T8 打 `10.1236`
+（真机 20.247 / 10.1235）。T1/T3/T5/T6 两边相同，说明 Double 段的链**不该**圈：
+判据只能看本节点的类型。
+
+### 改法
+
+在二元发码的唯一收口（`cgen_expr_binary.cpp` 的 `lastExpr_` 尽头）加一档：
+
+```cpp
+} else if ((node.op == BinaryOp::Add || node.op == BinaryOp::Sub
+            || node.op == BinaryOp::Mul)
+           && inferExprType(node) == Vb6Type::Currency) {
+    lastExpr_ = "vb6_CCur((" + left + " " + op + " " + right + "))";
+}
+```
+
+- `Div`/`Pow` 恒 Double，不进这一支；
+- 嵌套时内层先圈、外层再圈 —— 与 VB6 逐步圈的可观察结果一致（幂等）；
+- 折数仍只问 RTL 那一位主人 `vb6_CCur`，发码侧不写 round。
+
+### 夹具 `tests/b183_currency_step`
+
+8 格 × 4 列：T4/T8 是判据格，T2/T7 是 Currency 档，T1/T3/T5/T6 是 Double 段的反向
+证人。x64 与 x86 均与真 VB6 输出**逐字相同**。
+
+### 门
+
+`check_currency_round_station.ps1` 扩到 **R1..R16**：Currency 档的二元收口只在
+`inferExprType==Currency` 时触发、覆盖 `+ - *`、经 `vb6_CCur`、夹具四枚证人。
+十门 10/10。
+
+### 清单（14 条存量变化逐条归因）
+
+868 行（+2 = 新夹具两份输入）。存量 14 条：
+
+- 6 条 Currency 夹具（b165/b170/b171/b179/b180/b182）：只多出 `vb6_CCur` 包装，
+  **读数未变** —— 用 run_tests 的 needles 逐条复跑核对（b165/b170/b171/b179 全中，
+  b182 与真机 20 格逐字相同）；
+- `tests/Charts 2020` ×3：源码本来就写了 `yRange = yRange + CCur(iStep * NumDecim)`
+  （三枚变量都是 Single），Currency 加法现在每步圈 —— 正是本刀要的；
+- `tests/VBFlexGridDemo`、`tests/test_vbnet_ext.bas`：同上（Currency 中间量）。
+
+### 在册
+
+1. **Currency 数组元素**：仍是未放大的 `int64_t` 槽（与标量 double 值语义不一致）;
+2. **成员 / UDT 字段 / 晚绑定 COM 站**的 Currency 身份;
+3. **Decimal 组合**未上真机量过。
+
+
 
 
 
