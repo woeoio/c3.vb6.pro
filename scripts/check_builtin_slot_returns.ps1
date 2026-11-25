@@ -284,6 +284,30 @@ if (Test-Path -LiteralPath $runSrcFmt) {
     }
 }
 
+# ---- R15: 整数区多组占位符的数字分配 (§11.169 第一百八十六刀) ----
+# 判据 (真机 P204): 整串先插千分位、右往左按容量切组、最左组吸收余数、空组按 0/# 补位;
+# 只在没有小数点时启用。G18/G20 是反向证人。
+if ($null -ne $tailSrc) {
+    if ($tailSrc -notmatch '§11\.169') { $viol += 'R15 多组分配没有登记 (§11.169 段标缺)' }
+    foreach ($t in @('gCap', 'gZero', 'gsrc', 'slStart', 'slEnd')) {
+        if ($tailSrc -notmatch $t) { $viol += ('R15 多组分配缺 ' + $t) }
+    }
+    if ($tailSrc -notmatch 'if \(dotPos < 0\)') { $viol += 'R15 多组分配必须限定在无小数点那一族' }
+    if ($tailSrc -notmatch 'if \(ng >= 2') { $viol += 'R15 多组分配的入口判据丢了' }
+}
+if (Test-Path -LiteralPath $runSrcFmt) {
+    $grpCells = ([regex]::Matches($runTxt, "Test-Vbp 'b194_multi_int_group")).Count
+    if ($grpCells -ne 2) { $viol += ('R15 b194 夹具格数 = ' + $grpCells + ', 要 2 (x64 + x86)') }
+    $grpMain = Join-Path $Root 'tests/b194_multi_int_group/B194Main.bas'
+    if (-not (Test-Path -LiteralPath $grpMain)) { $viol += 'R15 夹具 B194Main.bas 不在' }
+    else {
+        $grpTxt = Get-Content -LiteralPath $grpMain -Raw -Encoding UTF8
+        foreach ($w in @('G7', 'G8', 'G21')) {
+            if ($grpTxt -notmatch ('"' + $w + '"')) { $viol += ('R15 夹具缺证人 ' + $w) }
+        }
+    }
+}
+
 Write-Host ('census: table=' + $tableNames.Count + ' rtlSlot=' + $rtlSlot.Keys.Count +
             ' rtlPtr=' + $rtlPtr.Keys.Count + ' rtlMacro=' + $rtlMacro.Keys.Count +
             ' emittedNames=' + $emitted.Keys.Count +
@@ -295,6 +319,6 @@ if ($viol.Count -gt 0) {
     Write-Host ('FAIL builtin_slot_returns: ' + $viol.Count + ' 条违规 —— 修法是把表与 RTL 对账 (补名/撤名), 不是往白名单里加名字; 真要走例外请连带写清理由并重跑 §B146 那把 400 份 A/B')
     exit 1
 }
-Write-Host 'PASS builtin_slot_returns (R1..R14)'
+Write-Host 'PASS builtin_slot_returns (R1..R15)'
 exit 0
 

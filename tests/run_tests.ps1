@@ -12836,6 +12836,20 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "B193-DONE")
     Test-Vbp 'b193_numeric_unit_text' "$Tests\b193_numeric_unit_text\B193Res.vbp" $b193Needles
     Test-Vbp 'b193_numeric_unit_text_x86' "$Tests\b193_numeric_unit_text\B193Res.vbp" $b193Needles -Arch "x86"
+
+    # 账 #305 §11.169 (第一百八十六刀): 整数区多组占位符 —— 数字按组分配。
+    # 真机 .temp/k186p (P204.bas + P199 L16 + P203 R10 + P200 N14) 逐格。
+    # 口径 = 整串先插千分位 + 右往左按容量切组 + 最左组吸收余数 + 空组按 0/# 补位。
+    # G18 (分段不是分组) 与 G20 (0 之后的 A/P 只是字面量) 是反向证人。
+    $b194Needles = @(
+    "G1=[123 4]", "G2=[12 34]", "G3=[123 4]", "G4=[1 234]",
+    "G5=[123 4]", "G6=[12 34]", "G7=[1,23 4]", "G8=[0 1,234]",
+    "G9=[123 4]", "G10=[12 34]", "G15=[00 12]", "G16=[1 2]",
+    "G17=[0 0]", "G18=[1234]", "G19=[123 / 4]", "G20=[123 A/P 4]",
+    "G21=[1,23 h 4 m]",
+    "B194-DONE")
+    Test-Vbp 'b194_multi_int_group' "$Tests\b194_multi_int_group\B194Res.vbp" $b194Needles
+    Test-Vbp 'b194_multi_int_group_x86' "$Tests\b194_multi_int_group\B194Res.vbp" $b194Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
