@@ -482,6 +482,48 @@ else {
         }
     }
 }
+$base18 = Read-File 'src/rtl/core/vb6rtl/vb6rtl_base.h'
+if ($null -eq $base18) { $bad += 'R18 vb6rtl_base.h not found' }
+else {
+    if ($base18.IndexOf('vb6_CurrencyOverflows') -lt 0) {
+        $bad += 'R18 there must be exactly one Currency range gate (vb6_CurrencyOverflows)'
+    }
+    if ($base18.IndexOf('922337203685477.5') -lt 0) {
+        $bad += 'R18 the gate must use the Currency limit 922337203685477.5'
+    }
+    if ($base18 -match '\(int64_t\)\(ip \* 10000\.0 \+ round') {
+        $bad += 'R18 an unguarded (int64_t) scale cast is still present (undefined behaviour)'
+    }
+}
+$misc18 = Read-File 'src/rtl/core/vb6rtl/vb6rtl_misc.c'
+if ($null -eq $misc18) { $bad += 'R18 vb6rtl_misc.c not found' }
+else {
+    $i18 = $misc18.IndexOf('double vb6_CCur(double v)')
+    if ($i18 -lt 0) { $bad += 'R18 vb6_CCur not found' }
+    else {
+        $w18 = $misc18.Substring($i18, [Math]::Min(900, $misc18.Length - $i18))
+        if ($w18 -notmatch 'vb6_CurrencyOverflows' -or $w18 -notmatch 'vb6_RaiseError\(6') {
+            $bad += 'R18 vb6_CCur must raise Error 6 when the value is out of the Currency range'
+        }
+    }
+}
+foreach ($f in @('B185Main.bas', 'B185Res.vbp')) {
+    $p = Join-Path $repo ('tests/b185_currency_overflow/' + $f)
+    if (-not (Test-Path -LiteralPath $p)) { $bad += ('R18 fixture file missing: ' + $f) }
+}
+if ($null -ne $run7) {
+    $n18 = ([regex]::Matches($run7, "Test-Vbp 'b185_currency_overflow")).Count
+    if ($n18 -ne 2) { $bad += ('R18 b185 fixture cells = ' + $n18 + ', want 2 (x64 + x86)') }
+}
+$main18 = Read-File 'tests/b185_currency_overflow/B185Main.bas'
+if ($null -eq $main18) { $bad += 'R18 B185Main.bas not found' }
+else {
+    foreach ($w in @('E1', 'E2', 'E3')) {
+        if ($main18 -notmatch ('"' + $w + '="')) {
+            $bad += ('R18 witness cell ' + $w + ' missing (overflow / clear)')
+        }
+    }
+}
 if ($bad.Count -gt 0) {
     Write-Host ('FAIL currency_round_station: ' + ($bad -join ' | '))
     exit 1
@@ -491,5 +533,6 @@ Write-Host '  R14 Currency variable identity in Variant (VT_CY, both box station
 Write-Host '  R15 Currency arithmetic identity (+ - absorb, * with float is Double, / is Double) OK'
 Write-Host '  R16 Currency intermediate rounds at every step (single fold exit) OK'
 Write-Host '  R17 Currency array elements are doubles with the same identity (store/read/ByRef) OK'
-Write-Host 'PASS currency_round_station (R1..R17)'
+Write-Host '  R18 Currency range gate raises Error 6 on overflow (no UB wrap) OK'
+Write-Host 'PASS currency_round_station (R1..R18)'
 exit 0

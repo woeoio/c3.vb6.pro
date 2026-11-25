@@ -12781,6 +12781,17 @@ $b184Needles = @(
 "B184-DONE")
 Test-Vbp 'b184_currency_array' "$Tests\b184_currency_array\B184Res.vbp" $b184Needles
 Test-Vbp 'b184_currency_array_x86' "$Tests\b184_currency_array\B184Res.vbp" $b184Needles -Arch "x86"
+
+# 账 #305 §11.165 (第一百八十二刀): Currency 的值域闸门与溢出 Err 6。
+# 真机 .temp/k182p (P190.bas): E1/E2 报 6，E3 清后为 0；N1/N2/N3/N5/N6 值域内逐字相同。
+$b185Needles = @(
+"N1=0|1234567.8912", "N2=0|-1234567.8912",
+"N3=0|1000000000000", "N5=0|123456789.1234",
+"N6=0|10.1235",
+"E1=6", "E2=6", "E3=0",
+"B185-DONE")
+Test-Vbp 'b185_currency_overflow' "$Tests\b185_currency_overflow\B185Res.vbp" $b185Needles
+Test-Vbp 'b185_currency_overflow_x86' "$Tests\b185_currency_overflow\B185Res.vbp" $b185Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

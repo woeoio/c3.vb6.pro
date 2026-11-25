@@ -45,6 +45,13 @@
 #endif
 double vb6_CCur(double v) {
     if (!isfinite(v)) return v;
+    // §11.165 (第一百八十二刀): 越界报 Err 6 (真机 P188 的 O2/O3)。
+    // 未装 On Error 时直接投向调用方；`On Error Resume Next` 下 vb6_RaiseError
+    // 提前返回，本函数给饱和值 —— “目标保持原值”那半句做不到（同一个已知取舍：
+    // 本项目 vb6_ChkXxx 一族都只能检查不能阻止存值，见 vb6rtl_conv.c 头的口径 (2)）。
+    if (vb6_CurrencyOverflows(v)) {
+        vb6_RaiseError(6, vb6_BSTR_FromStr(L"Overflow"));
+    }
     return (double)vb6_CurrencyScale(v) / 10000.0;
 }
 

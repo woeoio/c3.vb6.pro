@@ -38,5 +38,23 @@ static inline int64_t vb6_CurrencyScale(double v) {
     if (!isfinite(v)) return 0;
     const double ip = trunc(v);
     const double fp = v - ip;
-    return (int64_t)(ip * 10000.0 + round(fp * 10000.0));
+    const double scaled = ip * 10000.0 + round(fp * 10000.0);
+    // 账 #305 §11.165 (第一百八十二刀): 越过 INT64 边界时**不许**落到 (int64_t) ——
+    // C 里那是未定义行为，MSVC 实测回绕成 -9223372036854775808，于是
+    // `c = CCur("922337203685477.5808")` 静默得到负的上限、Err 还是 0。
+    // 饱和到边界（不再有 UB）；Err 6 由 vb6_CCur 那一站报（见 vb6rtl_misc.c）。
+    if (scaled >= 9223372036854775808.0) return INT64_MAX;
+    if (scaled <= -9223372036854775808.0) return INT64_MIN;
+    return (int64_t)scaled;
+}
+
+// §11.165 (第一百八十二刀): Currency 值域 **±922337203685477.5807** 的唯一一道闸门。
+// 只做判定（纯谓词），三个出口共用：vb6_CCur 报 Err 6，Variant 装箱 / COM 打包靠
+// vb6_CurrencyScale 的饱和（它们那两处不报错，历史上也不报）。
+// 注意: double 里 922337203685477.5807 与 .5808 是**同一个数** (922337203685477.6，
+// 2^63/10000)，所以真机 P188 的 O1 (正好上限，Err 0) 与 O2 (超一位，Err 6) 在 C3
+// 的 double 承载下无法区分 —— 本闸门取 .5 作界，两格都报 Err 6；这是承载模型的
+// 固有差，已列在册 §11.165。要逐一还原，Currency 得改成 int64 承载（另一刀）。
+static inline int vb6_CurrencyOverflows(double v) {
+    return isfinite(v) && fabs(v) > 922337203685477.5;
 }
