@@ -14,7 +14,9 @@
 # 这里钉的是「那一问只许住一处、记号必须赶在令牌 switch 之前被认掉、两臂的邻居不许被牵连」。
 #
 # 规则:
-#   R1 令牌表恰好 1 张; 三枚出口的站点数 = 3 / 3 / 2 (定义 + 各自的读者), 多一处就是有人又抄了一遍。
+#   R1 令牌表恰好 1 张; 三枚出口的站点数 = 4 / 3 / 2 (定义 + 各自的读者), 多一处就是有人又抄了一遍。
+#       (vb6_fmtAmPmLenAt 的第四个读者是 §11.168 的「谁先进格式串」扫描 —— 它问的是同一问:
+#        记号在哪一位; 真机 Format(1234,"0 AM") = "1234 AM" 就靠这一位与数值占位符比先后)
 #   R2 小时那一问只答一次: 认记号那一行 1、use12 只出现 2 次 (声明 + 用)、旧的无条件 12 小时
 #      形状 (if (h == 0) h = 12;) 归零。
 #   R3 日期分支的门票必须问记号: vb6_fmtIsDateFormat 里 if (vb6_fmtHasAmPm(fmt)) return 1; 恰好 1
@@ -44,7 +46,7 @@ $r1len = N 'vb6_fmtAmPmLenAt\(' $F
 $r1has = N 'vb6_fmtHasAmPm\(' $F
 $r1app = N 'vb6_fmtAppendAmPm\(' $F
 if ($r1tbl -ne 1) { $fail += ('R1 designator token table = ' + $r1tbl + ' (want 1: one owner for the shape question)') }
-if ($r1len -ne 3) { $fail += ('R1 vb6_fmtAmPmLenAt sites = ' + $r1len + ' (want 3 = def + HasAmPm + the loop)') }
+if ($r1len -ne 4) { $fail += ('R1 vb6_fmtAmPmLenAt sites = ' + $r1len + ' (want 4 = def + HasAmPm + IsDateFormat 的「谁先出现」扫描 (§11.168) + the loop)') }
 if ($r1has -ne 3) { $fail += ('R1 vb6_fmtHasAmPm sites = ' + $r1has + ' (want 3 = def + IsDateFormat + use12)') }
 if ($r1app -ne 2) { $fail += ('R1 vb6_fmtAppendAmPm sites = ' + $r1app + ' (want 2 = def + its one reader)') }
 # R2
