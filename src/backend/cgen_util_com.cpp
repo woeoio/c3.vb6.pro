@@ -1180,7 +1180,7 @@ std::string narrowArgText(const std::string& expr, const std::string& toC,
 // 所以出入的都是**声明档**，与 R8/R9 那条口径一致。
 static std::string cstrOfVt(const std::string& expr, Vb6Type vt) {
     switch (vt) {
-        case Vb6Type::Integer:  return "vb6_CStrLong((int32_t)(" + expr + "))";
+        case Vb6Type::Integer:  return "vb6_CStrLong(" + expr + ")";
         case Vb6Type::Long:     return "vb6_CStrLong(" + expr + ")";
         case Vb6Type::LongLong: return "vb6_CStrLongLong(" + expr + ")";
         case Vb6Type::Byte:     return "vb6_CStrByte(" + expr + ")";
