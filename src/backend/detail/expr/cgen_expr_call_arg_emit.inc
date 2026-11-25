@@ -1942,11 +1942,34 @@
                             //   原样落副本 = 递出去的是元素当前值的拷贝, 被调方 `BSTR_Assign(&(*p),…)`
                             //   退掉的是元素自己那枚串 (实测靶工程 BSTR 档 48 处, 判据见 cgen_util_type.cpp)。
                             {
-                                const std::string addr253 = byRefElementAddressExpr(argVal, cType);
-                                if (addr253.empty()) {
-                                    argVal = "(&(" + cType + "){" + argVal + "})";
-                                } else {
-                                    argVal = addr253;
+                                /* 账 #305 §11.148 (第一百六十六刀): 属性读当 ByRef 实参 ——
+                                 * **早绑定这一族**也走读-改-写。改前这里发的是
+                                 * `(&(int32_t){vb6_X_prop_get_Tag(b)})`：拷进去了没有拷回来，
+                                 * 被调方的写回落在复合字面量上就没了 (实测 b.Inc b.Tag ⇒ 40)。
+                                 * 问句与晚绑定那一族同一处 (comPropReadWriteArg)，登记也进
+                                 * 同一张账，两行由 visit(CallStmt) 那条尾巴发。
+                                 * 只接**同型**那一格: 属性型与形参 C 型不一致时 (Long 属性接
+                                 * Integer 形参那种) 仍走下面的复合字面量老路 —— C 侧的隐式
+                                 * 换算本来就在那里做，硬接会改掉换算行为。 */
+                                bool propRW148 = false;
+                                if (i < node.positional.size() && node.positional[i]
+                                    && !isClassSlot092r) {
+                                    Vb6Type pvt148 = Vb6Type::Unknown;
+                                    std::string pvar148;
+                                    if (comPropReadWriteArg(*node.positional[i], argVal,
+                                                            pvt148, pvar148)
+                                        && mapType(pvt148) == cType) {
+                                        argVal = "&" + pvar148;
+                                        propRW148 = true;
+                                    }
+                                }
+                                if (!propRW148) {
+                                    const std::string addr253 = byRefElementAddressExpr(argVal, cType);
+                                    if (addr253.empty()) {
+                                        argVal = "(&(" + cType + "){" + argVal + "})";
+                                    } else {
+                                        argVal = addr253;
+                                    }
                                 }
                             }
                         }

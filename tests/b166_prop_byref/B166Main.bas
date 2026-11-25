@@ -1,8 +1,10 @@
 Option Explicit
 
-' 账 #305 §11.147 (第一百六十五刀): 属性读当 ByRef 实参 —— 读-改-写。
-' 每一格都是「晚绑定目标 + 属性读实参」，答案 = 调用前后的属性值。
-' P8 是**反面证人**: String 属性暂不开 (临时量要管 BSTR 所有权)，仍按值 ⇒ "ab"。
+' 账 #305 §11.147 (第一百六十五刀) / §11.148 (第一百六十六刀): 属性读当 ByRef 实参 ——
+' 读-改-写。两族问同一句:
+'   P* = 晚绑定目标 (`o As Object`)，实参按 VT_BYREF 发；
+'   Q* = 早绑定目标 (`b As B166Box`，直接调 vb6_B166Box_Inc)。
+' P8 / Q3 是**反面证人**: String 属性暂不开 (临时量要管 BSTR 所有权)，仍按值。
 Public Sub Main()
     Dim b As B166Box
     Dim s As String
@@ -35,7 +37,7 @@ Public Sub Main()
 
     b.Tm = DateSerial(2020, 1, 1)
     o.AddDay b.Tm, 2
-    ' 用数值取值器打印 (Year/Month/Day)，不用 Format 的日期格式串 —— 后者会跟系统区域设置，
+    ' 用数值取值器打印 (Year/Month/Day)，不用 Format 的日期格式串 —— 后者跟系统区域设置，
     ' 换一台机器就换一种写法（CI 的 locale 门就是这么红的）。
     Debug.Print "B166-P7=" & Year(b.Tm) & "," & Month(b.Tm) & "," & Day(b.Tm)
 
@@ -46,6 +48,19 @@ Public Sub Main()
     s = "xy"
     o.Append s, "z"
     Debug.Print "B166-P9=" & s
+
+    ' ---- 早绑定接收者那一族 (§11.148) ----
+    b.Tag = 40
+    b.Inc b.Tag
+    Debug.Print "B166-Q1=" & b.Tag
+
+    b.DNum = 30
+    b.IncD b.DNum
+    Debug.Print "B166-Q2=" & b.DNum
+
+    b.Label2 = "ab"
+    b.Append b.Label2, "cd"
+    Debug.Print "B166-Q3=" & b.Label2
 
     Debug.Print "B166-DONE"
 End Sub

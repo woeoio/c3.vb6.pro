@@ -854,15 +854,19 @@
     // 必须用深拷贝 vb6_VariantCopy 拿自己那份，调用后 vb6_VariantClear 归还。
     // 空 = 本语句没提升过聚合实参。
     std::vector<std::string> stmtCallArgVarTemps_;
-    // 账 #305 §11.147 (第一百六十五刀): 语句位置「属性读当 ByRef 实参」的读-改-写。
-    // 真 VB6 不是把属性本身递出去 (属性没有地址), 而是「拷进临时量 → 递地址 → 调用回来
-    // 用 Let 写回」。于是在构建实参数组时登记两行: 调用**前**的临时量起手 (读), 调用**后**
-    // 的 Let (写回)。空 = 本语句没有这一族实参。收尾在 visit(CallStmt) 的 CallArgScope102。
+    // 账 #305 §11.147 (第一百六十五刀) / §11.148 (第一百六十六刀): 语句位置「属性读当
+    // ByRef 实参」的读-改-写。真 VB6 不递属性本身 (属性没有地址)，而是「拷临时量 →
+    // 递地址 → 调用回来经 Let 写回」。★账只住这一处，两个发射器 (晚绑定 comByRefArgExpr /
+    // 早绑定复合字面量那一族) 都往这里登记，收尾只在 visit(CallStmt) 那一处。
+    // 不登记的情形: 属性读出现在**表达式上下文** (赋值右值 / 内建函数实参 / Debug.Print
+    // 实参) —— 那几处没有“调用之后”这个位置。在册。
     struct ComPropWriteBack {
         std::string decl;    // `<C型> _pbN = <get>(<base>);`
         std::string setter;  // `<let>(<base>, _pbN);`
     };
     std::vector<ComPropWriteBack> comPropWrites_;
+    // 只在 visit(CallStmt) 发「被调方那一棵表达式树」的窗口里为真 (上面那条的闸)。
+    bool comPropWriteWindow_ = false;
     // 第一百零五刀 (§11.83): IndexOrCallExpr 的嵌套深度。实参位提升只算**最外层**那一个
     // 调用（=1）—— 嵌套调用的实参是外层语句的一部分，不是它自己的实参位
     // （`ObjPtr(CurrControl)` 就是这样被误提升的）。

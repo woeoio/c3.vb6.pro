@@ -1279,6 +1279,12 @@
     // 成员访问那一形只能靠它说话（发射文本里只有字段名、没有型）。
     std::string comByRefArgExpr(Expr& expr, const std::string& argText,
                                 bool allowVariantRef = false);
+    // 账 #305 §11.147/§11.148: 「属性读当 ByRef 实参」的读-改-写 —— 唯一一位主人。
+    // 成立就往两条登记道里写 (addPending = 调用前拷临时量 / addPostLine = 调用后经 Let 写回)，
+    // 交回临时量名与属性型；不成立交回 false，调用点维持原形。
+    // 晚绑定实参 (comByRefArgExpr) 与早绑定实参 (复合字面量那一族) 问同一句。
+    bool comPropReadWriteArg(Expr& expr, const std::string& argText,
+                             Vb6Type& outVt, std::string& outVar);
     // 账 #305 §11.145 (第一百六十三刀): 「这枚 VB 型该按哪个 *Ref 打包器发」(空 = 没有那档，按值)。
     // 裸标识符 / 数组元素 / 类字段 三处共用它 —— 配对表只住 cgen_util_com.cpp 一处。
     std::string comByRefPackFnForVbType(Vb6Type vt) const;
