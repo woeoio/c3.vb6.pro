@@ -1,4 +1,4 @@
-# 039 - 内置 Dictionary（设计）
+﻿# 039 - 内置 Dictionary（设计）
 
 > 状态：**S1/S2/S3 已完成**（设计 + 基准 + 实现 + 对照全绿）。S4（三条入口的 New 那一半）已在实现里做了，剩 S5 门禁登记与 S6 收口。
 > 当前读数：`PASS dict_native 用例=54 行`（1 行 VB6-SEM 手工期望，5 行已知 C3 缺口剔除，明细见 §9）。
@@ -9351,5 +9351,76 @@ Debug.Print "B166-P7=" & Year(b.Tm) & "," & Month(b.Tm) & "," & Day(b.Tm)
   （`cgen_expr_call_arg_emit.inc` 的复合字面量那一族），不是本系列这条线；
   要修得让那条发射器也登记同一张台账 —— 可以复用本刀的 `comPropWrites_`，
   但需要那一族先认识「这枚实参是属性读」。
+- 上几刀留下的：货币数组元素、ByRef 布尔未归一、无 typelib 的外部 VB6 DLL 收 ByRef
+  String 仍按值、Boolean 数组元素拼串折 `-1`。
+
+## §11.148（第一百六十六刀）早绑定接收者那一形也走读-改-写
+
+### 一、缺口
+
+§11.147 把「属性读当 ByRef 实参」的读-改-写补给了晚绑定那一支：`o.Inc b.Tag`
+（`o As Object`，实参按 `VT_BYREF|T` 发）。早绑定接收者那一形没覆盖 ——
+`b.Inc b.Tag`（`b As B166Box`，直接调 `vb6_B166Box_Inc`）发的是
+
+```c
+vb6_B166Box_Inc(b, (&(int32_t){vb6_B166Box_prop_get_Tag(b)}));
+```
+
+拷进去了没有拷回来：被调方的写回落在复合字面量上就没了。实测 `.temp/k166/p2`：
+`Q1=40`（应为 41）、`Q2=30`（应为 31.5）。
+
+### 二、一位主人，两个发射器
+
+这一问提成 `CCodeGen::comPropReadWriteArg(expr, argText, outVt, outVar)`
+（定义在 `cgen_util_com.cpp`，声明在 `cgen_helpers.inc`）。判据三条与上一刀相同：
+
+1. 文本必须是**单实参**的属性读 `vb6_<类>_prop_get_<成员>(<base>)`；
+2. 该类的同名成员必须**既有 Get 又有 Let**；型取 Get 的返回型 `sym->type`；
+3. 打包器要在按引用那一族里（§11.145 那张九档表）。String / Currency 两档仍不开。
+
+两处消费点：
+
+- **晚绑定**：`comByRefArgExpr` 调它，交回 `vb6_ComPackXxxRef(&_pbN)`（与上一刀同形）。
+- **早绑定**：`cgen_expr_call_arg_emit.inc` 的复合字面量那一族在落 `(&(ctype){...})`
+  之前问同一句，成立就交 `&_pbN`。**只接同型那一格**（`mapType(属性型) == 形参 C 型`）：
+  型不一致时（Long 属性接 Integer 形参那种）仍走老路 —— C 侧的隐式换算本来就在那里做，
+  硬接会改掉换算行为。
+
+### 三、发射与收尾仍只有一处
+
+台账 `comPropWrites_` 住 `cgen_state.inc`，两行由 `visit(CallStmt)` 那条尾巴发：
+`decl` 在调用前、`setter` 在调用后且在 §11.102 的 `ErrSerial` 守卫**里面**。
+
+新加一道闸 `comPropWriteWindow_`：只有语句位置那棵被调方表达式树里才登记。属性读出现在
+**表达式上下文**（赋值右值 / 内建函数实参 / `Debug.Print` 实参）时没有「调用之后」这个
+位置，登记了没人发那两行就是 C2065 —— 那一族仍按值，在册。
+
+### 四、读数
+
+`tests/b166_prop_byref`（x64 = x86 逐行相同）：
+
+```
+B166-P1=41  B166-P2=42  B166-P3=21  B166-P4=31.5  B166-P5=7
+B166-P6=True  B166-P7=2020,1,3  B166-P8=ab  B166-P9=xyz     ← 晚绑定那一族
+B166-Q1=41   Long 属性，早绑定（改前 40）
+B166-Q2=31.5 Double 属性，早绑定（改前 30）
+B166-Q3=ab   String 属性反面证人，两族都仍按值
+```
+
+### 五、账与门
+
+- `check_byref_arg_pack_authority.ps1` 的 R9 扩到十三条：问句定义 1 / 声明 1 / 两个消费点、
+  早绑定只接同型、开窗 1 + 关窗 2；R8 的消费点 5 → 6。
+- manifest：corpus 842 不变；b166 两行按当前 C3.exe 重新登记（其余六行是本机 typelib 侧的
+  known-diff，CI 是 oracle）。
+- 九门 9/9；CI 22/22（run 45543339265）。
+
+### 六、这一刀之后仍在册的相邻欠项
+
+- **String / Currency 属性**两档（所有权 / 宽度）。
+- **带索引的 Read 属性**（`o.Inc box.Item(i)`）。
+- **表达式上下文里的属性读实参**（`x = o.F(b.Tag)` / `MsgBox o.F(b.Tag)`）—— 没有
+  「调用之后」这个位置，要修得先有一条「表达式内调用之后」的发射道。
+- 早绑定那一族的**型不一致**一格（Long 属性接 Integer 形参）仍按值。
 - 上几刀留下的：货币数组元素、ByRef 布尔未归一、无 typelib 的外部 VB6 DLL 收 ByRef
   String 仍按值、Boolean 数组元素拼串折 `-1`。
