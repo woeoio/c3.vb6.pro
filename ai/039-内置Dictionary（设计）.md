@@ -9803,4 +9803,73 @@ GUI 那一族一直在 vbp 分片里当阻塞门，而它的判据天生环境�
 `probe_neg2.ps1`（`ErrorActionPreference='Continue'`，len=1401）。
 **本机验证 harness 一律用 pwsh**。
 
+## §11.155（第一百七十二刀）String 与数值之间的隐式换算
+
+刀名取「隐式换算」，因为这一族以前**根本没有换算站**：BSTR 被当成整数（或反过来）
+直接递进 C。两处实测：
+
+| 站 | 改前发码 | 实测 |
+| --- | --- | --- |
+| 赋值 `n = "12"` | `n = vb6_ChkLong(vb6_BSTR_FromStr(L"12"));` | `Error 6: Overflow` |
+| Long 属性交 String 形参 | `BSTR _pb0 = ((BSTR)(vb6_P173Box_prop_get_N1(b)));` | `0xC0000005` |
+
+第一处是**指针当整数**（BSTR 指针值远超 int64 域之外也就罢了，它落进范围检查里就是
+溢出）；第二处是**整数当指针**（`(int32_t)7` 当 BSTR 解引用，体里一拼串即崩）。
+
+### 折数只问 RTL 那一位主人
+
+RTL 早就有一族带 BSTR 臂的 `_Generic` 宏（`vb6_CLng` / `vb6_CDbl` / `vb6_CInt` /
+`vb6_CCur` / `vb6_CSByte` / `vb6_CLngLng`），BSTR 臂落到 `vb6_*BSTR`，解析由账 #416
+那位主人 `vb6_NumVal` 统一答。本刀不新写解析，只在两个站把「源是 String」这一格
+接到那族宏上：
+
+- `narrowArgText` 新增 `fromC == "BSTR"` 一臂：`int16_t`→`vb6_CInt`、`int32_t`→`vb6_CLng`、
+  `int64_t`→`vb6_CLngLng`、`double`→`vb6_CDbl`、`float`→`vb6_CSng`、
+  `uint8_t`→`vb6_CByte(vb6_CDbl(..))`（Byte 没有 BSTR 臂，先折 double 再收宽）；
+- `narrowCheckAssign` 新增 String 源一臂（同一套；以前是「装不下就套 Chk*」，
+  而 `cgenIntBits(String)` 答 0 ⇒ 走到最后一行裸套）；
+- `comPropReadWriteArg` 开「数值属性 → String 形参」这一向：临时量是 BSTR，
+  由新助手 `cstrOfVt` 按**声明档**选 CStr 家族（`int16_t` 盖着 Boolean、`double` 盖着
+  Date —— C 型文本答不出这一格，所以选档问 Vb6Type，与 R8/R9 同口径），写回时拿
+  `narrowArgText(tmp, propC, "BSTR")` 折回数值，临时量归调用方 `vb6_BSTR_Free`
+  （`propVt == String || toBstr155` 两向都算）。
+
+严格性顺带自证：`n = "12abc"` 仍抛 `Error 13`（NumVal 口径不是 Val 的宽松口径），
+与 VB6 一致。
+
+### 夹具 `tests/b175_str_num_conv`
+
+```
+B175-1=12     Long    ← "12"     B175-5=70    Long 属性 7 → "7" & "0" ⇒ 70
+B175-2=34     Integer ← "34"     B175-6=1.55  Double 属性 1.5 → "1.55" ⇒ 1.55
+B175-3=200    Byte    ← "200"    B175-7=15    同档对照 (Long → Long)
+B175-4=1.5    Double  ← "1.5"    B175-8=4     同档对照 (Double → Double)
+```
+
+门：`check_byref_arg_pack_authority.ps1` 加 R10 九条（BSTR 源臂、三个档位、
+Byte 折 double、`cstrOfVt` 唯一、`toBstr155` 分支、两向释放、赋值站 String 臂、
+夹具两格）；runner 两格（x64 + x86）；九门 9/9。
+
+### 两次 CI 红（都不是判据松动）
+
+1. **`[STATIC] implicit_cstr_station` R5**：我新写的 `cstrOfVt` Integer 档抄成了
+   `vb6_CStrLong((int32_t)(x))` —— 那正是旧 13 名单自己的形状，R5 明令「那是另一个口径」。
+   改法：Integer 档不套强转（`vb6_CStrLong` 收 int32_t，int16_t 隐式提升），与 Long 档同形。
+   这条红是**门在干事**：它不认「谁写的」，只认「这个形状以前判过不许有」。
+2. **Emit manifest（shape oracle）**：本机那台二进制与 CI 那台在 **6 份输入**上发码不同
+   （`b132_typedcom_local_scope`、`guisample` ×3、`TeeChartChartDisplay`、`ctrlmscomm`
+   —— 全是带外部引用/GUI 资源的那几族，环境相关），于是本机登记的值对 CI 不成立。
+   按本项目既有口径（吃 CI 那台二进制自己交回来的数）从 `ci/emit-manifest` 取回重登，
+   852 行逐行相同。教训写在这里：**发码清单的登记值以 CI 那台为准**，本机跑出来的
+   13 行差异只能当参考；本地 `check_manifest_coverage` 只查行集合，查不出这 6 行。
+
+### 在册（本刀不碰）
+
+- **String 属性 → 数值形参**仍是按值（`comPropReadWriteArg` 里那一句 `return false` 还在）：
+  它要两枚临时量（BSTR + 数值），写回时还得再造一枚 BSTR 给 `Let`（那枚也归调用方退），
+  比本刀这一向多一层；
+- 数值形参与 String 形参之间的 `ByVal` 传递是否有同族病未测；
+- 字面量 BSTR（`vb6_BSTR_FromStr`）在赋值站仍不释放（旧账，与本刀无关）。
+
+
 
