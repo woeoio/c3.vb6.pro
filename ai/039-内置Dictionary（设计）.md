@@ -10005,9 +10005,79 @@ B177-4 是故意反向的：VB6 的 True 在**数值**上下文就是 -1，本�
 - 其余元素档（Long/Integer/Byte/Double/Date/Currency）仍走装箱那条路：目前靠「拆箱后
   格式化结果相同」活着，Date 与 Currency 两档**没有实证**；要换成声明档得逐档跑差异；
 - **Currency 赋值不圈 4 位小数**：`c = 10.123456` 实测打 `10.123456`，VB6 存 `10.1235`
-  （`.temp/k174/p1` 的 P5）。这是表示层老账，影响的不只是格式化；
+  （`.temp/k174/p1` 的 P5）—— 已在 §11.158 修掉；
 - 晚绑定调用点仍拿不到形参声明型（§11.156 在册）；
 - ByRef Boolean 未归一（同上）。
+
+## §11.158（第一百七十五刀）Currency 赋值不圈 4 位小数
+
+这一刀的病在**表示层**：VB6 的 Currency 是定点 4 位（VT_CY = 值×10000），
+而 C3 用 `double` 承载它。赋值站改前直接存原值：
+
+```vb
+c = 10.123456      ' 改前打 10.123456，真 VB6 存 10.1235
+```
+
+探针 `.temp/k174/p1` 的 P5 早就量到了这一格，`.temp/k175/p1` 把它拆成七格：
+`10.123456→10.1235`、`1.234567→1.2346`、`-1.234567→-1.2346`、`2.5→2.5`、
+`0.00004→0`、`c = c + 0` 不反弹，Double 对照 `10.123456` 原样。
+
+### 为什么不能直接问 `inferExprType`
+
+Currency 与 Date 同族：C 层都是 `double`，所以 `inferExprType` 对
+`Dim c As Currency` 的标识符**答 Double**（探针实测档位 = 5）。而 `symTab_.lookup`
+对 locals 回 null —— 两道路都问不出「这是 Currency」。所以照 Fix 175 的
+`knownDateVars_` 依葫芦画瓢，新增 `knownCurrencyVars_`：
+
+- 五处声明站各登一次（Function/Sub/Property 形参、模块级 `Private`、过程内 `Dim`），
+  与 `knownDoubleVars_` **并存**；
+- 三处过程入口 clear（Function / Sub / Property），与既有各表同一段。
+
+### 一个出口，两个语句站
+
+```cpp
+std::string CCodeGen::currencyAssignWrap(Expr* target, const std::string& cValue) const;
+```
+
+- **Assignment 站**：经 `narrowCheckAssign` 的出口（Currency 目标不进窄整型那一档，
+  命中即返回）；
+- **Let 站**：`cgen_setlet.cpp` 两条 emit 直连。`LetStmt` 是**另一条 AST 语句**，改前
+  它压根不经过 `narrowCheckAssign` —— 漏了这一站，显式 `Let c = …` 就不圈数
+  （探针 `.temp/k175/p2` 的 M6 就是它）。
+
+折数只问 RTL 那一位主人 `vb6_CCur`（`round(v*10000)/10000`，也是 `CCur()` 的出口），
+发码侧不另写一份 round —— 两处口径必须同一份。
+
+### 夹具 `tests/b178_currency_round`
+
+```
+B178-1=10.1235   局部变量           B178-7=10.1235    Function 返回
+B178-2=-1.2346   负数               B178-8=10.1235    UDT 字段
+B178-3=2.5       不动               B178-9=10.1235    类 Property Let
+B178-4=0         圈到 0             B178-10=10.1235   显式 Let
+B178-5=10.1235   模块级变量         B178-11=10.123456 反向证人：Double 不圈
+B178-6=10.1235   ByRef 形参
+```
+
+B178-11 是故意反向的：同一个 10.123456 交给 Double 目标必须原样打出，否则「把 Currency
+圈数顺手做成了全局格式化」这种改法看不出来。
+
+门：新增 `scripts/check_currency_round_station.ps1`（R1..R8：定义/声明各一处、
+Assignment 站经过它、Let 站两处、按名表声明 + 三处 clear、五处声明站、
+`src/backend` 不许手写 round+10000、夹具与 runner 两格、Double 反向证人），
+并在 `tests/run_tests.ps1` 里挂上 `Test-CurrencyRoundStation`（census 认得出）；
+runner 两格（x64 + x86）均实跑通过；九门 9/9。
+
+### 在册（本刀不碰）
+
+- **Currency 数组元素**：元素槽是 `int64_t` 且**未按 10000 放大** ——
+  `ca(1) = 10.123456` 存成 10（探针 `.temp/k175/p2` 的 M2）。小数在存储层就被截掉了，
+  那是另一条腿，本刀故意不碰（只包一层 `vb6_CCur` 会在同一个坑里换一种错法）；
+- **表达式中间的 Currency 运算**仍按裸 double 走：VB6 每一步都圈（`10.12345 +
+  0.00006` 这类中间值会差在第 5 位），本刀只圈**赋值站**；
+- **Currency 与 Double 的格式化口径**同住 `vb6_CStrDbl`：`CStr(c)` 对 10.1235 交
+  `10.1235`（圈数之后自然对），但**未圈**的中间值仍有各自的最短表示；
+- 晚绑定调用点仍拿不到形参声明型（§11.156 在册）；ByRef Boolean 未归一（同上）。
 
 
 
