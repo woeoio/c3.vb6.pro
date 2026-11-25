@@ -12583,8 +12583,8 @@ Test-Vbp 'b165_byref_byte_cur_date_x86' "$Tests\b165_byref_byte_cur_date\B165Res
 $b166Needles = @(
 "B166-P1=41", "B166-P2=42", "B166-P3=21", "B166-P4=31.5",
 "B166-P5=7", "B166-P6=True", "B166-P7=2020,1,3",
-"B166-P8=ab", "B166-P9=xyz",
-"B166-Q1=41", "B166-Q2=31.5", "B166-Q3=ab", "B166-DONE")
+"B166-P8=abcd", "B166-P9=xyz",
+"B166-Q1=41", "B166-Q2=31.5", "B166-Q3=abcd", "B166-DONE")
 Test-Vbp 'b166_prop_byref' "$Tests\b166_prop_byref\B166Res.vbp" $b166Needles
 Test-Vbp 'b166_prop_byref_x86' "$Tests\b166_prop_byref\B166Res.vbp" $b166Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。

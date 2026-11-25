@@ -1007,6 +1007,12 @@ void CCodeGen::visit(CallStmt& node) {
         if (guard102) {
             c_.emitLine("}");
         }
+        // 账 #305 §11.149 (第一百六十七刀): String 那一档临时量的归还。
+        // 放在守卫**外**: 守卫没放行时调用被跳过, 临时量里仍是 prop_get 新分配的那枚串,
+        // 更得退。标量五档没有这一行。
+        for (auto& pw149 : comPropWrites_) {
+            if (!pw149.release.empty()) c_.emitLine(pw149.release);
+        }
         // 第一百零五刀 (§11.83): 聚合实参临时量的归还。守卫没放行时它仍是空的，
         // vb6_VariantClear 对空值是一次空转，故无条件发。
         for (size_t i105 = 0; i105 < stmtCallArgVarTemps_.size(); i105++) {

@@ -861,8 +861,13 @@
     // 不登记的情形: 属性读出现在**表达式上下文** (赋值右值 / 内建函数实参 / Debug.Print
     // 实参) —— 那几处没有“调用之后”这个位置。在册。
     struct ComPropWriteBack {
-        std::string decl;    // `<C型> _pbN = <get>(<base>);`
-        std::string setter;  // `<let>(<base>, _pbN);`
+        std::string decl;     // `<C型> _pbN = <get>(<base>);`
+        std::string setter;   // `<let>(<base>, _pbN);`
+        // 账 #305 §11.149 (第一百六十七刀): 临时量自己占的东西怎么退。
+        // 空 = 标量五档, 值语义, 没有可退的。非空只出现在 String 那一档:
+        // prop_get 交回的是**新分配**的 BSTR (BSTR_Assign 拷一份), 而 prop_let
+        // 也是拷一份进去 —— 两头都不接手所有权，所以这一枚得调用方退。
+        std::string release;  // `vb6_BSTR_Free(_pbN);`
     };
     std::vector<ComPropWriteBack> comPropWrites_;
     // 只在 visit(CallStmt) 发「被调方那一棵表达式树」的窗口里为真 (上面那条的闸)。

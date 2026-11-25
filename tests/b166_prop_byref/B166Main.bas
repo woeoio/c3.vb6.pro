@@ -4,7 +4,8 @@ Option Explicit
 ' 读-改-写。两族问同一句:
 '   P* = 晚绑定目标 (`o As Object`)，实参按 VT_BYREF 发；
 '   Q* = 早绑定目标 (`b As B166Box`，直接调 vb6_B166Box_Inc)。
-' P8 / Q3 是**反面证人**: String 属性暂不开 (临时量要管 BSTR 所有权)，仍按值。
+' P8 / Q3 从第一百六十七刀 (§11.149) 起也是正例了: String 属性开了读-改-写,
+' 临时量那枚 BSTR 由调用方退 (prop_get 与 prop_let 两头都是拷一份)。
 Public Sub Main()
     Dim b As B166Box
     Dim s As String

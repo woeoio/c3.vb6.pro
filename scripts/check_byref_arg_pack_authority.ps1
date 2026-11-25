@@ -115,7 +115,12 @@ Expect 'R9 setter emitted in guard'  (Count-Pattern $callCpp 'for \(auto& pw147w
 Expect 'R9 ledger cleared'           (Count-Pattern $callCpp 'g->comPropWrites_\.clear\(\);') 1 'CallArgScope102 统一收尾'
 Expect 'R9 asks PropertyGet'         (Count-Pattern $utilC 'SymbolKind::PropertyGet') 1 '取型问声明侧'
 Expect 'R9 asks PropertyLet'         (Count-Pattern $utilC 'SymbolKind::PropertyLet') 1 '只读属性写不回去'
-Expect 'R9 string/cur props by value' (Count-Pattern $utilC 'propVt == Vb6Type::String \|\| propVt == Vb6Type::Currency') 1 '在册: String/Currency 两档不开'
+Expect 'R9 currency prop by value' (Count-Pattern $utilC 'if \(propVt == Vb6Type::Currency\) return false;') 1 '在册: Currency 属性不开 (宽度)'
+# §11.149 (第一百六十七刀): String 那一档开了，但必须多一行「退临时量」—— get 与 let
+# 两头都是拷一份，所有权不接手。
+Expect 'R9 string prop release'    (Count-Pattern $utilC 'vb6_BSTR_Free\(" \+ tmp') 1 'String 临时量归调用方退'
+Expect 'R9 release field'         (Count-Pattern $stateInc 'std::string release;') 1 '台账多一格'
+Expect 'R9 release emitted'       (Count-Pattern $callCpp 'if \(!pw149\.release\.empty\(\)\) c_\.emitLine\(pw149\.release\);') 1 '放在 102 守卫**外** (跳过调用也得退)'
 Expect 'R9 prop fixture cases' ([regex]::Matches($h, "Test-Vbp 'b166_prop_byref")).Count 2 '两格: x64 + x86'
 # §11.148 (第一百六十六刀): 同一句问句给**两个**发射器用 —— 晚绑定实参那一族与早绑定
 # 复合字面量那一族。定义 1 + 声明 1 + 调用 2；登记只许住台账一处，收尾只在语句尾巴。

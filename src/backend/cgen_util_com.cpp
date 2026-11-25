@@ -1169,7 +1169,12 @@ bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
         }
     }
     if (!hasGet || !hasLet) return false;
-    if (propVt == Vb6Type::String || propVt == Vb6Type::Currency) return false;
+    /* Currency 仍不开 (宽度: 标量 Currency 的 C 档是 double, 与数组元素那档 int64_t 不是一个
+     * 表示 —— 与 §11.146 货币数组元素同一张欠项)。
+     * String 从本刀起开 (§11.149), 但要多一行退: prop_get 交回的是新分配的 BSTR
+     * (体里是 vb6_BSTR_Assign 拷一份), prop_let 也是拷一份进去 —— 两边都不接手
+     * 所有权, 所以这一枚得调用方退, 不退回就是每次调用漏一条串。 */
+    if (propVt == Vb6Type::Currency) return false;
     const std::string packFn = comByRefPackFnForVbType(propVt);
     if (packFn.empty()) return false;
     const std::string tmp = "_pb" + std::to_string(tempCounter_++);
@@ -1179,7 +1184,8 @@ bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
     letFn = letFn.substr(0, lpInFn) + "_prop_let_" + letFn.substr(lpInFn + 10);
     comPropWrites_.push_back(ComPropWriteBack{
         mapType(propVt) + " " + tmp + " = " + argText + ";",
-        letFn + "(" + base + ", " + tmp + ");"});
+        letFn + "(" + base + ", " + tmp + ");",
+        propVt == Vb6Type::String ? "vb6_BSTR_Free(" + tmp + ");" : std::string()});
     outVt = propVt;
     outVar = tmp;
     return true;
