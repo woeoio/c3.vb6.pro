@@ -52,8 +52,8 @@ function Expect($tag, $got, $want, $note) {
     }
 }
 
-# R1 —— 五枚 Ref 打包器：定义各 1、声明各 1
-foreach ($n in @('Int', 'Integer', 'Bool', 'Single', 'Double', 'BSTR')) {
+# R1 —— 九枚 Ref 打包器：定义各 1、声明各 1
+foreach ($n in @('Int', 'Integer', 'Bool', 'Single', 'Double', 'BSTR', 'Byte', 'Cur', 'Date')) {
     Expect ("R1 vb6_ComPack${n}Ref defined")  (Count-Pattern $packC  ('(?m)^void\* vb6_ComPack' + $n + 'Ref\(')) 1 '定义只许一枚, 在 vb6com_pack.c'
     Expect ("R1 vb6_ComPack${n}Ref declared") (Count-Pattern $comHdr ('void\* vb6_ComPack' + $n + 'Ref\(')) 1 '声明只许一枚, 在 vb6com.h'
 }
@@ -71,6 +71,13 @@ Expect 'R3 SingleRef mapping'   (Count-Pattern $utilC '"vb6_ComPackSingleRef" \}
 Expect 'R3 DoubleRef mapping'   (Count-Pattern $utilC '"vb6_ComPackDoubleRef" \}.*// double\*') 1 'Double → VT_R8'
 Expect 'R3 BSTRRef mapping'     (Count-Pattern $utilC '"vb6_ComPackBSTRRef" \}.*// BSTR\*') 1 'String → VT_BYREF|VT_BSTR (§11.143)'
 Expect 'R3 Integer asks knownIntVars_' (Count-Pattern $utilC 'knownIntVars_\.count\(lower\) \? Vb6Type::Integer') 1 'inferExprType 对 Integer 答 Long, 宽度必须问专属表'
+# §11.146 (第一百六十四刀): 第七/八/九档 —— Byte / Currency / Date。
+Expect 'R3 ByteRef mapping'     (Count-Pattern $utilC '"vb6_ComPackByteRef" \}.*// uint8_t\* \(VT_UI1\)') 1 'Byte → VT_UI1'
+Expect 'R3 CurRef mapping'      (Count-Pattern $utilC '"vb6_ComPackCurRef" \}.*// int64_t\* \(VT_CY\)') 1 'Currency → VT_CY'
+Expect 'R3 DateRef mapping'     (Count-Pattern $utilC '"vb6_ComPackDateRef" \}.*// double\*  \(VT_DATE\)') 1 'Date → VT_DATE'
+# 货币**数组元素**仍按值: 标量 Currency 的 C 档是 double(值语义), 元素档是 int64_t, 两边不一个表示。
+Expect 'R3 currency array stays by value' (Count-Pattern $utilC 'if \(et == Vb6Type::Currency\) return "";') 1 '在册欠项: 货币数组元素的存法'
+Expect 'R3 nine ref tiers'      (Count-Pattern $utilC '\{ Vb6Type::\w+,\s+"vb6_ComPack\w+Ref" \}') 9 '表里正好九档'
 
 # R4 —— 早绑定那一支只对 ByRef 形参取址
 Expect 'R4 positional ByRef gate' (Count-Pattern $bindInc 'i < sig\.params\.size\(\) && !sig\.params\[i\]\.isByVal') 1 'ByVal 不许取址'

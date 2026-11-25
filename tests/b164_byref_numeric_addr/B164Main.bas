@@ -76,7 +76,7 @@ Public Sub Main()
     o.FlipB box.B
     Debug.Print "B164-N11=" & box.B
 
-    ' N12: 负对照 —— Byte 没有 UI1 那一档，仍按值（在册）
+    ' N12: Byte 数组元素 —— §11.146 (第一百六十四刀) 起也回写 (以前无 UI1 那一档，按值)
     by(1) = 1
     o.SetY by(1)
     Debug.Print "B164-N12=" & by(1)

@@ -1143,6 +1143,14 @@ std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText,
             } else if (const Symbol* sa = symTab_.lookupModule(carrier)) {
                 if (sa->kind == SymbolKind::Variable && sa->isArray) et = sa->type;
             }
+            /* 账 #305 §11.146 (第一百六十四刀): **货币数组元素不许按引用** —— 这一格不是
+             * 「漏开一档」，是两边表示不一致: 标量 Currency 的 C 档是 double (值语义,
+             * Fix 126), 而数组元素档是 int64_t (cgen_expr_array.cpp 的 mapSaElemCType)。
+             * 按 CurRef 递过去 ⇒ 服务端按值语义写回一枚 double 到 int64 槽，读出来
+             * 就是位模式垃圾 (实测 .temp/k165: 4608308318706860032)。在册欠项:
+             * 「货币数组元素与标量不一个表示」，那一刀要把 vb6_sa_currency 的存法
+             * 与 VB6_SA_AT 的元素档一起改，不在本刀偷开一档。 */
+            if (et == Vb6Type::Currency) return "";
             const std::string fnA = comByRefPackFnForVbType(et);
             if (!fnA.empty()) return fnA + "(&" + argText + ")";
             return "";
@@ -1266,6 +1274,11 @@ const ComPackRefTier kComPackRefTiers[] = {
     // 账 #305 §11.143 (第一百六十一刀): 第六档 —— 字符串 lvalue 在 C 侧就是 BSTR 槽，
     // 直接交地址；所有权那一间归服务端那两臂 (入槽拷一份、出站转移)。
     { Vb6Type::String,  "vb6_ComPackBSTRRef" },     // BSTR*
+    // 账 #305 §11.146 (第一百六十四刀): 第七/八/九档 —— Byte / Currency / Date。
+    // 三型的 C 存储与 oleaut32 那两格同宽同偏移 (uint8_t / int64_t / double)。
+    { Vb6Type::Byte,     "vb6_ComPackByteRef" },     // uint8_t* (VT_UI1)
+    { Vb6Type::Currency, "vb6_ComPackCurRef" },      // int64_t* (VT_CY)
+    { Vb6Type::Date,     "vb6_ComPackDateRef" },     // double*  (VT_DATE)
 };
 
 std::string CCodeGen::comByRefPackFnForVbType(Vb6Type vt) const {

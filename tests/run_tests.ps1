@@ -12562,9 +12562,19 @@ Test-Vbp 'b163_byref_addr_x86' "$Tests\b163_byref_addr\B163Res.vbp" $b163Needles
 $b164Needles = @(
 "B164-N1=11", "B164-N2=21", "B164-N3=31", "B164-N4=41", "B164-N5=51",
 "B164-N6=61", "B164-N7=71.5", "B164-N8=81.5", "B164-N9=90.5",
-"B164-N10=True", "B164-N11=True", "B164-N12=1", "B164-N13=5", "B164-N14=2", "B164-DONE")
+"B164-N10=True", "B164-N11=True", "B164-N12=7", "B164-N13=5", "B164-N14=2", "B164-DONE")
 Test-Vbp 'b164_byref_numeric_addr' "$Tests\b164_byref_numeric_addr\B164Res.vbp" $b164Needles
 Test-Vbp 'b164_byref_numeric_addr_x86' "$Tests\b164_byref_numeric_addr\B164Res.vbp" $b164Needles -Arch "x86"
+
+# 账 #305 §11.146 (第一百六十四刀): Byte / Currency / Date 三档的引用形。
+# C1 是货币**数组元素** —— 在册欠项 (标量 double 值语义 vs 元素 int64 存法)，仍按值。
+$b165Needles = @(
+"B165-Y1=7", "B165-Y2=7", "B165-Y3=7",
+"B165-C1=10", "B165-C2=21", "B165-C3=31",
+"B165-T1=ok", "B165-T2=ok", "B165-T3=ok",
+"B165-Y4=7", "B165-DONE")
+Test-Vbp 'b165_byref_byte_cur_date' "$Tests\b165_byref_byte_cur_date\B165Res.vbp" $b165Needles
+Test-Vbp 'b165_byref_byte_cur_date_x86' "$Tests\b165_byref_byte_cur_date\B165Res.vbp" $b165Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

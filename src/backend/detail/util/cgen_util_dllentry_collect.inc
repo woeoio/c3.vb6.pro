@@ -464,16 +464,27 @@
                     }
                 } else {
                     // ByRef: 传递VARIANT中的值指针
-                    if (pType == Vb6Type::Long || pType == Vb6Type::Integer ||
-                        pType == Vb6Type::Byte) {
-                        // ByRef **不归一化**（cDispatchArgVt 对 ByRef 一律答 VB6_ARGVT_SKIP）⇒
-                        // 槽里是调用方原标签那份，仍是 §11.142 之前那一口（&lVal）。
+                    // 账 #305 §11.146 (第一百六十四刀): 按**声明档自己的那一格**取址。
+                    // 以前 Long/Integer/Byte 三档一律 `&lVal` —— union 同偏移所以测试过得去，但
+                    // Integer/Byte 形参收到的是 LONG* (C4133)，靠“写入总在偏移 0”侥幸成立。
+                    // 这里让每一档取自己的那一格，并补上 Currency / Date 两档。
+                    if (pType == Vb6Type::Long) {
                         provided = "&((VARIANT*)args[" + idx + "])->lVal";
                         missing = "&(int32_t){0}";
+                    } else if (pType == Vb6Type::Integer) {
+                        provided = "&((VARIANT*)args[" + idx + "])->iVal";
+                        missing = "&(int16_t){0}";
+                    } else if (pType == Vb6Type::Byte) {
+                        provided = "&((VARIANT*)args[" + idx + "])->bVal";
+                        missing = "&(uint8_t){0}";
+                    } else if (pType == Vb6Type::Currency) {
+                        provided = "&((VARIANT*)args[" + idx + "])->cyVal";
+                        missing = "&(int64_t){0}";
                     } else if (pType == Vb6Type::Boolean) {
                         provided = "&((VARIANT*)args[" + idx + "])->lVal";  /* ByRef Boolean: same as Long, VB6 uses int32_t */
                         missing = "&(int32_t){0}";
-                    } else if (pType == Vb6Type::Double || pType == Vb6Type::Single) {
+                    } else if (pType == Vb6Type::Double || pType == Vb6Type::Single ||
+                               pType == Vb6Type::Date) {
                         provided = "&((VARIANT*)args[" + idx + "])->dblVal";
                         missing = "&(double){0.0}";
                     } else if (pType == Vb6Type::Variant) {

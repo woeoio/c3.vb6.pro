@@ -189,6 +189,32 @@ void* vb6_ComPackDoubleRef(double* p) {
     return (void*)pv;
 }
 
+/* 账 #305 §11.146 (第一百六十四刀): 引用形补上 Byte / Currency / Date 三档。
+ * 本仓这三型的 C 存储与 oleaut32 那三格同宽同偏移 (uint8_t / int64_t / double)，
+ * 指针直接指调用方那枚槽；服务端那两臂 (vb6_VariantBorrowIntoSlot /
+ * vb6_ByRefScalarWriteBack) 的同名档必须先就位，否则槽留 Empty。 */
+void* vb6_ComPackByteRef(uint8_t* p) {
+    VARIANT* pv = (VARIANT*)calloc(1, sizeof(VARIANT));
+    VariantInit(pv);
+    pv->vt = VT_BYREF | VT_UI1;
+    pv->pbVal = (BYTE*)p;
+    return (void*)pv;
+}
+void* vb6_ComPackCurRef(int64_t* p) {
+    VARIANT* pv = (VARIANT*)calloc(1, sizeof(VARIANT));
+    VariantInit(pv);
+    pv->vt = VT_BYREF | VT_CY;
+    pv->pcyVal = (CY*)p;
+    return (void*)pv;
+}
+void* vb6_ComPackDateRef(double* p) {
+    VARIANT* pv = (VARIANT*)calloc(1, sizeof(VARIANT));
+    VariantInit(pv);
+    pv->vt = VT_BYREF | VT_DATE;
+    pv->pdate = (DATE*)p;
+    return (void*)pv;
+}
+
 // 账 #305 §11.143 (第一百六十一刀): 第六档 Ref —— ByRef String。
 // 上面五档只认数值/布尔，字符串那一档改前一律按值打包 (vb6_ComPackBSTR)，于是被调方
 // 体里 `x = x & "-ok"` 写在**我们自己**那枚副本上，调用方变量原样不动

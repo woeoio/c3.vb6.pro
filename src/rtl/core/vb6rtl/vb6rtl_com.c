@@ -1017,6 +1017,11 @@ void vb6_ByRefScalarWriteBack(VARIANT *client, void *slot) {
         case VT_R4:   if (client->pfltVal)  *client->pfltVal  = s->fltVal;  break;
         case VT_BOOL: if (client->pboolVal) *client->pboolVal = s->boolVal; break;
         case VT_UI1:  if (client->pbVal)    *client->pbVal    = s->bVal;    break;
+        /* 账 #305 §11.146 (第一百六十四刀): Currency / Date 的出站回写。
+         * Date 住 dblVal (与 vtDate 的既有约定同: 序列号在 dblVal), 这里只搬那枚双精度;
+         * Currency 住 cyVal (int64 缩放到 1/10000)。 */
+        case VT_CY:   if (client->pcyVal)   client->pcyVal->int64 = s->cyVal;  break;
+        case VT_DATE: if (client->pdate)    *client->pdate    = s->dblVal;  break;
         /* 账 #305 §11.143 (第一百六十一刀): ByRef String 的出站 —— 所有权转移，不是拷贝。
          * 入槽那一臂已经把对端那枚串拷进槽（槽里那份是**我们的**），体里改的是槽；
          * 这里把槽里那枚交给对端，同时把对端旧的那枚退掉，顺序不能反（先赋值再退旧，
@@ -1140,6 +1145,12 @@ void vb6_VariantBorrowIntoSlot(const VARIANT *src, void *slot) {
             case VT_R4:   s->vt = vb6_vtSingle;  s->fltVal  = src->pfltVal  ? *src->pfltVal  : 0; return;
             case VT_BOOL: s->vt = vb6_vtBoolean; s->boolVal = src->pboolVal ? *src->pboolVal : 0; return;
             case VT_UI1:  s->vt = vb6_vtByte;    s->bVal    = src->pbVal    ? *src->pbVal    : 0; return;
+            /* 账 #305 §11.146 (第一百六十四刀): Currency / Date 两档 —— 本仓的 C 存储就是
+             * int64_t / double, 与 oleaut32 那两格同宽同偏移, 直搬值。 */
+            case VT_CY:   s->vt = vb6_vtCurrency;
+                          s->cyVal = src->pcyVal ? (int64_t)src->pcyVal->int64 : 0; return;
+            case VT_DATE: s->vt = vb6_vtDate;
+                          s->dblVal = src->pdate ? (double)*src->pdate : 0; return;
             /* 账 #305 §11.143 (第一百六十一刀): ByRef String —— 数值那六档是把**值**搬进槽，
              * 字符串不能照办：体里一句 `x = x & "-ok"` 先 SysFreeString 掉 `*x`，那就是
              * 调用方那枚串。所以这里给槽**自己的一份副本**（槽的生命周期到出站回写为止，
@@ -1210,7 +1221,7 @@ HRESULT vb6_ComArgNormalize(const VARIANT *src, VARTYPE want, void *slot, VARIAN
         const VARTYPE wantBase = (VARTYPE)(want & VT_TYPEMASK);
         const int unwrapped = (base == VT_I4 || base == VT_I2 || base == VT_R8 ||
                                base == VT_R4 || base == VT_BOOL || base == VT_UI1 ||
-                               base == VT_BSTR);
+                               base == VT_BSTR || base == VT_CY || base == VT_DATE);
         if (unwrapped && base == wantBase) return S_OK;
     }
     /* 账 #305 §B224: 目的档是 BSTR 时口径归 VB 语言(布尔答 True/False)，见 vb6_ComChangeType。 */

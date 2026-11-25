@@ -191,6 +191,11 @@ void* vb6_ComPackDoubleRef(double* p);
 // 账 #305 §11.143 (第一百六十一刀): 第六档 —— ByRef String (VT_BYREF|VT_BSTR)。
 // 改前 String 实参一律按值打包，被调方的写回落在我们的副本上 ⇒ 调用方变量原样不动。
 void* vb6_ComPackBSTRRef(BSTR* p);
+// 账 #305 §11.146 (第一百六十四刀): 第七/八/九档 —— Byte / Currency / Date。
+// 前六档只到 I4/I2/R4/R8/BOOL/BSTR, 这三型改前一律按值打包 ⇒ 写回落空。
+void* vb6_ComPackByteRef(uint8_t* p);
+void* vb6_ComPackCurRef(int64_t* p);
+void* vb6_ComPackDateRef(double* p);
 
 // 富贵竹 FIX-011/012 (账 #610 第341刀): Variant 出参按引用打包 (VT_BYREF|VT_VARIANT)。
 // 服务端直写调用方槽 (GetBoundingBox / GetXData 一族); 打包前先经
