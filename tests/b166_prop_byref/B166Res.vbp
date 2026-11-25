@@ -1,0 +1,6 @@
+Type=Exe
+Reference=*\G{00020430-0000-0000-C000-000000000046}#2.0#0#C:\Windows\System32\stdole2.tlb#OLE Automation
+Module=B166Main; B166Main.bas
+Class=B166Box; B166Box.cls
+Startup="Sub Main"
+ExeName32="B166Res.exe"

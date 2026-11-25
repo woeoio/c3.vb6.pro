@@ -12562,7 +12562,7 @@ Test-Vbp 'b163_byref_addr_x86' "$Tests\b163_byref_addr\B163Res.vbp" $b163Needles
 $b164Needles = @(
 "B164-N1=11", "B164-N2=21", "B164-N3=31", "B164-N4=41", "B164-N5=51",
 "B164-N6=61", "B164-N7=71.5", "B164-N8=81.5", "B164-N9=90.5",
-"B164-N10=True", "B164-N11=True", "B164-N12=7", "B164-N13=5", "B164-N14=2", "B164-DONE")
+"B164-N10=True", "B164-N11=True", "B164-N12=7", "B164-N13=6", "B164-N14=2", "B164-DONE")
 Test-Vbp 'b164_byref_numeric_addr' "$Tests\b164_byref_numeric_addr\B164Res.vbp" $b164Needles
 Test-Vbp 'b164_byref_numeric_addr_x86' "$Tests\b164_byref_numeric_addr\B164Res.vbp" $b164Needles -Arch "x86"
 
@@ -12575,6 +12575,17 @@ $b165Needles = @(
 "B165-Y4=7", "B165-DONE")
 Test-Vbp 'b165_byref_byte_cur_date' "$Tests\b165_byref_byte_cur_date\B165Res.vbp" $b165Needles
 Test-Vbp 'b165_byref_byte_cur_date_x86' "$Tests\b165_byref_byte_cur_date\B165Res.vbp" $b165Needles -Arch "x86"
+
+# 账 #305 §11.147 (第一百六十五刀): 属性读当 ByRef 实参的读-改-写。
+# 真 VB6 不递属性本身 (没地址)，而是「拷临时量 → 递地址 → 回来经 Let 写回」。
+# P1/P2 = 同一格连发两次 (每次都该在**已经写回**的值上再走一步)；
+# P8 是反面证人: String 属性暂不开 (临时量要管 BSTR 所有权)，仍按值 ⇒ "ab"。
+$b166Needles = @(
+"B166-P1=41", "B166-P2=42", "B166-P3=21", "B166-P4=31.5",
+"B166-P5=7", "B166-P6=True", "B166-P7=2020-01-03",
+"B166-P8=ab", "B166-P9=xyz", "B166-DONE")
+Test-Vbp 'b166_prop_byref' "$Tests\b166_prop_byref\B166Res.vbp" $b166Needles
+Test-Vbp 'b166_prop_byref_x86' "$Tests\b166_prop_byref\B166Res.vbp" $b166Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

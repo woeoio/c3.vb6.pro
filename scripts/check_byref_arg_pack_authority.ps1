@@ -29,11 +29,14 @@ $comHdr  = Join-Path $root 'src\rtl\core\vb6com\vb6com.h'
 $utilC   = Join-Path $root 'src\backend\cgen_util_com.cpp'
 $helpers = Join-Path $root 'src\backend\detail\util\cgen_helpers.inc'
 $bindInc = Join-Path $root 'src\backend\detail\expr\cgen_expr_call_com_bind.inc'
+$stateInc = Join-Path $root 'src\backend\detail\util\cgen_state.inc'
+$callCpp = Join-Path $root 'src\backend\stmt\cgen_call.cpp'
 $harness = Join-Path $root 'tests\run_tests.ps1'
 $fixBas  = Join-Path $root 'tests\b239_byrefarg\B239k.bas'
 $fixVbp  = Join-Path $root 'tests\b239_byrefarg\B239k.vbp'
 
-foreach ($p in @($packC, $comHdr, $utilC, $helpers, $bindInc, $harness, $fixBas, $fixVbp)) {
+foreach ($p in @($packC, $comHdr, $utilC, $helpers, $bindInc, $harness, $fixBas, $fixVbp,
+                $stateInc, $callCpp)) {
     if (-not (Test-Path -LiteralPath $p)) { Write-Host ('FAIL missing ' + $p) -ForegroundColor Red; exit 1 }
 }
 
@@ -100,8 +103,19 @@ Expect 'R7 with shape asks decl'  (Count-Pattern $utilC 'classFieldKind\(wi\.cla
 Expect 'R7 addr fixture cases' ([regex]::Matches($h, "Test-Vbp 'b163_byref_addr")).Count 2 '两格: x64 + x86'
 # §11.145 (第一百六十三刀): 按引用打包器那张表只许住一处, 三个消费点 (裸标识符/数组元素/类字段) 都问它。
 Expect 'R8 ref-tier table'      (Count-Pattern $utilC 'kComPackRefTiers\[\]') 1 '表只住 cgen_util_com.cpp 一处'
-Expect 'R8 ref-tier askers'     (Count-Pattern $utilC 'comByRefPackFnForVbType\(') 4 '定义 1 + 三处消费点'
+Expect 'R8 ref-tier askers'     (Count-Pattern $utilC 'comByRefPackFnForVbType\(') 5 '定义 1 + 四处消费点 (裸标识符/数组元素/类字段/属性读)'
 Expect 'R8 numeric fixture cases' ([regex]::Matches($h, "Test-Vbp 'b164_byref_numeric_addr")).Count 2 '两格: x64 + x86'
+# §11.147 (第一百六十五刀): 属性读当 ByRef 实参 —— 读-改-写。
+# 真 VB6 不递属性本身 (属性没地址)，而是「拷临时量 → 递地址 → 回来经 Let 写回」。
+# 登记只许住一处: 本语句的两行 (调用前 decl / 调用后 setter)，同收尾于 CallArgScope102。
+Expect 'R9 prop-writeback ledger'   (Count-Pattern $stateInc 'std::vector<ComPropWriteBack> comPropWrites_;') 1 '台账只住 cgen_state.inc'
+Expect 'R9 decl emitted before call' (Count-Pattern $callCpp 'for \(auto& pw147 : comPropWrites_\) c_\.emitLine\(pw147\.decl\);') 1 '读那一半: 调用前起手'
+Expect 'R9 setter emitted in guard'  (Count-Pattern $callCpp 'for \(auto& pw147w : comPropWrites_\) c_\.emitLine\(pw147w\.setter\);') 1 '写回那一半: 调用后 (且在 102 守卫里)'
+Expect 'R9 ledger cleared'           (Count-Pattern $callCpp 'g->comPropWrites_\.clear\(\);') 1 'CallArgScope102 统一收尾'
+Expect 'R9 asks PropertyGet'         (Count-Pattern $utilC 'SymbolKind::PropertyGet') 1 '取型问声明侧'
+Expect 'R9 asks PropertyLet'         (Count-Pattern $utilC 'SymbolKind::PropertyLet') 1 '只读属性写不回去'
+Expect 'R9 string/cur props by value' (Count-Pattern $utilC 'propVtCs != Vb6Type::String') 1 '在册: String/Currency 两档不开'
+Expect 'R9 prop fixture cases' ([regex]::Matches($h, "Test-Vbp 'b166_prop_byref")).Count 2 '两格: x64 + x86'
 Expect 'R5 absent lesion' ([regex]::Matches($h, 'vb6_ComPackInt\(&n\)')).Count 1 '改前那一形只许留在 Absent'
 
 if ($fails.Count -gt 0) {

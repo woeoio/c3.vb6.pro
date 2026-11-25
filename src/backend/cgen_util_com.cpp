@@ -1160,6 +1160,73 @@ std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText,
         if (expr.kind == ASTNodeKind::MemberAccessExpr) {
             auto& ma = static_cast<const MemberAccessExpr&>(expr);
             const std::string cls = ma.object ? inferClassTypeOfExpr(*ma.object) : std::string();
+            /* 账 #305 §11.147 (第一百六十五刀): **属性读**当 ByRef 实参 —— 读-改-写。
+             * 改前 `o.Inc box.Tag` 落到下面属性那一格交回空串 ⇒ 按值打包，体里的
+             * 写回落空 (实测 .temp/k166: P1=40 应为 41)。真 VB6 不递属性本身 (属性没有地址)，
+             * 而是「拷进临时量 → 递它的地址 → 调用回来经 Let 写回」。
+             * 判据全部问声明侧，不读发码文本里的注释：
+             *   ① 文本必须是**单实参**的属性读 vb6_<类>_prop_get_<成员>(<base>) ——
+             *      带索引的 Read 属性 (base 里带顶格逗号) 不在这一族，在册；
+             *   ② 该类的同名成员必须**既有 Get 又有 Let** (只读属性写不回去)；
+             *   ③ 型取 Get 的返回型，打包器要在按引用那一族里 (九档那一张表)。
+             * String / Currency 两档暂不开：String 的临时量要管 BSTR 所有权 (get 给的那份
+             * 谁释放 / Let 收的是拷贝还是转移)，Currency 的 C 档是 double 而 Let 形参未必
+             * 同宽 —— 两格都在册，不在这里偷开。 */
+            if (!cls.empty() && !ma.memberName.empty()) {
+                const size_t pgPosCs = argText.find("_prop_get_");
+                const size_t lpCs = argText.find('(');
+                if (argText.rfind("vb6_", 0) == 0
+                    && pgPosCs != std::string::npos && lpCs != std::string::npos
+                    && pgPosCs < lpCs && argText.back() == ')') {
+                    const std::string baseCs = argText.substr(lpCs + 1, argText.size() - lpCs - 2);
+                    bool matchedPropCs = false;
+                    Vb6Type propVtCs = Vb6Type::Unknown;
+                    if (!baseCs.empty() && baseCs.find(',') == std::string::npos
+                        && baseCs.find('(') == std::string::npos) {
+                        bool hasGetCs = false, hasLetCs = false;
+                        const std::string memL = Symbol::toLower(ma.memberName);
+                        const std::string clsL = Symbol::toLower(cls);
+                        if (symTab_.moduleScope()) {
+                            for (const auto& [kCs, sCs] : symTab_.moduleScope()->symbols()) {
+                                if (!sCs || sCs->lowerName != memL) continue;
+                                const bool mCs = sCs->isExternal
+                                    ? Symbol::toLower(sCs->sourceModule) == clsL
+                                    : (isClassModule_
+                                       && Symbol::toLower(moduleName_) == clsL);
+                                if (!mCs) continue;
+                                if (sCs->kind == SymbolKind::PropertyGet) {
+                                    hasGetCs = true;
+                                    /* 返回型住 sym->type（与「Function/PropertyGet 读自己
+                                     * 的名字走返回槽」同一条口径），载荷里只有
+                                     * memberReturnTypes（源码原样的型名）。 */
+                                    propVtCs = sCs->type;
+                                } else if (sCs->kind == SymbolKind::PropertyLet) {
+                                    hasLetCs = true;
+                                }
+                            }
+                        }
+                        matchedPropCs = hasGetCs && hasLetCs;
+                    }
+                    if (matchedPropCs && propVtCs != Vb6Type::String
+                        && propVtCs != Vb6Type::Currency) {
+                        const std::string fnP = comByRefPackFnForVbType(propVtCs);
+                        if (!fnP.empty()) {
+                            const std::string tmpP =
+                                "_pb" + std::to_string(tempCounter_++);
+                            std::string letFn = argText.substr(0, lpCs);
+                            const size_t lpPosCs = letFn.find("_prop_get_");
+                            if (lpPosCs != std::string::npos) {
+                                letFn = letFn.substr(0, lpPosCs) + "_prop_let_"
+                                      + letFn.substr(lpPosCs + 10);
+                            }
+                            comPropWrites_.push_back(ComPropWriteBack{
+                                mapType(propVtCs) + " " + tmpP + " = " + argText + ";",
+                                letFn + "(" + baseCs + ", " + tmpP + ");"});
+                            return fnP + "(&" + tmpP + ")";
+                        }
+                    }
+                }
+            }
             if (!cls.empty() && resolveClassMemberCall(cls, ma.memberName).empty()) {
                 const Vb6Type ft = classFieldKind(cls, ma.memberName);
                 if (ft != Vb6Type::Unknown) { clsField = cls; fieldVt = ft; }

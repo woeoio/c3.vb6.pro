@@ -327,6 +327,7 @@ void CCodeGen::visit(CallStmt& node) {
                 g->stmtCallArgEmitted_ = false;
                 g->stmtCallArgFirstLate_ = -1;
                 g->stmtCallArgVarTemps_.clear();
+                g->comPropWrites_.clear();
             }
         } callArgScope102_{this};
         if (node.callee && node.callee->kind == ASTNodeKind::IndexOrCallExpr) {
@@ -981,6 +982,9 @@ void CCodeGen::visit(CallStmt& node) {
         }
 
         const bool guard102 = !stmtCallArgSerial_.empty() && stmtCallArgEmitted_;
+        // 账 #305 §11.147 (第一百六十五刀): 属性读当 ByRef 实参的**读**那一半 ——
+        // 临时量在调用前起手（真 VB6：先把属性值拷出来，再递它的地址）。
+        for (auto& pw147 : comPropWrites_) c_.emitLine(pw147.decl);
         if (guard102) {
             c_.emitLine("if (" + stmtCallArgSerial_ + " == vb6_ErrSerial()) {");
         }
@@ -993,6 +997,9 @@ void CCodeGen::visit(CallStmt& node) {
         } else {
             c_.emitLine(callExpr + ";");
         }
+        // 账 #305 §11.147: **写回**那一半 —— 调用回来经 Let 写回。放在守卫**里**：
+        // 「命中即整句中止」的口径下，调用被跳过时属性也不该变。
+        for (auto& pw147w : comPropWrites_) c_.emitLine(pw147w.setter);
         if (guard102) {
             c_.emitLine("}");
         }

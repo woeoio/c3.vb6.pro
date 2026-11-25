@@ -81,7 +81,8 @@ Public Sub Main()
     o.SetY by(1)
     Debug.Print "B164-N12=" & by(1)
 
-    ' N13: 负对照 —— 属性读不可取址，仍按值（在册）
+    ' N13: §11.147 (第一百六十五刀) 起属性读也回写（拷临时量 → 递地址 → 回来经 Let 写回）
+    ' 改前这一格是「属性读不可取址，仍按值」的负对照（读数 5），现在是 6。
     box.Tag = 5
     o.Inc box.Tag
     Debug.Print "B164-N13=" & box.Tag
