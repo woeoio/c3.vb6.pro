@@ -12769,6 +12769,18 @@ $b183Needles = @(
 "B183-DONE")
 Test-Vbp 'b183_currency_step' "$Tests\b183_currency_step\B183Res.vbp" $b183Needles
 Test-Vbp 'b183_currency_step_x86' "$Tests\b183_currency_step\B183Res.vbp" $b183Needles -Arch "x86"
+
+# 账 #305 §11.164 (第一百八十一刀): Currency 数组元素存 double（与标量同口径）。
+# 真机 .temp/k181p 读数: 元素读/写都是 6 Currency 且写入即圈; ByRef 传元素能真接上。
+# A5 钉未赋值元素=0 Currency; A7 钉 ReDim 动态数组。
+$b184Needles = @(
+"A1=6|Currency|10.1235|101235", "A2=6|Currency",
+"A3=6|Currency|10.1235|101235", "A4=6|Currency|11.1235|111235",
+"A5=6|Currency|0|0", "D1=11.1235",
+"A6=6|Currency|11.1235|111235", "A7=6|Currency|10.1235|101235",
+"B184-DONE")
+Test-Vbp 'b184_currency_array' "$Tests\b184_currency_array\B184Res.vbp" $b184Needles
+Test-Vbp 'b184_currency_array_x86' "$Tests\b184_currency_array\B184Res.vbp" $b184Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

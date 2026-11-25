@@ -443,6 +443,45 @@ else {
         }
     }
 }
+$arr17 = Read-File 'src/backend/expr/cgen_expr_array.cpp'
+if ($null -eq $arr17) { $bad += 'R17 cgen_expr_array.cpp not found' }
+else {
+    if ($arr17.IndexOf('case Vb6Type::Currency: return "double";') -lt 0) {
+        $bad += 'R17 a Currency array element must be stored as double (same model as a scalar)'
+    }
+    if ($arr17.IndexOf('case Vb6Type::Currency: return "int64_t";') -ge 0) {
+        $bad += 'R17 the old int64_t Currency slot is still present (it truncates on store)'
+    }
+}
+$ty17 = Read-File 'src/backend/cgen_util_type.cpp'
+if ($null -eq $ty17) { $bad += 'R17 cgen_util_type.cpp not found' }
+else {
+    $i17 = $ty17.IndexOf('§11.164')
+    if ($i17 -lt 0) { $bad += 'R17 the array-element Currency branch is missing' }
+    else {
+        $w17 = $ty17.Substring($i17, [Math]::Min(1600, $ty17.Length - $i17))
+        if ($w17 -notmatch 'arrayElemTypes_' -or $w17 -notmatch 'Vb6Type::Currency') {
+            $bad += 'R17 the element identity must be answered by arrayElemTypes_ as Currency'
+        }
+    }
+}
+foreach ($f in @('B184Main.bas', 'B184Res.vbp')) {
+    $p = Join-Path $repo ('tests/b184_currency_array/' + $f)
+    if (-not (Test-Path -LiteralPath $p)) { $bad += ('R17 fixture file missing: ' + $f) }
+}
+if ($null -ne $run7) {
+    $n = ([regex]::Matches($run7, "Test-Vbp 'b184_currency_array")).Count
+    if ($n -ne 2) { $bad += ('R17 b184 fixture cells = ' + $n + ', want 2 (x64 + x86)') }
+}
+$main17 = Read-File 'tests/b184_currency_array/B184Main.bas'
+if ($null -eq $main17) { $bad += 'R17 B184Main.bas not found' }
+else {
+    foreach ($w in @('A4', 'A5', 'A7')) {
+        if ($main17 -notmatch ('"' + $w + '"')) {
+            $bad += ('R17 witness cell ' + $w + ' missing (ByRef / uninitialised / ReDim)')
+        }
+    }
+}
 if ($bad.Count -gt 0) {
     Write-Host ('FAIL currency_round_station: ' + ($bad -join ' | '))
     exit 1
@@ -451,5 +490,6 @@ Write-Host '  R13 ByVal Currency call-site station (one owner, both arg paths, n
 Write-Host '  R14 Currency variable identity in Variant (VT_CY, both box stations) OK'
 Write-Host '  R15 Currency arithmetic identity (+ - absorb, * with float is Double, / is Double) OK'
 Write-Host '  R16 Currency intermediate rounds at every step (single fold exit) OK'
-Write-Host 'PASS currency_round_station (R1..R16)'
+Write-Host '  R17 Currency array elements are doubles with the same identity (store/read/ByRef) OK'
+Write-Host 'PASS currency_round_station (R1..R17)'
 exit 0

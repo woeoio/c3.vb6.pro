@@ -444,6 +444,27 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
             // (以前元素答 Variant ⇒ And 降成 int32 ⇒ 拼串打 "-1")。
             if (arrayElemIsDeclaredBoolean(call)) return Vb6Type::Boolean;
 
+            // 账 #305 §11.164 (第一百八十一刀): Currency 数组元素读 = Currency。
+            // 不答 Currency 就两处都错: 元素赋值不套 vb6_CCur（10.123456 直接存）、
+            // 装箱走 _Generic 答 VT_R8。真机 P186: A1 6|Currency|10.1235。
+            // 表与 Boolean 那一问同一张 (arrayElemTypes_ / inferUdtFieldVb6Type)。
+            if (call.callee && !call.positional.empty()) {
+                bool isArr164 = false;
+                Vb6Type et164 = Vb6Type::Unknown;
+                if (call.callee->kind == ASTNodeKind::IdentifierExpr) {
+                    auto& id164 = static_cast<const IdentifierExpr&>(*call.callee);
+                    auto it164 = arrayElemTypes_.find(Symbol::toLower(id164.name));
+                    if (it164 != arrayElemTypes_.end()) {
+                        et164 = it164->second;
+                        isArr164 = true;
+                    }
+                } else if (call.callee->kind == ASTNodeKind::MemberAccessExpr
+                           || call.callee->kind == ASTNodeKind::WithMemberExpr) {
+                    et164 = inferUdtFieldVb6Type(call.callee.get(), &isArr164);
+                }
+                if (isArr164 && et164 == Vb6Type::Currency) return Vb6Type::Currency;
+            }
+
             // C30-11 第八十刀 (§B228): `Len(<数值变量>)` 的真机档位是 **Integer**。
             // 真机探针 (`.temp/k78/lena.bas` D1/D2): Len(Integer 变)=2 / Len(Long 变)=4，
             // TypeName 都答 **Integer**；Len("abc") 与 Len(<Variant>) 仍答 **Long**。

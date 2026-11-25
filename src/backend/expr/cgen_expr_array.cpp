@@ -43,7 +43,12 @@ std::string CCodeGen::mapSaElemCType(Vb6Type type) const {
         case Vb6Type::Date:     return "double";
         case Vb6Type::String:   return "BSTR";
         case Vb6Type::Variant:  return "vb6_VARIANT";
-        case Vb6Type::Currency: return "int64_t";
+        // 账 #305 §11.164 (第一百八十一刀): Currency 元素槽改 double —— 与标量同一口径。
+        // 旧值是 int64_t (按 VT_CY 的放大整数布局猜的)，但赋值站只发 vb6_CCur(...)
+        // 不乘 10000 ⇒ 小数直接被截 (真机 P186 vs C3 旧版: A1 10.1235 vs 10)。
+        // 改成 double 后: 写入走 vb6_CCur 圈到 4 位, 读出就是同一个值, ByRef 传元素
+        // 也能真接上 (double*); 与 COM 的 VT_CY 布局差异列在册。
+        case Vb6Type::Currency: return "double";
         case Vb6Type::Object:   return "void*";
         case Vb6Type::LongPtr:  return "intptr_t";  // Fix 191: 见 mapSaElemType 同处注释
         default:                return "vb6_VARIANT";
