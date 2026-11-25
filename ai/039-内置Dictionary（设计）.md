@@ -9747,3 +9747,60 @@ manifest：corpus 848 → 850；存量移动 1 个夹具（b165 两行）。
 - **拼串格式化的档位清单要跟着 Vb6Type 走**：这一刀是「少一条臂」，同类风险在于以后新增
   档位忘了加臂 —— R16 的「臂数 ≥ 16」只兜得住不回退，兜不住新档。
 
+## §11.154（工具刀，不占刀号）GUI/像素用例移出阻塞门
+
+GUI 那一族一直在 vbp 分片里当阻塞门，而它的判据天生环境依赖。三条实证都在仓里：
+
+1. **要真桌面**：像素夹具走 `CopyFromScreen` 抓屏，拿不到就自己 SKIP
+   （`tests\guisample\tree_icons_px.ps1`）。
+2. **会互抢单实例主窗**：`run_tests.ps1` 里 2026-11-04 的实测 —— 同一产物单跑
+   `PASS icons=9`，套件里跑成 `SKIP 主窗未找到`；现在的对策是跑像素前先杀掉用例进程。
+3. **判据是渲染量**：`n=61/265/262`、`ring n=6175 at70=1065`、`title=(83,14)-(225,24)`
+   这类墨水计数/几何，DPI/主题/字体版本一动就漂。
+
+本机 `-Category gui` 就复现了第三条：`ucSegmentedControl` 的读数里
+`physical client=939x650 scale=1.25`（125% 缩放），而期望值按 96 DPI 钉的 ⇒ 红。
+这类红不是回归信号，是环境噪声。
+
+改法（只动编排与一格开关，不动任何判据）：
+
+- `run_tests.ps1` 新增 `-SkipGui`：vbp 分片里不再调 `Invoke-GuiVbpTable`、也不计 GUI
+  用例的格数（`Test-GuiVbpCase` 早退）；本地不传开关时照旧全跑。
+- `ci.yml` 的 12 个 vbp 分片 `shardArgs` 全部追加 `-SkipGui`；新增 matrix 条目
+  `category: gui` 跑 `-Category gui`；该 job 级
+  `continue-on-error: ${{ matrix.category == 'gui' }}` —— 它仍会跑、仍会把每条失败写成
+  `::error::` 注解，只是不许把整条流水线拉红。
+
+本机自证：
+
+- `-Category vbp -VbpShard 1 -VbpShardTotal 60 -SkipGui` ⇒ `[GUI]` 行 0 条、
+  `Results: PASS=17 FAIL=0 SKIP=1`；
+- `-Category gui` ⇒ 25 例 `PASS=24 FAIL=1 SKIP=0`（就是上面那格 125% DPI 读数）。
+
+### 撤 GUI 表后暴露的一条隐式接续
+
+第一次推（`f6bc33bc`）CI 在 Tests (vbp #3) 红了：
+
+```
+[MANIFEST] balloon_manifest_is_user_supplied ... FAIL (no exe: output\BalloonTooltips\BalloonTooltips.exe)
+```
+
+那条判据（只读产物字节，数 `</assembly>`、查 `dpiAware`）吃的是 GUI 表建出来的 exe，
+`-ShardGroup "balloon"` 就是为这条接续写的。修法：`-SkipGui` 时在调用点自己建一份
+（`cmd` 直调，与 `Test-FormIconResources` 同一形），**判据一个字不改**。本机自证：
+编出 `BalloonTooltips.exe` ⇒ `manifests=1`、`dpiAware=True`。全脚本里 `$OutDir` 直读
+只有三处，另两处（FormIconResources / ctrlmanifest 的 `MfApp.exe`）本来就自己建。
+
+修后 CI：23 格**全绿**（run 45598869416，含新的 `Tests (gui)`；它在 CI 的桌面/DPI 下也
+过了，但权限上仍是非阻塞格）。
+
+### 本机验证的一件事（不是本刀引入）
+
+用 Windows PowerShell 5.1 直跑 harness 时，`[COMPILE-FAIL] iface_multi_incomplete_negcontrol`
+会假红：`needle=False` 但 `exit=1` 且无 exe。根因是脚本顶部
+`$ErrorActionPreference='SilentlyContinue'` 下，5.1 对原生 stderr 的 `2>&1` 捕获为空；
+换 `pwsh`（CI 用的那个）即 PASS。复现：`.temp\k172\probe_neg.ps1`（5.1，len=0）vs
+`probe_neg2.ps1`（`ErrorActionPreference='Continue'`，len=1401）。
+**本机验证 harness 一律用 pwsh**。
+
+
