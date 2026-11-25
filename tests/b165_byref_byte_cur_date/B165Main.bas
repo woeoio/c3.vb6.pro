@@ -35,11 +35,13 @@ Public Sub Main()
     Debug.Print "B165-C1=" & ca(1)
 
     ' C2: Currency 类字段
+    ' 第一百七十一刀 (§11.153) 之后打真值 21.25; 改前这一行是 21 (拼串按 Long 格式化)。
     box.C = 20
     o.IncC box.C
     Debug.Print "B165-C2=" & box.C
 
     ' C3: Currency 模块级裸变量（基线）
+    ' 同上: 31.25; 数组元素 C1 仍截成 10 —— 表示不一致那一格在册，本刀不碰。
     gc = 30
     o.IncC gc
     Debug.Print "B165-C3=" & gc

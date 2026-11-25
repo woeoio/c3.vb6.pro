@@ -12568,9 +12568,12 @@ Test-Vbp 'b164_byref_numeric_addr_x86' "$Tests\b164_byref_numeric_addr\B164Res.v
 
 # 账 #305 §11.146 (第一百六十四刀): Byte / Currency / Date 三档的引用形。
 # C1 是货币**数组元素** —— 在册欠项 (标量 double 值语义 vs 元素 int64 存法)，仍按值。
+# 账 #305 §11.153 (第一百七十一刀): C2/C3 现在打出真值 (21.25/31.25) —— 改前 Currency 的
+# 类字段/模块级变量在拼串里走 vb6_CStrLong 被截成 21/31。C1 (数组元素) 仍截 —— 表示不一致
+# 那一格在册。
 $b165Needles = @(
 "B165-Y1=7", "B165-Y2=7", "B165-Y3=7",
-"B165-C1=10", "B165-C2=21", "B165-C3=31",
+"B165-C1=10", "B165-C2=21.25", "B165-C3=31.25",
 "B165-T1=ok", "B165-T2=ok", "B165-T3=ok",
 "B165-Y4=7", "B165-DONE")
 Test-Vbp 'b165_byref_byte_cur_date' "$Tests\b165_byref_byte_cur_date\B165Res.vbp" $b165Needles
@@ -12614,6 +12617,14 @@ $b170Needles = @(
 "B170-T5=2.5", "B170-T6=5", "B170-T7=unchanged", "B170-DONE")
 Test-Vbp 'b170_prop_byref_narrow' "$Tests\b170_prop_byref_narrow\B170Res.vbp" $b170Needles
 Test-Vbp 'b170_prop_byref_narrow_x86' "$Tests\b170_prop_byref_narrow\B170Res.vbp" $b170Needles -Arch "x86"
+
+# 账 #305 §11.153 (第一百七十一刀): Currency 属性在拼串里的格式化。改前只 Q3/Q6 (双精度/局部变量)
+# 是对的, Q1/Q2/Q4/Q5/Q7 全把小数截掉 (CStrLong)。
+$b171Needles = @(
+"B171-Q1=10.5", "B171-Q2=11.5", "B171-Q3=10.5", "B171-Q4=20.25",
+"B171-Q5=11.5", "B171-Q6=7.25", "B171-Q7=11.5", "B171-DONE")
+Test-Vbp 'b171_currency_prop_str' "$Tests\b171_currency_prop_str\B171Res.vbp" $b171Needles
+Test-Vbp 'b171_currency_prop_str_x86' "$Tests\b171_currency_prop_str\B171Res.vbp" $b171Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
