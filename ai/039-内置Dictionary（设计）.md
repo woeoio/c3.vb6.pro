@@ -9871,5 +9871,74 @@ Byte 折 double、`cstrOfVt` 唯一、`toBstr155` 分支、两向释放、赋值
 - 数值形参与 String 形参之间的 `ByVal` 传递是否有同族病未测；
 - 字面量 BSTR（`vb6_BSTR_FromStr`）在赋值站仍不释放（旧账，与本刀无关）。
 
+## §11.156（第一百七十三刀）String 属性读当数值 ByRef 实参
+
+上一刀把「String 与数值」两向的换算接上了，但 `comPropReadWriteArg` 里对 String 属性
+还有一句 `return false`：那一格根本不进登记道，落到早绑定兜底 ——
+
+```c
+vb6_B176Main_IncL((&(int32_t){vb6_B176Box_prop_get_S1(b)}));
+```
+
+复合字面量的地址。被调方的写回落在临时量上就没了：`b.S1 = "12"` 走 `IncL` 之后
+**还是 "12"**。与前两刀不同，这一格不崩也不报错 —— 静默错值，最难发现的那种。
+
+### 两枚临时量 + 写回那枚 BSTR
+
+```c
+BSTR _pb0s = vb6_B176Box_prop_get_S1(b); int32_t _pb0 = vb6_CLng(_pb0s);
+vb6_B176Main_IncL(&_pb0);
+{ BSTR _pb0l = vb6_CStrLong(_pb0); vb6_B176Box_prop_let_S1(b, _pb0l); vb6_BSTR_Free(_pb0l); }
+vb6_BSTR_Free(_pb0s);
+```
+
+源串与写回串都不归 `Let` 接手（两边都是拷一份），所以两枚都得调用方退；写回那枚
+只活到 `Let` 拷完，就在同一个语句块里现造现退（放在 102 守卫的 setter 那一行里，
+跳过了也不会漏退：它根本不会造）。
+
+### 选 CStr 档必须问声明型
+
+这是本刀真正的判据：`int16_t` 同时盖着 **Integer** 与 **Boolean** —— `CStr(12)` 是
+`"12"`、`CStr(True)` 是 `"True"`；`double` 又盖着 Double / Date / Currency。C 型文本
+答不出这一格，所以：
+
+- `comPropReadWriteArg` 多收一枚 `Vb6Type wantVt`（默认 `Unknown`）；
+- 早绑定调用点把 `calleeParams[i].type` 递进来（与它算 `cType` 用的是同一格表）；
+- 晚绑定那支仍答 `Unknown` ⇒ 那一格不开（与 R8/R9 同一条口径：型只问声明侧）。
+
+### 夹具 `tests/b176_str_prop_num_arg`
+
+```
+B176-1=13   "12"  → Long    (+1)   B176-4=11   "10" → Byte (+1)
+B176-2=41   "40"  → Integer (+1)   B176-5=12   同档对照 (Long 属性 → Long 形参)
+B176-3=3    "1.5" → Double  (×2)
+```
+
+四个形参档各一行，就等于把「选档」这件事钉在读数上：只要那枚 `wantVt` 被退化成
+按 C 型猜，Integer 与 Byte 两行会先变。
+
+门：`check_byref_arg_pack_authority.ps1` 里 R9 四条跟着形状更新（一对 `release`
+规则、`conv` 判据、两个调用点锚），新增 **R11 九条**（wantVt 进主人 / 声明默认值 /
+调用点 / fromStr 闸门 / 型不明不开 / 两枚临时量同一行 / 写回串现退 / 源串归调用方 /
+夹具两格）。runner 两格（x64 + x86）均实跑通过；九门 9/9。
+
+### 清单
+
+854 行（新增 2 行 = 新夹具的两份输入）。其余 **与本机上一版逐字节相同** —— 说明这一刀
+只碰得到「String 属性交数值 ByRef 形参」那一形，语料里其余工程一行未动。本机与 CI 那台
+在 6 份环境相关的输入上仍不同（`b132_typedcom_local_scope` / `guisample` ×3 /
+`TeeChartChartDisplay` / `ctrlmscomm`），期望值仍保持 CI 那一版的读数（上一刀已经立下的
+口径）。
+
+### 在册（本刀不碰）
+
+- **晚绑定调用点**（`o.IncL b.S1`，b 是 Object）仍走旧路：那里拿不到形参声明型，
+  要等晚绑定那一族也把形参表递进来；
+- **ByVal 同族**：`x = f(b.S1)` 里 String 属性交数值 `ByVal` 形参是否已经走
+  `narrowArgText` 的 BSTR 臂，未测；
+- **ByRef Boolean 未归一**：Boolean 形参（`int16_t`）现在会走 `vb6_CInt`，值与 -1/0
+  的口径差仍在册。
+
+
 
 
