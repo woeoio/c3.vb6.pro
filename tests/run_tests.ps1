@@ -36,7 +36,14 @@ param(
     # ai/030 T30-B(本地先行): 传了这个开关, 套件里每次**真实构建**才带 --incremental。
     # 不传时 @IncArg 是空数组, 命令行逐字不变 (空数组 splat 的透明性单独验过: 输出与退出码都不动)。
     # 默认路径 = 今天的默认路径。
-    [switch]$Incremental
+    [switch]$Incremental,
+    # 账 #305 工具刀 (2026-11-25, 不占刀号): GUI/像素用例从**阻塞门**里拿出来。
+    # 那一族靠 CopyFromScreen 抳真桌面 (拿不到就 SKIP)、跟单实例主窗互抢、
+    # 判据是墨水计数/几何 (DPI/主题/字体版本一动就漂) —— 当阻塞门用就是拿环境
+    # 噪声当回归信号。传了这个开关: vbp 分片里不再调 Invoke-GuiVbpTable,
+    # 也不再计 GUI 用例的格数; 它们跑在 CI 的 gui 那只**不阻塞**的 job 里
+    # (-Category gui)。本地默认路径不变 (不传 = 照旧跑)。
+    [switch]$SkipGui
 )
 
 $ErrorActionPreference = "SilentlyContinue"
@@ -1060,6 +1067,9 @@ function Update-WinSample {
 function Test-GuiVbpCase {
     param([hashtable]$Case)
     $name = [string]$Case.Name
+    # 账 #305 工具刀 (2026-11-25, 不占刀号): -SkipGui 时整族交回 (连格数也不计) ——
+    # 它们跑在 CI 的 gui 那只非阻塞 job 里 (-Category gui)。
+    if ($SkipGui) { return }
     $group = ""
     if ($Case.ContainsKey("ShardGroup")) { $group = [string]$Case.ShardGroup }
     # vbp 分片: 本片不跑这例 —— 闸门必须在任何副作用之前 (建目录/起进程)。
@@ -10216,7 +10226,9 @@ if ($Category -in @("all", "run", "vbp")) {
     # 每条固定三条断言: 窗口确认起来过 (采样) / 检查点齐全 / 退出码 0。
     # 七个历史用例的参数原样搬进表: Charts2020 的绘制缓冲(>=40色)、czUI/FlexGrid/NewTab
     # 的 x86 位数、NewTab 的 NewTab01.ocx 依赖都在那条目里声明; 新增用例只加一行。
-    Invoke-GuiVbpTable
+    # 账 #305 工具刀 (2026-11-25, 不占刀号): CI 的 vbp 分片带 -SkipGui —— 这一族改住
+    # gui 那只（continue-on-error）不阻塞 job，本地不传开关时照旧全跑。
+    if (-not $SkipGui) { Invoke-GuiVbpTable }
     # 第328刀: 窗体图标落在**产物的资源目录**里 —— 判据只能真链接之后读 .rsrc。
     Test-FormIconResources
     Test-ProductManifest "balloon_manifest_is_user_supplied" "$OutDir\BalloonTooltips\BalloonTooltips.exe" 1 "dpiAware" -ShardGroup "balloon"

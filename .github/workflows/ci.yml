@@ -384,6 +384,11 @@ jobs:
     needs: build
     runs-on: windows-latest
     timeout-minutes: 45
+    # 账 #305 工具刀 (2026-11-25, 不占刀号): gui 那一格不阻塞。
+    # 那一族的判据是 CopyFromScreen 抳真桌面 + 墨水计数/几何 (DPI/主题/字体版本一动就漂)，
+    # 当阻塞门用就是拿环境噪声当回归信号；它仍会跑、仍会把每条失败写成 ::error::，
+    # 只是不许把整条流水线拉红。
+    continue-on-error: ${{ matrix.category == 'gui' }}
     defaults:
       run:
         shell: pwsh
@@ -441,40 +446,40 @@ jobs:
           # 判据只认第二轮（见 ci_t0 侧同一条记录）。
           - category: vbp
             shard: 1
-            shardArgs: "-VbpShard 1 -VbpShardTotal 12"
+            shardArgs: "-VbpShard 1 -VbpShardTotal 12 -SkipGui"
           - category: vbp
             shard: 2
-            shardArgs: "-VbpShard 2 -VbpShardTotal 12"
+            shardArgs: "-VbpShard 2 -VbpShardTotal 12 -SkipGui"
           - category: vbp
             shard: 3
-            shardArgs: "-VbpShard 3 -VbpShardTotal 12"
+            shardArgs: "-VbpShard 3 -VbpShardTotal 12 -SkipGui"
           - category: vbp
             shard: 4
-            shardArgs: "-VbpShard 4 -VbpShardTotal 12"
+            shardArgs: "-VbpShard 4 -VbpShardTotal 12 -SkipGui"
           - category: vbp
             shard: 5
-            shardArgs: "-VbpShard 5 -VbpShardTotal 12"
+            shardArgs: "-VbpShard 5 -VbpShardTotal 12 -SkipGui"
           - category: vbp
             shard: 6
-            shardArgs: "-VbpShard 6 -VbpShardTotal 12"
+            shardArgs: "-VbpShard 6 -VbpShardTotal 12 -SkipGui"
           - category: vbp
             shard: 7
-            shardArgs: "-VbpShard 7 -VbpShardTotal 12"
+            shardArgs: "-VbpShard 7 -VbpShardTotal 12 -SkipGui"
           - category: vbp
             shard: 8
-            shardArgs: "-VbpShard 8 -VbpShardTotal 12"
+            shardArgs: "-VbpShard 8 -VbpShardTotal 12 -SkipGui"
           - category: vbp
             shard: 9
-            shardArgs: "-VbpShard 9 -VbpShardTotal 12"
+            shardArgs: "-VbpShard 9 -VbpShardTotal 12 -SkipGui"
           - category: vbp
             shard: 10
-            shardArgs: "-VbpShard 10 -VbpShardTotal 12"
+            shardArgs: "-VbpShard 10 -VbpShardTotal 12 -SkipGui"
           - category: vbp
             shard: 11
-            shardArgs: "-VbpShard 11 -VbpShardTotal 12"
+            shardArgs: "-VbpShard 11 -VbpShardTotal 12 -SkipGui"
           - category: vbp
             shard: 12
-            shardArgs: "-VbpShard 12 -VbpShardTotal 12"
+            shardArgs: "-VbpShard 12 -VbpShardTotal 12 -SkipGui"
           # compile 拆两格（2026-10-24 第三刀）。读数依据 run 40046664271（vbp 已到 12 片的
           # 那一轮）：vbp 最重降到 191s，而 **Tests (compile) 227s 接手成了新瓶颈** —— 这一格
           # 224s 里的构成是「~100 个静态 census 158s + 10 例真编 17s + 固定开销」，跟名字给人的
@@ -493,6 +498,13 @@ jobs:
           - category: syntax
             shardArgs: ""
           - category: asm
+            shardArgs: ""
+          # 账 #305 工具刀 (2026-11-25, 不占刀号): GUI/像素那一族单独一格，**不阻塞**。
+          # 上面 12 个 vbp 分片都带 -SkipGui (不再调 Invoke-GuiVbpTable、也不计它们
+          # 的格数)，GUI 表只跑在这里；因为 continue-on-error，它红只会红自己。
+          # 为什么不在此小分片: GUI 用例本来就不能同机并行 (抢单实例主窗)、且全表堆在
+          # 一个 runner 上串行，但它是非阻塞格，不占关键路径。
+          - category: gui
             shardArgs: ""
     env:
       C3_VCVARSALL: ""
