@@ -12579,7 +12579,7 @@ Test-Vbp 'b165_byref_byte_cur_date_x86' "$Tests\b165_byref_byte_cur_date\B165Res
 # 账 #305 §11.147 (第一百六十五刀): 属性读当 ByRef 实参的读-改-写。
 # 真 VB6 不递属性本身 (没地址)，而是「拷临时量 → 递地址 → 回来经 Let 写回」。
 # P1/P2 = 同一格连发两次 (每次都该在**已经写回**的值上再走一步)；
-# P8 是反面证人: String 属性暂不开 (临时量要管 BSTR 所有权)，仍按值 ⇒ "ab"。
+# P8 / Q3 从第一百六十七刀 (§11.149) 起是正例了: String 属性也走读-改-写。
 $b166Needles = @(
 "B166-P1=41", "B166-P2=42", "B166-P3=21", "B166-P4=31.5",
 "B166-P5=7", "B166-P6=True", "B166-P7=2020,1,3",
@@ -12587,6 +12587,15 @@ $b166Needles = @(
 "B166-Q1=41", "B166-Q2=31.5", "B166-Q3=abcd", "B166-DONE")
 Test-Vbp 'b166_prop_byref' "$Tests\b166_prop_byref\B166Res.vbp" $b166Needles
 Test-Vbp 'b166_prop_byref_x86' "$Tests\b166_prop_byref\B166Res.vbp" $b166Needles -Arch "x86"
+
+# 账 #305 §11.150 (第一百六十八刀): 带索引的属性读当 ByRef 实参 —— 读-改-写。
+# S1/S2 单索引 (早绑定 / 晚绑定接收者)、S3 两个索引实参、S4 String 档带索引、
+# S5 索引本身是表达式。
+$b168Needles = @(
+"B168-S1=11", "B168-S2=12", "B168-S3=1002",
+"B168-S4=ab!", "B168-S5=31", "B168-DONE")
+Test-Vbp 'b168_indexed_prop_byref' "$Tests\b168_indexed_prop_byref\B168Res.vbp" $b168Needles
+Test-Vbp 'b168_indexed_prop_byref_x86' "$Tests\b168_indexed_prop_byref\B168Res.vbp" $b168Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

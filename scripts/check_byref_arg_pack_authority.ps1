@@ -122,6 +122,12 @@ Expect 'R9 string prop release'    (Count-Pattern $utilC 'vb6_BSTR_Free\(" \+ tm
 Expect 'R9 release field'         (Count-Pattern $stateInc 'std::string release;') 1 '台账多一格'
 Expect 'R9 release emitted'       (Count-Pattern $callCpp 'if \(!pw149\.release\.empty\(\)\) c_\.emitLine\(pw149\.release\);') 1 '放在 102 守卫**外** (跳过调用也得退)'
 Expect 'R9 prop fixture cases' ([regex]::Matches($h, "Test-Vbp 'b166_prop_byref")).Count 2 '两格: x64 + x86'
+# §11.150 (第一百六十八刀): 带索引的属性 —— `b.Slot(2)` 在 AST 上是 IndexOrCallExpr
+# (callee = MemberAccessExpr)。两处都得从 callee 取成员名：主人那一问与晚绑定那一族。
+Expect 'R9 indexed prop recognized' (Count-Pattern $utilC 'ic\.callee->kind == ASTNodeKind::MemberAccessExpr') 2 '主人 + 晚绑定各一处'
+Expect 'R9 index args split'        (Count-Pattern $utilC 'if \(ch == '','' && depth == 0\)') 1 '顶层逗号切 base / 索引实参'
+Expect 'R9 index let order'        (Count-Pattern $utilC 'letFn \+ "\(" \+ baseOnly \+ idxArgs') 1 'Let 的取值形参在最后'
+Expect 'R9 indexed prop fixture'   ([regex]::Matches($h, "Test-Vbp 'b168_indexed_prop_byref")).Count 2 '两格: x64 + x86'
 # §11.148 (第一百六十六刀): 同一句问句给**两个**发射器用 —— 晚绑定实参那一族与早绑定
 # 复合字面量那一族。定义 1 + 声明 1 + 调用 2；登记只许住台账一处，收尾只在语句尾巴。
 Expect 'R9 prop-rw defined once'    (Count-Pattern $utilC '(?m)^bool CCodeGen::comPropReadWriteArg') 1 '定义只许一枚'

@@ -1136,10 +1136,19 @@ bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
     /* 只在语句位置那个窗口里登记: 其他上下文没有“调用之后”这个位置，
      * 登记了也没人发那两行 (⇒ C2065)。 */
     if (!comPropWriteWindow_) return false;
-    if (expr.kind != ASTNodeKind::MemberAccessExpr) return false;
-    auto& ma = static_cast<const MemberAccessExpr&>(expr);
-    if (!ma.object || ma.memberName.empty()) return false;
-    const std::string cls = inferClassTypeOfExpr(*ma.object);
+    /* 账 #305 §11.150 (第一百六十八刀): 属性读可以**带索引**。VB6 在解析阶段不区分数组索引与
+     * 函数调用, `b.Slot(2)` 落的是 IndexOrCallExpr (callee = MemberAccessExpr(b, Slot))，
+     * 所以成员名要从 callee 上取。判据其余各条不变。 */
+    const MemberAccessExpr* ma = nullptr;
+    if (expr.kind == ASTNodeKind::MemberAccessExpr) {
+        ma = &static_cast<const MemberAccessExpr&>(expr);
+    } else if (expr.kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& ic = static_cast<const IndexOrCallExpr&>(expr);
+        if (ic.callee && ic.callee->kind == ASTNodeKind::MemberAccessExpr)
+            ma = &static_cast<const MemberAccessExpr&>(*ic.callee);
+    }
+    if (!ma || !ma->object || ma->memberName.empty()) return false;
+    const std::string cls = inferClassTypeOfExpr(*ma->object);
     if (cls.empty()) return false;
     const size_t pgPos = argText.find("_prop_get_");
     const size_t lpPos = argText.find('(');
@@ -1147,11 +1156,40 @@ bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
         || lpPos == std::string::npos || pgPos > lpPos
         || argText.empty() || argText.back() != ')') return false;
     const std::string base = argText.substr(lpPos + 1, argText.size() - lpPos - 2);
-    if (base.empty() || base.find(',') != std::string::npos
-        || base.find('(') != std::string::npos) return false;
+    if (base.empty()) return false;
+    /* 账 #305 §11.150 (第一百六十八刀): 属性读可以**带索引** (`b.Slot(2)`)。
+     * 于是实参文本里出现顶层逗号 —— 按括号深度切第一枚作 base, 其余原样当索引参数。
+     * base 本身仍只接简单形 (不接括号 / 逗号): 它是 Let 的首参, 再复杂就得先盘算
+     * 侧效与应用次序, 不在这一刀。 */
+    std::vector<std::string> segs;
+    {
+        int depth = 0;
+        size_t start = 0;
+        for (size_t i = 0; i < base.size(); i++) {
+            const char ch = base[i];
+            if (ch == '(' || ch == '[' || ch == '{') depth++;
+            else if (ch == ')' || ch == ']' || ch == '}') depth--;
+            else if (ch == ',' && depth == 0) {
+                segs.push_back(base.substr(start, i - start));
+                start = i + 1;
+            }
+        }
+        if (depth != 0) return false;
+        segs.push_back(base.substr(start));
+    }
+    const std::string baseOnly = segs.front();
+    if (baseOnly.empty() || baseOnly.find('(') != std::string::npos
+        || baseOnly.find(')') != std::string::npos) return false;
+    std::string idxArgs;  // 索引参数原样 (已含前导 ", ")
+    for (size_t i = 1; i < segs.size(); i++) {
+        size_t a = 0, b = segs[i].size();
+        while (a < b && (segs[i][a] == ' ' || segs[i][a] == '\t')) a++;
+        while (b > a && (segs[i][b - 1] == ' ' || segs[i][b - 1] == '\t')) b--;
+        idxArgs += ", " + segs[i].substr(a, b - a);
+    }
     bool hasGet = false, hasLet = false;
     Vb6Type propVt = Vb6Type::Unknown;
-    const std::string memL = Symbol::toLower(ma.memberName);
+    const std::string memL = Symbol::toLower(ma->memberName);
     const std::string clsL = Symbol::toLower(cls);
     if (!symTab_.moduleScope()) return false;
     for (const auto& [k, s] : symTab_.moduleScope()->symbols()) {
@@ -1184,7 +1222,7 @@ bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
     letFn = letFn.substr(0, lpInFn) + "_prop_let_" + letFn.substr(lpInFn + 10);
     comPropWrites_.push_back(ComPropWriteBack{
         mapType(propVt) + " " + tmp + " = " + argText + ";",
-        letFn + "(" + base + ", " + tmp + ");",
+        letFn + "(" + baseOnly + idxArgs + ", " + tmp + ");",
         propVt == Vb6Type::String ? "vb6_BSTR_Free(" + tmp + ");" : std::string()});
     outVt = propVt;
     outVar = tmp;
@@ -1236,8 +1274,19 @@ std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText,
         }
         std::string clsField;  // 非空 = 宿主类名 (成员那两问之一已命中)
         Vb6Type fieldVt = Vb6Type::Unknown;
+        /* 账 #305 §11.150 (第一百六十八刀): `b.Slot(2)` 落的是 IndexOrCallExpr
+         * (callee = MemberAccessExpr)，属性那一问也得认这形 —— 否则带索引的属性读
+         * 一个都进不来。 */
+        const MemberAccessExpr* maP = nullptr;
         if (expr.kind == ASTNodeKind::MemberAccessExpr) {
-            auto& ma = static_cast<const MemberAccessExpr&>(expr);
+            maP = &static_cast<const MemberAccessExpr&>(expr);
+        } else if (expr.kind == ASTNodeKind::IndexOrCallExpr) {
+            auto& ic = static_cast<const IndexOrCallExpr&>(expr);
+            if (ic.callee && ic.callee->kind == ASTNodeKind::MemberAccessExpr)
+                maP = &static_cast<const MemberAccessExpr&>(*ic.callee);
+        }
+        if (maP) {
+            const MemberAccessExpr& ma = *maP;
             const std::string cls = ma.object ? inferClassTypeOfExpr(*ma.object) : std::string();
             /* 账 #305 §11.147 (第一百六十五刀): **属性读**当 ByRef 实参 —— 读-改-写。
              * 改前 `o.Inc box.Tag` 落到下面属性那一格交回空串 ⇒ 按值打包，体里的
