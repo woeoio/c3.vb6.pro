@@ -9499,3 +9499,76 @@ B166-Q3=abcd   早绑定 String 属性（改前 ab）
 - 早绑定那一族的**型不一致**一格（Long 属性接 Integer 形参）仍按值。
 - 上几刀留下的：货币数组元素、ByRef 布尔未归一、无 typelib 的外部 VB6 DLL 收 ByRef
   String 仍按值、Boolean 数组元素拼串折 `-1`。
+
+## §11.150（第一百六十八刀）带索引的属性读也走读-改-写
+
+### 一、缺口
+
+§11.147/148/149 三刀把「属性读当 ByRef 实参」的读-改-写补给了**无索引**的属性（数值五档、
+`Byte`/`Date`、`String`）。带索引那一形一个都进不来，两处各卡一刀：
+
+1. 判据第一关只认 `ASTNodeKind::MemberAccessExpr`，而 `b.Slot(2)` 在 AST 上是
+   `IndexOrCallExpr`（`callee` = `MemberAccessExpr(b, Slot)`）—— VB6 在解析阶段不区分
+   数组索引与函数调用。
+2. 实参文本的 base 一律拒绝含逗号，而 `vb6_B168Box_prop_get_Slot(b, 2)` 里就有顶层逗号。
+
+改前两族都按值发，写回落空（`.temp/k168/r0.c`）：
+
+```c
+vb6_B168Box_Bump(b, (&(int32_t){vb6_B168Box_prop_get_Slot(b, 2)}));
+vb6_ComCall(o, L"Bump", (void*[]){vb6_ComPackInt(vb6_ComCall(o, L"Slot", ...))}, 1)
+```
+
+### 二、改法
+
+- 成员名从 `callee` 上取：`comPropReadWriteArg`（唯一那位主人）与 `comByRefArgExpr`
+  的属性那一支都认 `IndexOrCallExpr` 这一形。
+- 实参文本按**括号深度**切：第一枚作 base（base 仍只接简单形 —— 不含括号，它是 Let 的
+  首参），其余原样当索引实参；Let 的调用形是 `let(base, <索引...>, tmp)`，取值形参在
+  最后，与 VB6 `Property Let` 的形参序一致。
+
+发码（早绑定 / 晚绑定各一枚）：
+
+```c
+int32_t _pb2 = vb6_B168Box_prop_get_Slot(b, 2);
+vb6_B168Box_Bump(b, &_pb2);
+vb6_B168Box_prop_let_Slot(b, 2, _pb2);
+---
+int32_t _pb3 = vb6_B168Box_prop_get_Slot(b, 2);
+vb6_ComVarFree((void*)vb6_ComCall(o, L"Bump", (void*[]){vb6_ComPackIntRef(&_pb3)}, 1));
+vb6_B168Box_prop_let_Slot(b, 2, _pb3);
+```
+
+### 三、读数
+
+`tests/b168_indexed_prop_byref`（x64 = x86 逐行相同）：
+
+```
+B168-S1=11     单索引，早绑定（改前 10）
+B168-S2=12     单索引，晚绑定接收者 + 带型属性读
+B168-S3=1002   两个索引实参（Pair 的 Let 取值形参在最后）
+B168-S4=ab!    String 档带索引（临时量的 BSTR 照旧归调用方退）
+B168-S5=31     索引本身是表达式（1 + 1 + 1）
+```
+
+### 四、账与门
+
+- `check_byref_arg_pack_authority.ps1`：R9 新增四条 —— `indexed prop recognized = 2`
+  （主人 + 晚绑定各一处）、`index args split = 1`、`index let order = 1`、
+  `indexed prop fixture = 2`。
+- 九门 9/9；CI 22/22（run 45563322745）。
+- manifest：corpus 842 → 844（新增夹具两行，按路径序中插在 `b168_cvf` 之后），其余
+  838 行逐字节相同。
+
+### 五、仍在册的相邻欠项
+
+- **索引实参会被求值两次**（Get 一次、Let 一次）：`b.Bump b.Slot(Inc())` 那种带副作用的
+  索引式与真 VB6 未比对，先按这条口径记着。
+- **晚绑定接收者上的属性读**：`o.Bump o.Slot(2)` 里 `o.Slot(2)` 本身走 `vb6_ComCall`，
+  不是 `_prop_get_` 文本，进不了这一族（要先把晚绑定读落进一枚可写回的 Variant 槽）。
+- **Currency 属性**：与货币数组元素同一张欠项（`double` 与 `int64_t` 表示不一致）。
+- **表达式上下文里的属性读实参**（`x = o.F(b.Tag)` / `MsgBox o.F(b.Tag)`）—— 没有
+  「调用之后」这个位置，需要先有一条「表达式内调用之后」的发射道。
+- 早绑定那一族的**型不一致**一格（Long 属性接 Integer 形参）仍按值。
+- 上几刀留下的：货币数组元素、ByRef 布尔未归一、无 typelib 的外部 VB6 DLL 收 ByRef
+  String 仍按值、Boolean 数组元素拼串折 `-1`。
