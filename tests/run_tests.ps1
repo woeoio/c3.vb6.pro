@@ -12597,10 +12597,10 @@ $b168Needles = @(
 Test-Vbp 'b168_indexed_prop_byref' "$Tests\b168_indexed_prop_byref\B168Res.vbp" $b168Needles
 Test-Vbp 'b168_indexed_prop_byref_x86' "$Tests\b168_indexed_prop_byref\B168Res.vbp" $b168Needles -Arch "x86"
 
-# 账 #305 §11.151 (第一百六十九刀): With 块里的属性读 (改前一个都不成立) +
-# 早绑定型不一致那一格不得「假登记」(W2 是证人: 仍按值)。
+# 账 #305 §11.151 (第一百六十九刀): With 块里的属性读 (改前一个都不成立)。
+# W2 = 型不一致那一格，§11.152 (第一百七十刀) 之后也换算写回了 ⇒ 41（本刀之前是 40）。
 $b169Needles = @(
-"B169-W1=41", "B169-W2=40", "B169-W3=41",
+"B169-W1=41", "B169-W2=41", "B169-W3=41",
 "B169-W4=ab!", "B169-W5=11", "B169-DONE")
 Test-Vbp 'b169_with_prop_byref' "$Tests\b169_with_prop_byref\B169Res.vbp" $b169Needles
 Test-Vbp 'b169_with_prop_byref_x86' "$Tests\b169_with_prop_byref\B169Res.vbp" $b169Needles -Arch "x86"
