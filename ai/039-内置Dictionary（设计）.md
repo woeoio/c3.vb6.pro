@@ -10247,6 +10247,77 @@ R3 把它数成第 11 枚入口（判据要 10）—— 只改注释措辞，判
 5. **C3 解析 `f -1.234567, "x"`** 会当成减法（真 VB6 接受这一形）—— 本夹具用括号
    绕开，解析那一格单列。
 
+## §11.161（第一百七十八刀）Currency 变量装进 Variant 是 VT_CY
+
+§11.159 的在册④（探针 E4 `type=5`）这一刀单开。真机探针 `.temp/k178p`
+（P178.bas，编成 exe 后写文件）:
+
+```
+P1  v = c（局部 Currency）             -> type=6 Currency str=10.1235
+P12 ShowV "P12", c（ByVal Variant）    -> type=6
+P13 v = m_c（模块级 Currency）          -> type=6
+P14 ShowV "P14", m_c                   -> type=6
+P6/P7/P8 Double 变量/字面量            -> type=5（反向证人）
+P9  v = 1（Integer 字面量）            -> type=2
+P11 TypeName(c)/VarType(c)             -> Currency|6
+```
+
+### 病征
+
+Currency 在 C 侧就是 `double` —— `inferExprType` 与 `_Generic` 都只能答 VT_R8。
+改前 C3 的 P1 打 `5|Double`、P11 打 `Double|5`。CCur()（P2）与返回 Currency 的
+函数（P3）本来就对：那条路上的类型推断答的是 Currency。
+
+### 改法：一位主人，两条装箱站
+
+```cpp
+std::string CCodeGen::currencyVariantBox(Expr* expr, const std::string& cExpr) const;
+```
+
+判据与赋值站/实参折数站**同一张表** `knownCurrencyVars_`（不再另立一张），只认**裸名**:
+
+- Variant 赋值站：`wrapVariantValue` 里先于「按 C 类型」的那张档位表（否则 Identifier
+  先被 `case Double` 拿走，永远到不了 `boxToVariant`）；
+- 实参站：`boxToVariant` 里先于 `_Generic`；
+- 已带 `vb6_VariantCur(` / `vb6_VariantFromValue(` 前缀不重复装。
+
+P11 的直问 `TypeName(c)` / `VarType(c)` 也走实参站，因此一并答 Currency（夹具已钉）。
+
+### 夹具 `tests/b181_currency_variant`
+
+11 格 × 4 列（`VarType | TypeName | CStr | CStr(CLng(x*10000))`）:
+
+- P1 局部变量、P12 ByVal Variant 实参、P13/P14 模块级（本刀修的四格）;
+- P2/P3 控制（改前就对，钉住不许回退）;
+- P6/P7/P8 Double 反向证人、P9 Integer 字面量;
+- P11 `TypeName(c)/VarType(c)`。
+
+x64 与 x86 实跑，逐字等于真 VB6 的读数。
+
+### 门
+
+`check_currency_round_station.ps1` 扩到 **R1..R14**：出口定义/声明各 1、只问
+`knownCurrencyVars_`、只认裸名、两条装箱站各 1、夹具两文件、runner 两格、P6 反向
+证人、**不许把运算格与数组格钉进来**（那两条腿仍在册，钉进来就把错值锁死了）。
+十门 10/10。
+
+### 清单
+
+864 行（+2 = 新夹具两份输入）。**存量 862 条发码零变化** —— 语料里没有别的
+「Currency 变量装 Variant」形状，因此这一刀没有回归面。
+
+### 在册
+
+1. **Currency 运算结果**：`v = c * 1` / `c + 0` 仍是 VT_R8（VB6 给 6）—— 要先把
+   表达式类型推断答出 Currency（与 §11.159 在册①「每步都圈」同一条腿）;
+2. **Currency 数组元素**：元素槽是未放大的 `int64_t`，装箱成 VT_I8(20) 且值已被
+   截掉小数（在册②）;
+3. **成员与 UDT 字段**：`me->c` 这一形未走本出口（helper 只认裸名）;
+4. **晚绑定 COM 实参站**：形参型不可知（同 §11.160）;
+5. **`VarType(c)` 的窄档**：本刀让它经装箱站答 6；若将来发现某条路绕过了装箱站，
+   要单开一格。
+
+
 
 
 
