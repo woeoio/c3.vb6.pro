@@ -12758,6 +12758,17 @@ $b182Needles = @(
 "V1=6|Currency", "V2=6|Currency", "B182-DONE")
 Test-Vbp 'b182_currency_arith' "$Tests\b182_currency_arith\B182Res.vbp" $b182Needles
 Test-Vbp 'b182_currency_arith_x86' "$Tests\b182_currency_arith\B182Res.vbp" $b182Needles -Arch "x86"
+
+# 账 #305 §11.163 (第一百八十刀): Currency 中间量每一步都圈。
+# T4/T8 是判据格 (改前 20.2471 / 10.1236); T1/T3/T5/T6 是 Double 段的反向证人。
+$b183Needles = @(
+"T1=5|Double|20.2490247|202490", "T2=6|Currency|10.1235|101235",
+"T3=5|Double|10.124006175|101240", "T4=6|Currency|20.247|202470",
+"T5=5|Double|10.12451235|101245", "T6=5|Double|10.1235|101235",
+"T7=6|Currency|20.249|202490", "T8=6|Currency|10.1235|101235",
+"B183-DONE")
+Test-Vbp 'b183_currency_step' "$Tests\b183_currency_step\B183Res.vbp" $b183Needles
+Test-Vbp 'b183_currency_step_x86' "$Tests\b183_currency_step\B183Res.vbp" $b183Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

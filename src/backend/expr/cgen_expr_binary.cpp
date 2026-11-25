@@ -1264,6 +1264,18 @@ void CCodeGen::visit(BinaryExpr& node) {
         // C 侧裸发会把两侧提成 double（整数操作数也提），多出来的尾数就是与 VB6 的差。
         // 两侧都显式落回 float，结果再收一次 —— 与 vb6_CStrSingle / VT_R4 装籍同一档。
         lastExpr_ = "(float)((float)(" + left + ") " + op + " (float)(" + right + "))";
+    } else if ((node.op == BinaryOp::Add || node.op == BinaryOp::Sub
+                || node.op == BinaryOp::Mul)
+               && inferExprType(node) == Vb6Type::Currency) {
+        // 账 #305 §11.163 (第一百八十刀): VB6 的 Currency 中间量**每一步都圈**到 4 位。
+        // 真机 P183 (.temp/k180p):
+        //   T4 `(c + 0.00004) * 2`  -> 20.247   （不圈中间量我们发 20.2471）
+        //   T8 `c + 0.00004 + 0.00004` -> 10.1235（我们发 10.1236）
+        // 而 Double 段的链不圈 (T1/T3/T5/T6 两边相同)。所以判据只看**本节点的结果类型**:
+        // 只有 inferExprType(node)==Currency 的 + - * 才套一次 vb6_CCur; Div/Pow 恒
+        // Double, 不进这一支。折数仍只问 RTL 那一位主人 (不手写 round)。
+        // 嵌套时内层先圈, 外层再圈 —— 与 VB6 逐步圈的可观察结果一致 (幂等)。
+        lastExpr_ = "vb6_CCur((" + left + " " + op + " " + right + "))";
     } else {
         lastExpr_ = "(" + left + " " + op + " " + right + ")";
     }

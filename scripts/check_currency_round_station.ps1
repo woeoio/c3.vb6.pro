@@ -405,6 +405,44 @@ else {
     }
     if ($main15 -notmatch 'B182-DONE') { $bad += 'R15 fixture sentinel B182-DONE missing' }
 }
+$bin16 = Read-File 'src/backend/expr/cgen_expr_binary.cpp'
+if ($null -eq $bin16) { $bad += 'R16 cgen_expr_binary.cpp not found' }
+else {
+    $iBin16 = $bin16.IndexOf('inferExprType(node) == Vb6Type::Currency')
+    if ($iBin16 -lt 0) {
+        $bad += 'R16 the binary emit must round a Currency-typed + - * step'
+    }
+    else {
+        $iWin16 = [Math]::Max(0, $iBin16 - 260)
+        $win16 = $bin16.Substring($iWin16, [Math]::Min(900, $bin16.Length - $iWin16))
+        if ($win16 -notmatch 'vb6_CCur\(') {
+            $bad += 'R16 the step must fold through vb6_CCur (no second round formula)'
+        }
+        if ($win16 -notmatch 'BinaryOp::Add' -or $win16 -notmatch 'BinaryOp::Mul') {
+            $bad += 'R16 the step must cover + - * (Div/Pow are always Double)'
+        }
+    }
+    if ($bin16.Contains('vb6_CCur((" + left + " " + op + " " + right + "))') -eq $false) {
+        $bad += 'R16 the fold shape is missing (vb6_CCur((left op right)))'
+    }
+}
+foreach ($f in @('B183Main.bas', 'B183Res.vbp')) {
+    $p = Join-Path $repo ('tests/b183_currency_step/' + $f)
+    if (-not (Test-Path -LiteralPath $p)) { $bad += ('R16 fixture file missing: ' + $f) }
+}
+if ($null -ne $run7) {
+    $n = ([regex]::Matches($run7, "Test-Vbp 'b183_currency_step")).Count
+    if ($n -ne 2) { $bad += ('R16 b183 fixture cells = ' + $n + ', want 2 (x64 + x86)') }
+}
+$main16 = Read-File 'tests/b183_currency_step/B183Main.bas'
+if ($null -eq $main16) { $bad += 'R16 B183Main.bas not found' }
+else {
+    foreach ($w in @('T4', 'T8', 'T3', 'T5')) {
+        if ($main16 -notmatch ('"' + $w + '"')) {
+            $bad += ('R16 witness cell ' + $w + ' missing (step vs Double-side)')
+        }
+    }
+}
 if ($bad.Count -gt 0) {
     Write-Host ('FAIL currency_round_station: ' + ($bad -join ' | '))
     exit 1
@@ -412,5 +450,6 @@ if ($bad.Count -gt 0) {
 Write-Host '  R13 ByVal Currency call-site station (one owner, both arg paths, no ByRef fold) OK'
 Write-Host '  R14 Currency variable identity in Variant (VT_CY, both box stations) OK'
 Write-Host '  R15 Currency arithmetic identity (+ - absorb, * with float is Double, / is Double) OK'
-Write-Host 'PASS currency_round_station (R1..R15)'
+Write-Host '  R16 Currency intermediate rounds at every step (single fold exit) OK'
+Write-Host 'PASS currency_round_station (R1..R16)'
 exit 0

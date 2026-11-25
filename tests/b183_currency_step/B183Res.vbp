@@ -1,0 +1,4 @@
+Type=Exe
+Module=B183Main; B183Main.bas
+Startup="Sub Main"
+ExeName32="B183Res.exe"
