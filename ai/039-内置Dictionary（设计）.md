@@ -9572,3 +9572,84 @@ B168-S5=31     索引本身是表达式（1 + 1 + 1）
 - 早绑定那一族的**型不一致**一格（Long 属性接 Integer 形参）仍按值。
 - 上几刀留下的：货币数组元素、ByRef 布尔未归一、无 typelib 的外部 VB6 DLL 收 ByRef
   String 仍按值、Boolean 数组元素拼串折 `-1`。
+
+## §11.151（第一百六十九刀）With 块里的属性读也走读-改-写；型不一致不再「假登记」
+
+这一刀两件，都是上一刀之后逐形探出来的。
+
+### 一、With 块：改前一个都不成立
+
+```vb
+With b
+    .Inc .Tag
+End With
+```
+
+改前发的是
+
+```c
+vb6_B169Box_Inc((void*)_vb6_with_0, (&(int32_t){vb6_B169Box_prop_get_Tag(_vb6_with_0)}));
+```
+
+写回落空。两处各卡一刀：
+
+1. `.Tag` 在 AST 上是 `WithMemberExpr` —— 只有成员名，没有 object 可推型；而这一问只认
+   `MemberAccessExpr`。带索引的 `.Slot(2)` 的 `callee` 也是 `WithMemberExpr`。
+2. base 那一段被「不许含括号」一票否决：`With b` 里的 `.Slot(2)` 的 base 是
+   `(void*)_vb6_with_6`（带一层强转）。
+
+改法：
+
+- **主人自己认形**：`MemberAccessExpr` / `IndexOrCallExpr`（callee 为 `MemberAccessExpr`
+  或 `WithMemberExpr`）/ `WithMemberExpr` 三形都收，成员名从各自那一格取。
+- **类名三级退**：能推型就推型 → 推不出问 `withObjectInfoStack_`（With 主体的
+  `className`）→ 再退一步从发码文本 `vb6_<Cls>_prop_get_<M>` 里取名字。**型依旧问声明侧**
+  （§11.145 那条口径没变：名字只是定位，档来自符号表）。
+- **base 放宽只放一种**：一个括号包着的强转 + 后面紧跟不带括号的剩余文本。其余仍拒。
+
+读数（`tests/b169_with_prop_byref`，x64 = x86）：`W1=41`（改前 40）、`W4=ab!`（改前 ab）、
+`W5=11`（With + 带索引，改前 10）。
+
+### 二、早绑定型不一致那一格是「假登记」
+
+`b.IncI b.Tag`（Long 属性接 Integer 形参）改前发：
+
+```c
+int32_t _pb1 = vb6_B169Box_prop_get_Tag(b);
+vb6_B169Box_IncI(b, (&(int16_t){vb6_B169Box_prop_get_Tag(b)}));
+vb6_B169Box_prop_let_Tag(b, _pb1);      /* ← 把未动的值又写了一遍 */
+```
+
+台账先登记、调用点随后发现自己用不上（型不一致只接同型），于是临时量成了孤儿：被调方的
+写回落在复合字面量上丢掉，属性却被 Let 白叫一次（有副作用的 Let 就会现形）。
+
+改法：`comPropReadWriteArg` 多一个 `wantCType`，非空即「调用点已经定了形参 C 型」，
+型不一致**当面交回 false**、一个字都不登记；早绑定那一路把 `cType` 递进去。
+
+型不一致这一格本身仍按值（`W2=40` 是证人）—— 要开得先有「按形参型造临时量 + 两向换算」
+的账（VB6 在那里是「拷临时量 + 换算」，不是拒绝）。
+
+### 三、账与门
+
+- `check_byref_arg_pack_authority.ps1` R9 新增四条：`with-prop asks stack = 1`、
+  `want-ctype gate = 1`、`want-ctype from caller = 1`、`with-prop fixture = 2`。
+- 九门 9/9；CI 22/22（run 45570526384）。
+- manifest：corpus 844 → 846（新夹具两行，按路径序插在 `b169_cfw` 之后）；存量移动 3 行
+  —— `VBFlexGridDemo.vbp`（2 处 `WriteProperty` 的 `Enabled` / `OLEDropMode`）、
+  `ucSegmentedControl/SegmentedControl.vbp`（With 里 `ItemCaption`/`ItemValue`/
+  `ItemToolTipText`/`ItemTag`/`ItemDisabled`/`ItemDropDown`）、
+  `ucTreeView/Proyecto1.vbp`（`OLEDropMode` 一处）。三份都用「停工本机重编旧源码」作基线
+  A/B 逐行对过：抹掉临时量编号后差异只剩那几组
+  `<C型> _pbN = …_prop_get_…; <call 递 &_pbN>; …_prop_let_…; [vb6_BSTR_Free(_pbN);]`。
+
+### 四、仍在册的相邻欠项
+
+- **型不一致那一格**（Long 属性接 Integer 形参）：按形参型造临时量 + 两向换算，未开。
+- **索引实参求值两次**（Get 一次、Let 一次）：带副作用的索引式与真 VB6 未比对。
+- **晚绑定接收者上的属性读**：`o.Bump o.Slot(2)` 里 `o.Slot(2)` 走 `vb6_ComCall`，不是
+  `_prop_get_` 文本 —— 要先把晚绑定读落进一枚可写回的 Variant 槽。
+- **Currency 属性 / 货币数组元素**：`double` 与 `int64_t` 表示不一致，同一张欠项。
+- **表达式上下文里的属性读实参**（`x = o.F(b.Tag)` / `MsgBox o.F(b.Tag)`）—— 没有
+  「调用之后」这个位置，需要先有一条「表达式内调用之后」的发射道。
+- 上几刀留下的：ByRef 布尔未归一、无 typelib 的外部 VB6 DLL 收 ByRef String 仍按值、
+  Boolean 数组元素拼串折 `-1`。
