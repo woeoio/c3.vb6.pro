@@ -207,6 +207,41 @@ static int vb6_fmtIsDateFormat(BSTR fmt, int allowWQT) {
     int n = fmt ? SysStringLen(fmt) : 0;
     if (n <= 0) return 0;
     if (vb6_fmtIsNamedFormat(fmt)) return 0;   // 命名格式走既有分支
+
+    // === §11.168 (第一百八十五刀): 数值值这一档先判「谁先出现」===
+    // 真机读数 (.temp/k184p/P200~P203): 一个数值占位符 (0/#) 出现在字母**之前**时，
+    // 整串就是数值格式，后面的字母全部是字面量:
+    //   Format(1234, "#### Byte")  -> "1234 Byt"    (尾部 e 是指数记号，被吞)
+    //   Format(1234, "#,# bytes") -> "1,234 bytes"
+    //   Format(1234, "0 KB")      -> "1024 KB"
+    //   Format(1234, "#,##0 Settings") -> "1,234 Settings"
+    //   Format(1234, "0 AM")      -> "1234 AM"    (上午/下午记号也不算)
+    //   Format(1234, "0.00 d")    -> "1234.00 d"
+    // 反过来字母先出现就走了日期档:
+    //   Format(1234, "dd 0")      -> "18 0"      Format(1234, "dd0") -> "180"
+    //   Format(1234, "yyyy 0")    -> "1903 0"     Format(1234, "hh:mm 0") -> "00:00 0"
+    // 唯一的强信号: 冒号 —— 真机 Format(1234, "00:00") = "12:34"、"0 0:0" = "12 3:4"，
+    // 即使 0 先出现也走时间档。
+    if (!allowWQT) {
+        int firstNum = -1, firstStrong = -1, hasColon = 0;
+        int iq0 = 0;
+        for (int i = 0; i < n; i++) {
+            wchar_t c = fmt[i];
+            if (c == L'"') { iq0 = !iq0; continue; }
+            if (iq0) continue;
+            if (c == L'\\') { i++; continue; }
+            if (c == L':') hasColon = 1;
+            if ((c == L'0' || c == L'#') && firstNum < 0) firstNum = i;
+            if (firstStrong >= 0) continue;
+            wchar_t lc0 = towlower(c);
+            if (lc0 == L'y' || lc0 == L'd' || lc0 == L'h'
+                || lc0 == L'm' || lc0 == L's' || lc0 == L'n') firstStrong = i;
+            else if (vb6_fmtAmPmLenAt(fmt, i, n) != 0) firstStrong = i;
+        }
+        if (hasColon) return 1;
+        if (firstNum >= 0 && (firstStrong < 0 || firstNum < firstStrong)) return 0;
+    }
+
     if (vb6_fmtHasAmPm(fmt)) return 1;   // 上午/下午记号也是日期习惯—— 一枚「A/P」串也得进日期分支 (账 #426)
     int hasY = 0, hasD = 0, hasH = 0, hasM = 0, hasS = 0, hasN = 0;
     for (int i = 0; i < n; i++) {
@@ -221,6 +256,8 @@ static int vb6_fmtIsDateFormat(BSTR fmt, int allowWQT) {
     }
     if (hasY || hasD || hasH || hasS || hasN || hasM) return 1;
     // 数值占位符闸: 串里出现 0 或 # 就是数值档的写法, 数值臂那条不许被新令牌拖进日期臂。
+    // (§11.168 之后这一闸已在上面「谁先出现」那道之后，保留作为 allowWQT=1 与
+    //  字母先出现那两路的兜底)
     if (!allowWQT) {
         for (int i = 0; i < n; i++)
             if (fmt[i] == L'0' || fmt[i] == L'#') return 0;

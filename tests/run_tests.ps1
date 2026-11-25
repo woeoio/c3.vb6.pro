@@ -12820,6 +12820,22 @@ $b192Needles = @(
 "B192-DONE")
 Test-Vbp 'b192_format_literal' "$Tests\b192_format_literal\B192Res.vbp" $b192Needles
 Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b192Needles -Arch "x86"
+
+    # 账 #305 §11.168 (第一百八十五刀): 「数值 + 单位文本」——谁先进格式串, 谁赢。
+    # 真机 .temp/k184p (P200/P201/P202/P203.bas) 逐格。语料那族裸写单位 (#,##0 Twip /
+    # Settings / T0 / #### Byte / #,# bytes / 0 KB) 改前全被日期臂拿去交乱码。
+    # U16..U20 是反向证人: 字母先出现、或串里有冒号时, 日期档的既有读法不许动。
+    $b193Needles = @(
+    "U1=[1234 Byt]", "U2=[1,234 bytes]", "U3=[1,234 Twip]",
+    "U4=[1024 KB]", "U5=[1,234 Settings]", "U6=[1234 AM]",
+    "U7=[1234 A/P]", "U8=[1234.00 d]", "U9=[1234 mm]",
+    "U10=[1234 Bytes]", "U11=[1234 ]", "U12=[1234 e]",
+    "U13=[1234e]", "U14=[1234 ttttt]", "U15=[1234 ww]",
+    "U16=[18 0]", "U17=[180]", "U18=[1903 0]",
+    "U19=[00:00]", "U20=[05]",
+    "B193-DONE")
+    Test-Vbp 'b193_numeric_unit_text' "$Tests\b193_numeric_unit_text\B193Res.vbp" $b193Needles
+    Test-Vbp 'b193_numeric_unit_text_x86' "$Tests\b193_numeric_unit_text\B193Res.vbp" $b193Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

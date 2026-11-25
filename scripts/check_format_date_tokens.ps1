@@ -65,7 +65,7 @@ Want 'R1 bare call' (C 'vb6_fmtIsDateFormat(fmt)' $BOTH) 0 '不许有第三种�
 
 # ---- R2 数值臂那道闸 + 三枚令牌的游程规则 ----
 Want 'R2 placeholder guard' (C ('if (fmt[i] == L' + $SQ + '0' + $SQ + ' || fmt[i] == L' + $SQ + '#' + $SQ + ') return 0;') $F) 1 '数值占位符闸只许一处'
-Want 'R2 allowWQT branch' (C 'if (!allowWQT) {' $F) 1 '那道闸挂在 allowWQT 这一问后面'
+Want 'R2 allowWQT branch' (C 'if (!allowWQT) {' $F) 2 '两道闸都挂在 allowWQT 这一问后面: 第一道是 §11.168 的「谁先进格式串」判别 (0/# 先出现 ⇒ 数值档), 第二道是下面那枚占位符闸'
 Want 'R2 w-or-q' (C ('if (lc == L' + $SQ + 'w' + $SQ + ' || lc == L' + $SQ + 'q' + $SQ + ') return 1;') $F) 1 'w / q 认单枚: 单枚 w 一视同仁会吃掉语料里 Twip 那 3 处, 那道伤靠下面 R2 的数值占位符闸挡住'
 Want 'R2 t' (C ('if (lc == L' + $SQ + 't' + $SQ + ' && j - i >= 5) return 1;') $F) 1 't 只认五连 ttttt; 单枚 t 必须是字面量 (ISO 串里那枚 T)'
 

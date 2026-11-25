@@ -251,6 +251,39 @@ if (Test-Path -LiteralPath $runSrcFmt) {
     }
 }
 
+# ---- R14: 「谁先进格式串, 谁赢」与区末 e 记号 (§11.168 第一百八十五刀) ----
+# 判据 (真机 P200~P203): 0/# 先出现 ⇒ 数值档 (字母全是字面量); 字母先出现或串里有冒号
+# ⇒ 日期档 (反向证人 U16..U20)。另: 区末那枚 e/E 算指数记号 (U1 = "1234 Byt")。
+$fmtCPath = Join-Path $Root 'src/rtl/core/vb6rtl/vb6rtl_format.c'
+$fmtC = $null
+if (Test-Path -LiteralPath $fmtCPath) { $fmtC = Get-Content -LiteralPath $fmtCPath -Raw -Encoding UTF8 }
+if ($null -eq $fmtC) { $viol += 'R14 找不到 vb6rtl_format.c' }
+else {
+    if ($fmtC -notmatch '§11\.168') { $viol += 'R14 「谁先出现」那道没有登记 (§11.168 段标缺)' }
+    foreach ($t in @('firstNum', 'firstStrong', 'hasColon')) {
+        if ($fmtC -notmatch $t) { $viol += ('R14 判别缺 ' + $t) }
+    }
+    if ($fmtC -notmatch 'if \(firstNum >= 0 && \(firstStrong < 0 \|\| firstNum < firstStrong\)\) return 0;') {
+        $viol += 'R14 数值优先的判据丢了 (0/# 先出现时未回 0)'
+    }
+}
+if ($null -ne $tailSrc) {
+    if ($tailSrc -notmatch "§11\.168") { $viol += 'R14 区末 e 记号没有登记 (§11.168 段标缺)' }
+    if ($tailSrc -notmatch "i == secLen - 1") { $viol += 'R14 区末 e/E 记号的判据丢了' }
+}
+if (Test-Path -LiteralPath $runSrcFmt) {
+    $unitCells = ([regex]::Matches($runTxt, "Test-Vbp 'b193_numeric_unit_text")).Count
+    if ($unitCells -ne 2) { $viol += ('R14 b193 夹具格数 = ' + $unitCells + ', 要 2 (x64 + x86)') }
+    $unitMain = Join-Path $Root 'tests/b193_numeric_unit_text/B193Main.bas'
+    if (-not (Test-Path -LiteralPath $unitMain)) { $viol += 'R14 夹具 B193Main.bas 不在' }
+    else {
+        $unitTxt = Get-Content -LiteralPath $unitMain -Raw -Encoding UTF8
+        foreach ($w in @('U1', 'U16', 'U19')) {
+            if ($unitTxt -notmatch ('"' + $w + '"')) { $viol += ('R14 夹具缺证人 ' + $w) }
+        }
+    }
+}
+
 Write-Host ('census: table=' + $tableNames.Count + ' rtlSlot=' + $rtlSlot.Keys.Count +
             ' rtlPtr=' + $rtlPtr.Keys.Count + ' rtlMacro=' + $rtlMacro.Keys.Count +
             ' emittedNames=' + $emitted.Keys.Count +
@@ -262,6 +295,6 @@ if ($viol.Count -gt 0) {
     Write-Host ('FAIL builtin_slot_returns: ' + $viol.Count + ' 条违规 —— 修法是把表与 RTL 对账 (补名/撤名), 不是往白名单里加名字; 真要走例外请连带写清理由并重跑 §B146 那把 400 份 A/B')
     exit 1
 }
-Write-Host 'PASS builtin_slot_returns (R1..R13)'
+Write-Host 'PASS builtin_slot_returns (R1..R14)'
 exit 0
 
