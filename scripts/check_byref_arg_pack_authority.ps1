@@ -132,15 +132,22 @@ Expect 'R9 indexed prop fixture'   ([regex]::Matches($h, "Test-Vbp 'b168_indexed
 # withObjectInfoStack_；② 早绑定型不一致不得「假登记」—— 调用点用不上那枚临时量就不许台账里
 # 多出两行 (wantCType 非空即调用点已定型参 C 型)。
 Expect 'R9 with-prop asks stack'   (Count-Pattern $utilC 'wi\.kind == WithObjKind::ClassInstance\) cls = wi\.className;') 1 'With 主体的类名'
-Expect 'R9 want-ctype gate'        (Count-Pattern $utilC 'if \(!wantCType\.empty\(\) && mapType\(propVt\) != wantCType\) return false;') 1 '先算型再登记'
+Expect 'R9 conv skips string'      (Count-Pattern $utilC 'if \(conv152 && propVt == Vb6Type::String\) return false;') 1 'BSTR 不换算'
 Expect 'R9 want-ctype from caller' (Count-Pattern $argEmit 'pvt148, pvar148, cType\)') 1 '早绑定把形参 C 型递进去'
+# §11.152 (第一百七十刀): 型不一致不再拒绝，改成「按形参 C 型造临时量 + 两向换算」。
+# 三处: 判据里算出 conv152 / 声明用形参型 + 换入 / Let 换回。换算梯只住 narrowArgText。
+Expect 'R9 narrow conv decided'   (Count-Pattern $utilC 'const bool conv152 = !wantCType\.empty\(\) && wantCType != propC;') 1 '型不一致 = 换算那一格'
+Expect 'R9 narrow conv decl'      (Count-Pattern $utilC 'narrowArgText\(argText, wantCType, propC\)') 1 '换入'
+Expect 'R9 narrow conv let'       (Count-Pattern $utilC 'narrowArgText\(tmp, propC, wantCType\)') 1 '换回'
+Expect 'R9 narrow ladder'         (Count-Pattern $utilC 'vb6_ChkInt\(\(int32_t\)\(vb6_ChkLong\(vb6_FltToLng\(') 1 '浮点→Integer: 先取整再验界'
+Expect 'R9 narrow fixture'        ([regex]::Matches($h, "Test-Vbp 'b170_prop_byref_narrow")).Count 2 '两格: x64 + x86'
 Expect 'R9 with-prop fixture'      ([regex]::Matches($h, "Test-Vbp 'b169_with_prop_byref")).Count 2 '两格: x64 + x86'
 # §11.148 (第一百六十六刀): 同一句问句给**两个**发射器用 —— 晚绑定实参那一族与早绑定
 # 复合字面量那一族。定义 1 + 声明 1 + 调用 2；登记只许住台账一处，收尾只在语句尾巴。
 Expect 'R9 prop-rw defined once'    (Count-Pattern $utilC '(?m)^bool CCodeGen::comPropReadWriteArg') 1 '定义只许一枚'
 Expect 'R9 prop-rw declared'        (Count-Pattern $helpers 'bool comPropReadWriteArg\(Expr& expr') 1 '声明在 cgen_helpers.inc'
 Expect 'R9 prop-rw two callers'     ((Count-Pattern $utilC 'comPropReadWriteArg\(') + (Count-Pattern $argEmit 'comPropReadWriteArg\(')) 3 '定义 1 + 两个消费点 (晚绑定/早绑定)'
-Expect 'R9 early-bound site'        (Count-Pattern $argEmit 'mapType\(pvt148\) == cType') 1 '早绑定那一族只接同型'
+Expect 'R9 early-bound site'        (Count-Pattern $argEmit 'pvt148, pvar148, cType\)\) \{') 1 '早绑定那一族把形参 C 型递进去 (型不一致也接 —— 主人内部换算)'
 Expect 'R9 statement window open'   (Count-Pattern $callCpp 'comPropWriteWindow_ = true;') 1 '只在语句位置开窗'
 Expect 'R9 statement window close'  (Count-Pattern $callCpp 'comPropWriteWindow_ = false;') 2 'emitExpr 之后 + CallArgScope102'
 Expect 'R5 absent lesion' ([regex]::Matches($h, 'vb6_ComPackInt\(&n\)')).Count 1 '改前那一形只许留在 Absent'

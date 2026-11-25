@@ -1127,8 +1127,38 @@ std::string CCodeGen::comPackExpr(Expr& expr) {
 //   ② 该类的同名成员必须**既有 Get 又有 Let** (只读属性写不回去)；型取 Get 的返回型
 //      (sym->type，与「Function/PropertyGet 读自己的名字走返回槽」同一条口径)；
 //   ③ 打包器要在按引用那一族里 (九档那一张表)。
-// String / Currency 两档暂不开: String 的临时量要管 BSTR 所有权 (get 给的那份谁释放 /
-// Let 收的是拷贝还是转移)，Currency 的 C 档是 double 而 Let 形参未必同宽 —— 两格在册。
+// String 那一档从 §11.149 起已开 (临时量的 BSTR 归调用方退)；Currency 仍不开 (C 档是
+// double 而数组元素那档是 int64_t，表示不一致，在册)。
+//
+// 账 #305 §11.152 (第一百七十刀): wantCType 不再是「合不上就回 false」，而是
+// 「按形参 C 型造临时量 + 两向换算」—— 真 VB6 对型不一致的 ByRef 实参就是拷一枚
+// 形参型的临时量、递它的地址、回来再换算写回属性。
+std::string narrowArgText(const std::string& expr, const std::string& toC,
+                          const std::string& fromC) {
+    if (toC == fromC || toC.empty() || fromC.empty()) return expr;
+    const bool fromFp = (fromC == "float" || fromC == "double");
+    const bool fromI64 = (fromC == "int64_t");
+    if (toC == "int16_t") {
+        if (fromFp)
+            return "vb6_ChkInt((int32_t)(vb6_ChkLong(vb6_FltToLng(" + expr + "))))";
+        if (fromI64)
+            return "vb6_ChkInt((int32_t)(vb6_ChkLong(" + expr + ")))";
+        return "vb6_ChkInt((int32_t)(" + expr + "))";
+    }
+    if (toC == "uint8_t") {
+        if (fromFp)
+            return "vb6_ChkByte((int32_t)(vb6_ChkLong(vb6_FltToLng(" + expr + "))))";
+        if (fromI64)
+            return "vb6_ChkByte((int32_t)(vb6_ChkLong(" + expr + ")))";
+        return "vb6_ChkByte((int32_t)(" + expr + "))";
+    }
+    if (toC == "int32_t") {
+        if (fromFp) return "vb6_ChkLong(vb6_FltToLng(" + expr + "))";
+        return "vb6_ChkLong((int64_t)(" + expr + "))";
+    }
+    return "((" + toC + ")(" + expr + "))";
+}
+
 bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
                                    Vb6Type& outVt, std::string& outVar,
                                    const std::string& wantCType) {
@@ -1257,18 +1287,19 @@ bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
     }
     if (!hasGet || !hasLet) return false;
     /* 账 #305 §11.151 (第一百六十九刀): **先算型再登记**。early-bound 调用点只在自己
-     * 用得上这枚临时量时才能让它登记 —— 否则台账里多出两行「白写一次」:
-     * `int32_t _pb1 = get(); <call 走复合字面量>; let(_pb1);` 把未动的值又写一遍，
-     * 属性若有副作用的 Let 就被白叫一次。wantCType 非空 = 调用点已经定了形参 C 型，
-     * 型不一致就当面交回 false (改前实测 .temp/k169/r0.c 的 L261-263)。
-     * 型不一致那一格本刀仍按值 —— 要开得先有「靠型参型造临时量 + 两向换算」的账。 */
+     * 用得上这枚临时量时才能让它登记 —— 否则台账里多出两行「白写一次」。
+     * 账 §11.152 (第一百七十刀): 型不一致不再拒绝，改成「按形参 C 型造临时量 + 两向
+     * 换算」（真 VB6 对这一格的语义就是如此）。wantCType 为空 = 晚绑定那一路，
+     * 临时量就用属性自己的 C 型（打包器按那个型递）。 */
     /* Currency 仍不开 (宽度: 标量 Currency 的 C 档是 double, 与数组元素那档 int64_t 不是一个
      * 表示 —— 与 §11.146 货币数组元素同一张欠项)。
      * String 从本刀起开 (§11.149), 但要多一行退: prop_get 交回的是新分配的 BSTR
      * (体里是 vb6_BSTR_Assign 拷一份), prop_let 也是拷一份进去 —— 两边都不接手
      * 所有权, 所以这一枚得调用方退, 不退回就是每次调用漏一条串。 */
     if (propVt == Vb6Type::Currency) return false;
-    if (!wantCType.empty() && mapType(propVt) != wantCType) return false;
+    const std::string propC = mapType(propVt);
+    const bool conv152 = !wantCType.empty() && wantCType != propC;
+    if (conv152 && propVt == Vb6Type::String) return false;  // BSTR 不换算
     const std::string packFn = comByRefPackFnForVbType(propVt);
     if (packFn.empty()) return false;
     const std::string tmp = "_pb" + std::to_string(tempCounter_++);
@@ -1276,9 +1307,12 @@ bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
     const size_t lpInFn = letFn.find("_prop_get_");
     if (lpInFn == std::string::npos) return false;
     letFn = letFn.substr(0, lpInFn) + "_prop_let_" + letFn.substr(lpInFn + 10);
+    const std::string declC = conv152 ? wantCType : propC;
+    const std::string declVal = conv152 ? narrowArgText(argText, wantCType, propC) : argText;
+    const std::string setVal = conv152 ? narrowArgText(tmp, propC, wantCType) : tmp;
     comPropWrites_.push_back(ComPropWriteBack{
-        mapType(propVt) + " " + tmp + " = " + argText + ";",
-        letFn + "(" + baseOnly + idxArgs + ", " + tmp + ");",
+        declC + " " + tmp + " = " + declVal + ";",
+        letFn + "(" + baseOnly + idxArgs + ", " + setVal + ");",
         propVt == Vb6Type::String ? "vb6_BSTR_Free(" + tmp + ");" : std::string()});
     outVt = propVt;
     outVar = tmp;

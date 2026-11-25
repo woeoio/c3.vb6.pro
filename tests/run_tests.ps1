@@ -12604,6 +12604,16 @@ $b169Needles = @(
 "B169-W4=ab!", "B169-W5=11", "B169-DONE")
 Test-Vbp 'b169_with_prop_byref' "$Tests\b169_with_prop_byref\B169Res.vbp" $b169Needles
 Test-Vbp 'b169_with_prop_byref_x86' "$Tests\b169_with_prop_byref\B169Res.vbp" $b169Needles -Arch "x86"
+
+# 账 #305 §11.152 (第一百七十刀): 型不一致那一格的换算 (临时量按形参 C 型造 + 两向换算)。
+# T6 用 3.7 而不是 3.2: 把「取整」与「截断」分开 (vb6_FltToLng 折 4 ⇒ 5; 截断会得 4)。
+# T7 是 Currency 证人 (本刀仍按值); 用比较串而不拼值 —— Currency 属性的拼串格式化
+# 另有一个旧病 (按 Long 发, 丢小数), 在册。
+$b170Needles = @(
+"B170-T1=41", "B170-T2=8", "B170-T3=21", "B170-T4=21",
+"B170-T5=2.5", "B170-T6=5", "B170-T7=unchanged", "B170-DONE")
+Test-Vbp 'b170_prop_byref_narrow' "$Tests\b170_prop_byref_narrow\B170Res.vbp" $b170Needles
+Test-Vbp 'b170_prop_byref_narrow_x86' "$Tests\b170_prop_byref_narrow\B170Res.vbp" $b170Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

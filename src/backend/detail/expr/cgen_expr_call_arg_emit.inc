@@ -1948,17 +1948,17 @@
                                  * 被调方的写回落在复合字面量上就没了 (实测 b.Inc b.Tag ⇒ 40)。
                                  * 问句与晚绑定那一族同一处 (comPropReadWriteArg)，登记也进
                                  * 同一张账，两行由 visit(CallStmt) 那条尾巴发。
-                                 * 只接**同型**那一格: 属性型与形参 C 型不一致时 (Long 属性接
-                                 * Integer 形参那种) 仍走下面的复合字面量老路 —— C 侧的隐式
-                                 * 换算本来就在那里做，硬接会改掉换算行为。 */
+                                 * 账 #305 §11.152 (第一百七十刀): 型不一致那一格也接了 ——
+                                 * wantCType 传形参 C 型，陌生自己在内部按「形参型临时量 +
+                                 * 两向换算」发 (真 VB6 对这一格就是拷临时量再换算)，
+                                 * 所以这里不再自己比 mapType。 */
                                 bool propRW148 = false;
                                 if (i < node.positional.size() && node.positional[i]
                                     && !isClassSlot092r) {
                                     Vb6Type pvt148 = Vb6Type::Unknown;
                                     std::string pvar148;
                                     if (comPropReadWriteArg(*node.positional[i], argVal,
-                                                            pvt148, pvar148, cType)
-                                        && mapType(pvt148) == cType) {
+                                                            pvt148, pvar148, cType)) {
                                         argVal = "&" + pvar148;
                                         propRW148 = true;
                                     }
