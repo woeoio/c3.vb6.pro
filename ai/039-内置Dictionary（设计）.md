@@ -10584,3 +10584,61 @@ E1/E2/E3 三枚证人 + 夹具两台。十门 10/10。
    决定它仍会交一个饱和值（与 `vb6_ChkXxx` 一族的已知取舍同一个，见 `vb6rtl_conv.c`
    文件头的口径 (2)）；
 3. **COM 侧 `SAFEARRAY(VT_CY)` 的 marshal** 仍未动（§11.164 在册同一条）。
+
+
+## §11.166 Abs/Int/Fix/Round 在 Currency 上保持身份（第一百八十三刀）
+
+§11.161 至 §11.165 把 Currency 的**值**收得与真机一致（4 位圈、逐步圈、数组、上限）。
+这一刀收的是**身份**：数学内建作用在 Currency 上时，VB6 交回来的仍是 Currency。
+
+### 真机读数（`.temp/k183p/P192.bas`，与夹具逐句同形）
+
+| 格 | 写法 | 真 VB6 |
+|---|---|---|
+| M1 | `Abs(c)` | `6 Currency 10.1235` |
+| M2 | `Int(c)` | `6 Currency 10` |
+| M3 | `Fix(c)` | `6 Currency 10` |
+| M4 | `Round(c, 2)` | `6 Currency 10.12` |
+| M5 | `Sgn(c)` | `2 Integer 1` |
+| M8 | `-c` | `6 Currency -10.1235` |
+| M6/M7/M9/M10 | 负数四格 | `Abs=10.1235 / Int=-11 / Fix=-10 / Round=-10.12`，全是 Currency |
+| M11 | `Int(v)`（v 装 Currency） | `6 Currency 10` |
+| M12 | `Abs(v)` | `6 Currency 10.1235` |
+| M13/M14 | `c \ 2` / `c Mod 3` | `3 Long 5` / `3 Long 1` |
+| M15 | `c ^ 2` | `5 Double 102.48525225` |
+
+改前 C3：M1..M4、M6/M7/M9/M10、M11 全是 `5 Double` —— **值本来就对**，缺的只是身份
+（装箱答 VT_R8、TypeName 答 Double）。M12 已经对，因为 `vb6_AbsV` 早就保子类型；
+M11 不对，因为 `vb6_IntV`/`vb6_FixV` 一律交 Double。
+
+### 改法（两处）
+
+1. `inferExprType` 的调用分支：实参 `inferExprType == Currency`、实参个数 ≤ 2 时，
+   `abs/int/fix/round` 答 **Currency**。语料里没有任何输入重定义这四个名字
+   （门 R19 钉着），所以这一问不看符号种类；
+2. RTL 的 `vb6_IntV` / `vb6_FixV`：`vtCurrency` 进 ⇒ 先按值算、再装回 `VT_CY`
+   —— 与 §11.19 的 `vb6_AbsV` / `vb6_VarNegV` 同一口径（先按本子类型算，再装回同一子类型）。
+
+`Sgn` 仍答 Integer、`\` 与 `Mod` 仍答 Long、`^` 仍答 Double —— 三枚反向证人钉住
+「不是把所有数值结果都改判成 Currency」。
+
+### 夹具 `tests/b191_currency_math`
+
+15 格，x64 与 x86 均与真 VB6 输出**逐字相同**。
+
+### 门
+
+`check_currency_round_station.ps1` 扩到 **R1..R19**：四枚名字 + Currency 判据必须在同一
+分支里、`vb6_IntV`/`vb6_FixV` 必须保 `vtCurrency`、夹具两台 + M11/M15 两枚证人。
+十门 10/10。
+
+### 清单
+
+874 行（+2 = 新夹具两份输入）。本刀只动类型判定与 RTL 体内，**存量发码零变化**；
+本机复算只余 6 行已知的机器差异（按约定不动）。
+
+### 在册
+
+1. **Currency 的 int64 承载**：上限 19 位与 16 位有效数字仍还原不了（§11.165 在册第一条）；
+2. **COM `SAFEARRAY(VT_CY)` 的 marshal** 未动；
+3. **Decimal × Currency** 未上真机量过（`CDec` 在 C3 还没有独立承载）。
