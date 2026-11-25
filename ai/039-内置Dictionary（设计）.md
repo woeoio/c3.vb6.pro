@@ -10156,6 +10156,98 @@ x64 与 x86 均实跑、逐格相同。
 另：`CCur("3.00005")`（字符串实参）真机读数**未测**，本刀让它与赋值站同口径；
 若将来量到 VB6 对**十进制文本**做四舍五入而不是按 double 值折，得单开一格。
 
+## §11.160（第一百七十七刀）ByVal Currency 形参在调用点折 4 位
+
+真机探针 `.temp/k177p`（P177.bas，VB6 编成 exe 后写文件）把「实参进 **ByVal**
+Currency 形参」这一格一次量清：
+
+```
+A1 1.234567 -> 1.2346        A4 0.00005 -> 0.0001
+B1 Double 1.234567 -> 1.2346 B2 10.123456 -> 10.1235
+E1 Variant 1.234567 -> 1.2346 F1 String "1.234567" -> 1.2346
+H1 ByRef x = x*1.0001 -> 1.2346（折在被调方赋值站，不在调用点）
+```
+
+### 病征
+
+C3 的 Currency 形参在 C 侧就是 `double`，double 实参交进去 C 类型相同 ⇒ 一个换算都
+不发。改前 C3 的同一份探针：A1 打 `1.234567`、B2 打 `10.123456`、A4 打 `0.00005`。
+
+### 第一列读数会把病遮住
+
+夹具第一版照 §11.159 的写法用 `CStr(CLng(x * 10000))`，结果 A1 两边都是 **12346** ——
+`1.234567` 的四舍五入恰好也是 12346。这是 §11.159 A7 的同一教训：**判据要挑那一格
+真能分开两个模型的读数**。所以 b180 夹具两列都钉：
+
+```
+A1=12346 | 1.2346      ← 第二列 CStr(x) 才露尾巴（改前 1.234567）
+```
+
+### 改法：一位主人，两条实参路
+
+```cpp
+std::string CCodeGen::currencyByValArgWrap(Expr* arg, const std::string& cValue,
+                                          Vb6Type paramType, bool isByVal) const;
+```
+
+判据（缺一条就会折错或多折一次）：
+
+- **只认 ByVal + 形参 Currency**：ByRef 交的是地址，折数发生在被调方的赋值站
+  （H1 两边本来就相同，不能顺手也折）；
+- **实参已是 Currency 不折第二次**：`inferExprType` 答 Currency，或裸名在
+  `knownCurrencyVars_` 里 —— Currency 变量的 `inferExprType` 会答 Double（§11.158 实测）；
+- **整数档不折**：Byte/Integer/Long/Boolean/LongLong 交给 Currency 是精确的；
+- **已带 `vb6_CCur(` 前缀不重复折**：String→Currency 那一站本来就折（F1/F2 改前就对）；
+- 地址/复合字面量（`&` 开头）不动；
+- 折数只问 RTL 那一位主人 `vb6_CCur`（§11.159 起它又只问 `vb6_CurrencyScale`），
+  发码侧不另写 round。
+
+两条实参路都走它：位置实参（`cgen_expr_call_arg_variant.inc` 的 push 之前）与
+具名实参（`cgen_expr_call_named_args.inc` 的 `orderedArgs[pi]` 之前）。
+**晚绑定 COM 站**拿不到形参声明型，仍未接（在册）。
+
+### 夹具 `tests/b180_currency_byval`
+
+19 行 = 真 VB6 的 19 行，两列（`CStr(CLng(x*10000))` | `CStr(x)`）：
+
+- A 字面量 6 格、B Double 变量 2 格、C Currency 变量 2 格（不折第二次）、
+  D 表达式/返回 Currency 的函数 2 格、E Variant 2 格、F String 2 格（不重复折）、
+  G 整数档 2 格（不该动）、H ByRef 1 格（调用点不折）。
+
+x64 与 x86 均实跑、逐字相同。b178 的 11 格读数不变（B178-11 的 Double 反向证人仍在）。
+
+### 门
+
+`check_currency_round_station.ps1` 从 R1..R12 扩到 **R1..R13**：出口定义/声明各 1、
+ByVal-only 闸门、只经 `vb6_CCur`、按名表不重复折、位置与具名两站各 1、夹具两文件、
+runner 两格、第二列证人、A1 锚。十门（九门 + 本门）全绿。
+
+### 清单
+
+862 行（新增 2 行 = 新夹具两份输入）。存量只动 **2 行**：`tests/b178_currency_round`
+自己的发码形状 —— `SetModCur 10.123456` 的实参现在带 `vb6_CCur`；那是本刀想要的形状，
+读数一格未变（B178-1..11 逐字复跑过）。6 份机器侧差仍以 CI 那台为准、未动。
+
+### 同时修掉的一处哨兵计量
+
+§11.159 把 `vb6_CCurBSTR` 写成嵌套一句后，KEEPS 表从**外层调用**取形参去向，证据
+文本退化成 `handoff-to-plain:vb6_CCur`（指针轴仍是 0）。拆成两句（`double d =
+vb6_NumVal(s); return vb6_CCur(d);`）恢复 `handoff-reads:vb6_NumVal`，**没有 -Bless
+快照**。但拆句后的注释里写出了带括号的 NumVal 调用形，`check_conv_strict_parse` 的
+R3 把它数成第 11 枚入口（判据要 10）—— 只改注释措辞，判据不动。
+
+### 在册（本刀不碰）
+
+1. **中间运算每步都圈**：VB6 `c = a * b` 先把 `a*b` 圈成 4 位再存（C6/C7=1234600），
+   我们三格都是 1234623（§11.159 在册①）；
+2. **Currency 数组元素**：元素槽是未按 10000 放大的 `int64_t`，读进 Variant 是 VT_I8
+   （在册②）；
+3. **Currency 变量装箱进 Variant 仍是 VT_R8**（探针 E4 `type=5`，在册④）；
+4. **晚绑定 COM 实参站**：形参型不可知，没接这一位出口；
+5. **C3 解析 `f -1.234567, "x"`** 会当成减法（真 VB6 接受这一形）—— 本夹具用括号
+   绕开，解析那一格单列。
+
+
 
 
 
