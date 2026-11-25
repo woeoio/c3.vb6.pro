@@ -9249,3 +9249,107 @@ b164 的 N12 由 `1` 变 `7` —— Byte 那一格本就是本刀的目标，针
 - 属性读当 ByRef 实参仍按值（VB6 经 Let 写回）—— 要一条「读-改-写」的双程发射。
 - Boolean 数组元素拼串折出来是 `-1` 而不是 `True`（读路径）。
 - ByRef Boolean 未归一、无 typelib 的外部 VB6 ActiveX DLL 收 ByRef String 仍按值。
+
+## §11.147（第一百六十五刀）属性读当 ByRef 实参：读-改-写
+
+### 一、缺口
+
+§11.146 之后「按引用发的实参」只差最后一格：属性读。`o.Inc box.Tag`（`o As Object`，
+`Tag` 是带 Get/Let 的属性）落到 `comByRefArgExpr` 的属性那一格交回空串 ⇒ 按值打包，
+体里的写回落空。实测 `.temp/k166/p1`：`b.Tag = 40` 经 `o.Inc b.Tag` 之后仍是 40。
+
+### 二、真 VB6 的三步
+
+属性没有地址，VB6 不递属性本身，而是：**拷进临时量 → 递它的地址 → 调用回来经 Let 写回**。
+这一刀就把这三步发射出来：
+
+```c
+int32_t _pb0 = vb6_B166Box_prop_get_Tag(b);
+vb6_ComVarFree((void*)vb6_ComCall(o, L"Inc", (void*[]){vb6_ComPackIntRef(&_pb0)}, 1));
+vb6_B166Box_prop_let_Tag(b, _pb0);
+```
+
+### 三、判据（三件同时成立）
+
+1. 文本必须是**单实参**的属性读 `vb6_<类>_prop_get_<成员>(<base>)`。
+   带索引的 Read 属性（`base` 里带顶格逗号或括号）不在这一族，在册。
+2. 该类的同名成员必须**既有 Get 又有 Let** —— 只读属性写不回去。
+   两问都在同一次符号表遍历里做（`SymbolKind::PropertyGet` / `PropertyLet`），
+   型取 Get 的 **`sym->type`**，与「Function/PropertyGet 读自己的名字走返回槽」同一条口径
+   （载荷里只有 `memberReturnTypes`，那是源码原样的型名，不是 Vb6Type）。
+3. 打包器仍问 `comByRefPackFnForVbType`（§11.145 那张九档表），不在这一格另开一份。
+
+### 四、发射位置
+
+- 台账 `comPropWrites_`（一对 `decl` / `setter` 字符串）只住 `cgen_state.inc` 一处。
+- `visit(CallStmt)`：`decl` 在调用**前**发（读那一半），`setter` 在调用**后**、且在
+  §11.102 的 `ErrSerial` 守卫**里面**发 —— 「命中即整句中止」的口径下，调用被跳过时
+  属性也不该变；收尾在 `CallArgScope102` 的析构里统一清表。
+- 这条通道对「晚绑定目标」与「早绑定目标」的语句位置调用都成立，因为两路都走同一个
+  `visit(CallStmt)` 尾巴。
+
+### 五、刻意不开两档（在册）
+
+- **String 属性**：临时量要管 BSTR 所有权（get 给的那份谁释放 / Let 收的是拷贝还是转移）。
+- **Currency 属性**：C 档是 `double`（值语义），Let 形参未必同宽 —— 与 §11.146 货币数组元素
+  那格同一个根因。
+
+两格都留在「按值」这一侧，夹具里各有一枚反面证人。
+
+### 六、读数
+
+`tests/b166_prop_byref`（x64 = x86 逐行相同）：
+
+```
+B166-P1=41          Long 属性，第一次
+B166-P2=42          同一格连发两次（写回的值要能当下一轮的入参）
+B166-P3=21          Integer 属性
+B166-P4=31.5        Double 属性
+B166-P5=7           Byte 属性
+B166-P6=True        Boolean 属性（Not 之后回写）
+B166-P7=2020,1,3    Date 属性（Year/Month/Day 数值取值器，不钉区域设置形状）
+B166-P8=ab          String 属性 —— 反面证人，仍按值
+B166-P9=xyz         真变量对照
+```
+
+`b164` 的 N13 由 `5` 变 `6` —— 那一格本来就是「属性读不可取址，仍按值」的负对照，
+本刀翻面，夹具注释与针一起改。
+
+### 七、第一次 CI 红：夹具钉了区域设置形状的串
+
+```
+FAIL fixture ... pins locale-shaped literal(s): B166-P7=2020-01-03
+  -- but its source builds them with NEITHER explicit format string NOR numeric date getters.
+```
+
+原来那一针是 `Format(b.Tm, "yyyy-mm-dd")`。日期格式串跟系统区域设置走，换一台机器就是
+另一种写法。改成数值取值器：
+
+```vb
+Debug.Print "B166-P7=" & Year(b.Tm) & "," & Month(b.Tm) & "," & Day(b.Tm)
+```
+
+读数变 `2020,1,3`，两台逐行相同。
+
+### 八、账与门
+
+- 门 `check_byref_arg_pack_authority.ps1` 新增 R9 八条：台账只住一处、读/写两半各一处、
+  `CallArgScope102` 收尾、`PropertyGet` + `PropertyLet` 两问各一次、String/Currency 不开、
+  夹具两格；R8 的消费点数 4 → 5（多了属性读这一处）。
+- manifest：corpus 840 → 842，行数 1371 → 1373。存量只有 `b164` 一枚真变；另外六行
+  （`b132`、`ctrlmscomm`、`GUISample×3`、`TeeChartChartDisplay`）是本机 typelib 侧的
+  known-diff，**CI 是 oracle**。
+- 九门 9/9；CI 22/22（run 45538735210）。
+
+### 九、这一刀之后仍在册的相邻欠项
+
+- **String / Currency 属性**两档（上节）。
+- **带索引的 Read 属性**（`o.Inc box.Item(i)`）不在这一族。
+- **早绑定接收者**那一形：`b.Inc b.Tag`（`b` 是带型类变量，直接调 `vb6_B166Box_Inc`）
+  仍发 `(&(int32_t){vb6_B166Box_prop_get_Tag(b)})` —— 拷进去了没有拷回来，
+  实测 `.temp/k166/p2` 的 `Q1=40`（应为 41）。它走的是**早绑定实参发射器**
+  （`cgen_expr_call_arg_emit.inc` 的复合字面量那一族），不是本系列这条线；
+  要修得让那条发射器也登记同一张台账 —— 可以复用本刀的 `comPropWrites_`，
+  但需要那一族先认识「这枚实参是属性读」。
+- 上几刀留下的：货币数组元素、ByRef 布尔未归一、无 typelib 的外部 VB6 DLL 收 ByRef
+  String 仍按值、Boolean 数组元素拼串折 `-1`。
