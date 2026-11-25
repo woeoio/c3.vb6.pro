@@ -10464,3 +10464,66 @@ T8 c+0.00004+0.00004 -> 6 Currency 10.1235      ★ 每一步都圈
 
 
 
+
+
+## §11.164 Currency 数组元素与标量同口径（第一百八十一刀）
+
+上一节把 Currency 的「中间量每步圈」收进二元收口，但在册第一条就写着：**Currency
+数组元素**仍是未放大的 `int64_t` 槽。这一刀把它收口。
+
+### 真机读数（`.temp/k181p/P186.bas`，编译成 exe 后写文件）
+
+| 格 | 写法 | 真 VB6 |
+|---|---|---|
+| A1 | `a(1)=10.123456` 后读元素 | `6 Currency 10.1235` |
+| A2 | `VarType(a(1))` / `TypeName` | `6` / `Currency` |
+| A3 | `a(1)=a(1)+0.00004` | `6 Currency 10.1235`（每步圈） |
+| A4 | `ByRef` 传元素，`x=x+1.00004` | `6 Currency 11.1235`（真接上） |
+| A5 | 未赋值元素 | `6 Currency 0` |
+| D1 | 赋给 `Double` | `11.1235` |
+| A6 | `a(1)*1` | `6 Currency 11.1235` |
+| A7 | `ReDim b(1 To 2)` 后写 | `6 Currency 10.1235` |
+
+改前 C3 同程序全打 `20|Long`（VT_I8），A1=10、D1=10、A4 也不生效 —— 元素槽是
+`int64_t`（按 VT_CY 的放大整数布局猜的），而赋值站只发 `vb6_CCur(...)` 不乘 10000，
+小数在**存储层**就被截掉了。
+
+### 改法（两处，各自唯一）
+
+1. `mapSaElemCType(Currency)`：`int64_t` → `double` —— 与标量同一承载；
+2. `inferExprType` 的 `IndexOrCallExpr` 分支：数组元素按 `arrayElemTypes_` /
+   `inferUdtFieldVb6Type` 答 `Currency`（与 §11.157 Boolean 那一问同一张表，
+   不新开第二张）。
+
+答对身份之后，其余全是既有站的自动结果：
+
+- 元素赋值走 §11.158 的 `currencyAssignWrap` ⇒ **写入即圈**；
+- 装箱走 §11.161 的 `vb6_VariantCur` ⇒ **VT_CY**；
+- 参与 `+ - *` 走 §11.162/§11.163 ⇒ 每步圈；
+- `ByRef` 传元素拿到的是 `double*` ⇒ 被调用方写回即生效（A4）。
+
+### 夹具 `tests/b184_currency_array`
+
+8 格 + A2/D1，四列（VarType | TypeName | CStr | CLng(x*10000)）。A4 钉 ByRef、
+A5 钉未赋值元素、A7 钉 ReDim 动态数组。x64 与 x86 均与真 VB6 输出**逐字相同**。
+
+### 门
+
+`check_currency_round_station.ps1` 扩到 **R1..R17**：元素承载必须是 `double`、
+旧 `int64_t` 槽不许残留、元素身份必须由 `arrayElemTypes_` 作答、ByRef/未赋值/ReDim
+三枚证人齐。十门 10/10。
+
+### 清单
+
+870 行（+2 = 新夹具两份输入）。存量只动 **2 行**：`tests/b165_byref_byte_cur_date`
+自己的发码形状 —— 它的 C1 就是 Currency 数组元素，正好被这一刀改变承载；复跑读数
+未变（Y1..Y4 / C1..C3 / T1..T3 全中）。
+
+### 在册
+
+1. **COM 侧的 VT_CY 布局**：元素物理现在是 `double`，若把 Currency 数组直接交给期待
+   `SAFEARRAY(VT_CY)` 的接口，需要一层 marshal（语料里未见到，先记）；
+2. **类模块成员的身份**：本轮 VB6Mini 仍无法加载 `.cls`（"不能加载 CurHolder.cls"），
+   真机读数取不到；同批探针里 **UDT 字段**已验为 `6 Currency 10.1235`，而 C3 本来就
+   答对（M6/M7/M8 逐字相同）；
+3. **Decimal 组合**未上真机量过。
