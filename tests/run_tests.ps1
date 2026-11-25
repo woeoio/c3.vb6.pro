@@ -12726,6 +12726,20 @@ $b180Needles = @(
 "G1=420000 | 42", "G2=70000 | 7", "H1=12346 | 1.2346", "PROBE-DONE")
 Test-Vbp 'b180_currency_byval' "$Tests\b180_currency_byval\B180Res.vbp" $b180Needles
 Test-Vbp 'b180_currency_byval_x86' "$Tests\b180_currency_byval\B180Res.vbp" $b180Needles -Arch "x86"
+
+# 账 #305 §11.161 (第一百七十八刀): Currency 变量的身份是 VT_CY(6)。
+# 探针 .temp/k178p 是真 VB6 编成 exe 后写出的读数; 四列 = VarType|TypeName|CStr|n。
+# P6/P7/P8 是反向证人 (Double 必须仍 VT_R8), P9 钉 Integer 字面量, P11 钉
+# TypeName(c)/VarType(c) 直问也要答 Currency。
+$b181Needles = @(
+"P1=6|Currency|10.1235|101235", "P2=6|Currency|10.1235|101235",
+"P3=6|Currency|10.1235|101235", "P6=5|Double|10.1235|101235",
+"P7=5|Double|10.1235|101235", "P8=5|Double|1.5|15000",
+"P9=2|Integer|1|10000", "P11=Currency|6",
+"P12=6|Currency|10.1235|101235", "P13=6|Currency|5.4321|54321",
+"P14=6|Currency|5.4321|54321", "B181-DONE")
+Test-Vbp 'b181_currency_variant' "$Tests\b181_currency_variant\B181Res.vbp" $b181Needles
+Test-Vbp 'b181_currency_variant_x86' "$Tests\b181_currency_variant\B181Res.vbp" $b181Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

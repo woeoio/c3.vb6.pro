@@ -876,6 +876,11 @@
     // ByRef 交的是地址, 折数发生在被调方的赋值站 (H1 两边相同)。
     std::string currencyByValArgWrap(Expr* arg, const std::string& cValue,
                                      Vb6Type paramType, bool isByVal) const;
+    // 账 #305 §11.161 (第一百七十八刀): **Currency 变量的身份**在装箱站的唯一出口。
+    // VB6 里 `Dim c As Currency: v = c` 得到 VT_CY(6)，而 Currency 在 C 侧就是 double，
+    // inferExprType/_Generic 都只能答 VT_R8(5)。判据只问 knownCurrencyVars_（与赋值站、
+    // 实参折数站同一张表）；不认成员/数组元素/运算结果（各自在册）。
+    std::string currencyVariantBox(Expr* expr, const std::string& cExpr) const;
 
     // 账 #261 (§B77②): 「这枚左值是哪档窄整型」的**唯一**回答处 —— 标量标识符、
     // UDT 字段 (含 With 成员、数组元素身上的字段)、本模块数组的元素三形都问这里。

@@ -2444,6 +2444,37 @@ std::string CCodeGen::currencyByValArgWrap(Expr* arg, const std::string& cValue,
     return "vb6_CCur(" + cValue + ")";
 }
 
+std::string CCodeGen::currencyVariantBox(Expr* expr, const std::string& cExpr) const {
+    /* 账 #305 §11.161 (第一百七十八刀): Currency 变量装进 Variant 的**身份**。
+     * 真 VB6 探针 .temp/k178p（P178.bas，编译后写文件）:
+     *   P1  v = c（局部 Currency）      -> type=6 Currency str=10.1235
+     *   P12 ShowV "P12", c（ByVal Variant 形参）-> type=6
+     *   P13 v = m_c（模块级 Currency）   -> type=6
+     *   P6/P7/P8 Double 变量/字面量     -> type=5（反向证人，必须仍 VT_R8）
+     *   P9  v = 1（Integer 字面量）     -> type=2
+     * 改前 C3: P1 打 type=5 Double —— Currency 在 C 侧就是 double，inferExprType 与
+     * `_Generic` 都只能答 VT_R8。CCur()（P2）与返回 Currency 的函数（P3）本来就对，
+     * 因为那条路上的类型推断答 Currency。
+     *
+     * 判据（只认**裸名**，只问赋值站/实参折数站共用的那张 knownCurrencyVars_）:
+     *   - 成员/数组元素/运算结果各自另有一条腿，本刀不碰（探针 P4/P5/P10 在册）；
+     *   - 已带 vb6_VariantCur( / vb6_VariantFromValue( 前缀不重复装。
+     * 两个装箱站共用这一枚: Variant 赋值（wrapVariantValue）与实参站（boxToVariant）。
+     */
+    if (!expr || cExpr.empty()) return std::string();
+    if (expr->kind != ASTNodeKind::IdentifierExpr) return std::string();
+    if (cExpr.rfind("vb6_VariantCur(", 0) == 0) return std::string();
+    if (cExpr.rfind("vb6_VariantFromValue(", 0) == 0) return std::string();
+    std::string lower = static_cast<const IdentifierExpr&>(*expr).name;
+    if (lower.compare(0, 4, "me->") == 0) lower = lower.substr(4);
+    else if (lower.size() > 4 && lower[0] == '(' && lower[1] == '*'
+             && lower.back() == ')')
+        lower = lower.substr(2, lower.size() - 3);
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    if (!knownCurrencyVars_.count(lower)) return std::string();
+    return "vb6_VariantCur(" + cExpr + ")";
+}
+
 std::string CCodeGen::narrowCheckAssign(Expr* target, Expr* value,
                                         const std::string& cValue) const {
     if (!target || cValue.empty()) return cValue;

@@ -315,10 +315,63 @@ else {
         $bad += 'R13 witness A1 (1.234567 -> 1.2346) missing'
     }
 }
+$main14 = Read-File 'tests/b181_currency_variant/B181Main.bas'
+$def14 = Read-File 'src/backend/cgen_util_type.cpp'
+if ($null -eq $def14) { $bad += 'R14 cgen_util_type.cpp not found' }
+else {
+    $n = ([regex]::Matches($def14, 'std::string CCodeGen::currencyVariantBox\(')).Count
+    if ($n -ne 1) { $bad += ('R14 currencyVariantBox definition = ' + $n + ', want 1') }
+    $i14 = $def14.IndexOf('std::string CCodeGen::currencyVariantBox(')
+    if ($i14 -ge 0) {
+        $body14 = $def14.Substring($i14, [Math]::Min(2500, $def14.Length - $i14))
+        if ($body14 -notmatch 'knownCurrencyVars_\.count\(lower\)') {
+            $bad += 'R14 the identity must be answered by knownCurrencyVars_ (one table with the fold stations)'
+        }
+        if ($body14 -notmatch 'return "vb6_VariantCur\(" \+ cExpr \+ "\)"') {
+            $bad += 'R14 the box must be vb6_VariantCur (VT_CY), not a second packing formula'
+        }
+        if ($body14 -notmatch 'expr->kind != ASTNodeKind::IdentifierExpr') {
+            $bad += 'R14 bare names only: members/array elements/arithmetic results are separate legs'
+        }
+    }
+}
+if ($null -ne $hdr1) {
+    $n = ([regex]::Matches($hdr1, 'std::string currencyVariantBox\(')).Count
+    if ($n -ne 1) { $bad += ('R14 declaration = ' + $n + ', want 1') }
+}
+$ctrl14 = Read-File 'src/backend/cgen_util_ctrl.cpp'
+if ($null -eq $ctrl14) { $bad += 'R14 cgen_util_ctrl.cpp not found' }
+else {
+    $n = ([regex]::Matches($ctrl14, 'currencyVariantBox\(static_cast<Expr\*>\(valueNode\), cExpr\)')).Count
+    if ($n -ne 1) { $bad += ('R14 Variant-assignment station = ' + $n + ', want 1') }
+    $n = ([regex]::Matches($ctrl14, 'currencyVariantBox\(expr, cExpr\)')).Count
+    if ($n -ne 1) { $bad += ('R14 argument station = ' + $n + ', want 1') }
+}
+foreach ($f in @('B181Main.bas', 'B181Res.vbp')) {
+    $p = Join-Path $repo ('tests/b181_currency_variant/' + $f)
+    if (-not (Test-Path -LiteralPath $p)) { $bad += ('R14 fixture file missing: ' + $f) }
+}
+if ($null -ne $run7) {
+    $n = ([regex]::Matches($run7, "Test-Vbp 'b181_currency_variant")).Count
+    if ($n -ne 2) { $bad += ('R14 b181 fixture cells = ' + $n + ', want 2 (x64 + x86)') }
+}
+if ($null -eq $main14) { $bad += 'R14 B181Main.bas not found' }
+else {
+    if ($main14 -notmatch 'P6') {
+        $bad += 'R14 reverse witness P6 (Double must stay VT_R8) missing'
+    }
+    if ($main14 -notmatch 'VarType\(v\)' -or $main14 -notmatch 'TypeName\(v\)') {
+        $bad += 'R14 the fixture must print both VarType and TypeName'
+    }
+    if ($main14 -match 'P4' -or $main14 -match 'P10') {
+        $bad += 'R14 arithmetic results / array elements stay in the register: do not pin them here'
+    }
+}
 if ($bad.Count -gt 0) {
     Write-Host ('FAIL currency_round_station: ' + ($bad -join ' | '))
     exit 1
 }
 Write-Host '  R13 ByVal Currency call-site station (one owner, both arg paths, no ByRef fold) OK'
-Write-Host 'PASS currency_round_station (R1..R13)'
+Write-Host '  R14 Currency variable identity in Variant (VT_CY, both box stations) OK'
+Write-Host 'PASS currency_round_station (R1..R14)'
 exit 0

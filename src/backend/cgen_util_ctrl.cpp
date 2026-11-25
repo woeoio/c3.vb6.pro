@@ -4523,6 +4523,12 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
         // 末尾 boxToVariant 逐字相同（发码不变），只有 Int/Fix/Abs 这族由 VT_R8 变 VT_I2。
         // ⚠ `Abs(v)`（Variant 实参）依旧不在内：静态不可知，要 RTL 按运行时子类型答，
         //   那是另一刀（台账 §11.20 记着）。
+        // 账 #305 §11.161 (第一百七十八刀): 裸 Currency 变量先问身份表，再走下面的
+        // 类型表 —— 那张表对 Currency 只能答 Double（C 侧同为 double）。
+        {
+            std::string curBox178 = currencyVariantBox(static_cast<Expr*>(valueNode), cExpr);
+            if (!curBox178.empty()) return curBox178;
+        }
         if (isNarrowIntExpr(static_cast<const Expr*>(valueNode)))
             return "vb6_VariantInt((int16_t)(" + cExpr + "))";
         // <vbeclipse>: 这张表只留"与 _Generic 结果一致"的四档 (String/Long/Integer/Double)。
@@ -4661,6 +4667,12 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
     {
         std::string viewBox171b = legacyViewBoxExpr(expr, cExpr);
         if (!viewBox171b.empty()) return viewBox171b;
+    }
+    // 账 #305 §11.161 (第一百七十八刀): 实参站的同一问、同一出口（裸 Currency 变量
+    // 交给 ByVal Variant 形参时 VB6 给 VT_CY —— 探针 P12/P14）。
+    {
+        std::string curBox178 = currencyVariantBox(expr, cExpr);
+        if (!curBox178.empty()) return curBox178;
     }
     if (!expr) return "vb6_VariantFromValue(" + cExpr + ")";
     // 已经是 VARIANT 的表达式交给 _Generic 的 vb6_VariantIdentity 档恒等直传,
