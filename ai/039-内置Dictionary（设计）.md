@@ -9424,3 +9424,78 @@ B166-Q3=ab   String 属性反面证人，两族都仍按值
 - 早绑定那一族的**型不一致**一格（Long 属性接 Integer 形参）仍按值。
 - 上几刀留下的：货币数组元素、ByRef 布尔未归一、无 typelib 的外部 VB6 DLL 收 ByRef
   String 仍按值、Boolean 数组元素拼串折 `-1`。
+
+## §11.149（第一百六十七刀）String 属性也走读-改-写，临时量的 BSTR 归调用方退
+
+### 一、缺口
+
+§11.147 / §11.148 两刀把「属性读当 ByRef 实参」的读-改-写补给了数值五档（`Long`/`Integer`/
+`Single`/`Double`/`Boolean`）与 `Byte`/`Date`，String 与 Currency 两档一直 `return false`
+按值发。String 那一档卡在**所有权**：`prop_get` 交回来的是一枚新分配的 `BSTR`，拷进临时量
+以后谁退？不收这条线就只能每次调用漏一条串。
+
+### 二、两条前提查清了
+
+`tests/b166_prop_byref` 的发码里（`.temp/k167/t.c`）：
+
+```c
+BSTR vb6_B166Box_prop_get_Label2(vb6_cls_B166Box* me) {
+  BSTR vb6_ret_Label2 = NULL;
+  vb6_BSTR_Assign(&vb6_ret_Label2, me->m_Name);   /* 拷一份 → 新分配, 归调用方 */
+  return vb6_ret_Label2;
+}
+void vb6_B166Box_prop_let_Label2(vb6_cls_B166Box* me, BSTR v) {
+  vb6_BSTR_Assign(&me->m_Name, v);                /* 也是拷一份 → 不接手所有权 */
+}
+```
+
+两头都是**拷一份**：get 交出的新串归调用方，let 收下的是值不接手。所以临时量必须由调用方退 ——
+这就是这一刀唯一新增的一行。
+
+### 三、改法
+
+- `ComPropWriteBack` 多一格 `release`（空 = 标量档，值语义，没有可退的）。
+- `comPropReadWriteArg` 只对 Currency 仍 `return false`；String 那一档给 `release` 填
+  `vb6_BSTR_Free(_pbN);`。
+- `visit(CallStmt)` 的尾巴在 102 守卫**关掉之后**发这一行：守卫没放行时调用被跳过，临时量里
+  仍是 get 新分配的那枚串，更得退。（setter 仍在守卫**里**：跳过调用时属性不该变。）
+- 发出来的三段（`tests/b166_prop_byref` 的 Q3，早绑定）：
+
+```c
+BSTR _pb10 = vb6_B166Box_prop_get_Label2(b);
+vb6_B166Box_Append(b, &_pb10, _own_1);
+vb6_B166Box_prop_let_Label2(b, _pb10);
+vb6_BSTR_Free(_pb10);
+```
+
+顺带修掉一处旧漏：改前这一形发 `(&(BSTR){vb6_B166Box_prop_get_Label2(b)})`，那枚 get 出来的
+串**从来没退过**，每次调用漏一条。
+
+### 四、读数
+
+`tests/b166_prop_byref`（x64 = x86 逐行相同）：
+
+```
+B166-P8=abcd   晚绑定 String 属性（改前 ab）
+B166-Q3=abcd   早绑定 String 属性（改前 ab）
+其余 W1..W2 / P1..P7 / P9 / Q1..Q2 与上一刀逐行相同
+```
+
+### 五、账与门
+
+- `check_byref_arg_pack_authority.ps1`：`R9 string/cur props by value` 换成
+  `R9 currency prop by value`（String 已开），新增三条 —— `R9 string prop release`
+  （退还那一行只许一处）、`R9 release field`（台账多一格）、`R9 release emitted`
+  （发在守卫**外**）。
+- 九门 9/9；CI 22/22（run 45548994502）。
+
+### 六、仍在册的相邻欠项
+
+- **Currency 属性**：`double` 值语义与数组元素那档 `int64_t` 不是一个表示，和 §11.146
+  货币数组元素同一张欠项。
+- **带索引的 Read 属性**（`o.Inc box.Item(i)`）。
+- **表达式上下文里的属性读实参**（`x = o.F(b.Tag)` / `MsgBox o.F(b.Tag)`）—— 没有
+  「调用之后」这个位置，需要先有一条「表达式内调用之后」的发射道。
+- 早绑定那一族的**型不一致**一格（Long 属性接 Integer 形参）仍按值。
+- 上几刀留下的：货币数组元素、ByRef 布尔未归一、无 typelib 的外部 VB6 DLL 收 ByRef
+  String 仍按值、Boolean 数组元素拼串折 `-1`。
