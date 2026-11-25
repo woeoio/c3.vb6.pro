@@ -844,6 +844,10 @@
     // ai/030 续 (§性能): 上面那枚是按节点缓存的薄包装, 真身在这里。缓存 epoch 由
     // bumpInferEpoch 推进 (过程入口 / emitStmtList 的语句边界), 见 cgen_util_type.cpp。
     Vb6Type inferExprTypeImpl(Expr& expr) const;
+    // 账 #305 §11.157 (第一百七十四刀): 数组元素读的**声明元素档**只问 Boolean 这一格
+    // (拼串站要用它把 VB6 的 "True"/"False" 保住)。证据与窄化站同源:
+    // arrayElemTypes_ / inferUdtFieldVb6Type —— 不新开第二张表。
+    bool arrayElemIsDeclaredBoolean(const IndexOrCallExpr& call) const;
     static void bumpInferEpoch();
 
     // 账 #305 第311刀: 「一条 Select Case 的 Case 标签落在哪一档」的**唯一**回答处

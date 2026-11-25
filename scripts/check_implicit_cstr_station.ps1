@@ -618,5 +618,34 @@ if ($r16Bad.Count -gt 0) {
     exit 1
 }
 Write-Host ('  R16 Currency<=>Double format arm OK (1 arm, ' + $arms + ' arms total, fixture x64+x86)')
-Write-Host 'PASS implicit_cstr_station (R1..R16)'
+
+# ---- R17 ----
+# 账 #305 §11.157 (第一百七十四刀): Boolean **数组元素**读的声明档。
+# 病: inferExprType 对数组元素读一律答 Variant ⇒ 拼串走装箱 (int16 → VT_I2) ⇒
+# VB6 的 "True" 变成 "-1"。只补 Boolean 一档 —— 其余档装箱后的格式化结果与直连
+# CStrLong/CStrDbl 相同 (实测 Q1..Q4), 加档是另一刀的事。
+$r17Bad = @()
+$typeSrc = [IO.File]::ReadAllText((Join-Path $Root 'src\backend\cgen_util_type.cpp'))
+$helpSrc = [IO.File]::ReadAllText((Join-Path $Root 'src\backend\detail\util\cgen_helpers.inc'))
+$defN  = ([regex]::Matches($typeSrc, 'bool CCodeGen::arrayElemIsDeclaredBoolean\(')).Count
+$declN = ([regex]::Matches($helpSrc, 'bool arrayElemIsDeclaredBoolean\(const IndexOrCallExpr& call\) const;')).Count
+$askN  = ([regex]::Matches($typeSrc, 'if \(arrayElemIsDeclaredBoolean\(call\)\) return Vb6Type::Boolean;')).Count
+$boolAsk = ([regex]::Matches($typeSrc, 'it->second == Vb6Type::Boolean')).Count
+if ($defN -ne 1)  { $r17Bad += ('R17 declared-elem helper def = ' + $defN + ', want 1') }
+if ($declN -ne 1) { $r17Bad += ('R17 declared-elem helper decl = ' + $declN + ', want 1') }
+if ($askN -ne 1)  { $r17Bad += ('R17 infer arm ask = ' + $askN + ', want 1') }
+if ($boolAsk -ne 1) { $r17Bad += ('R17 boolean-only guard = ' + $boolAsk + ', want 1 (do not widen the arm)') }
+if (-not (Test-Path -LiteralPath $run171)) {
+    $r17Bad += 'R17 tests/run_tests.ps1 not found'
+} else {
+    $runner17 = [IO.File]::ReadAllText($run171)
+    $fx17 = ([regex]::Matches($runner17, "Test-Vbp 'b177_bool_arr_str")).Count
+    if ($fx17 -ne 2) { $r17Bad += ('R17 b177 fixture cells = ' + $fx17 + ', want 2 (x64 + x86)') }
+}
+if ($r17Bad.Count -gt 0) {
+    Write-Host ('FAIL implicit_cstr_station R17 (Boolean array element formatted as -1): ' + ($r17Bad -join ' | '))
+    exit 1
+}
+Write-Host '  R17 Boolean array element keeps True/False OK'
+Write-Host 'PASS implicit_cstr_station (R1..R17)'
 exit 0

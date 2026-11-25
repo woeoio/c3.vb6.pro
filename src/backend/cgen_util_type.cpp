@@ -165,6 +165,28 @@ static uint32_t g_inferCacheEpoch = 0;
 
 void CCodeGen::bumpInferEpoch() { ++g_inferCacheEpoch; }
 
+/* 账 #305 §11.157 (第一百七十四刀): 数组元素读的**声明元素档** —— 本刀只问一格:
+ * Boolean。为什么只问这一格: 其余档 (Long/Integer/Byte/Double) 现在都走
+ * `vb6_CStr(vb6_VariantFromValue(VB6_SA_AT(...)))` 那条装箱路，格式化结果与
+ * 直接 CStrLong/CStrDbl 碰巧相同 (实测 Q1..Q4)；Boolean 不同 —— VB6 拼串交
+ * "True"/"False"，装箱走 int32 归档交 "-1"。加档会让每一格数组元素都换形状，
+ * 那是另一个刀的事；这一刀只把有实证差异的那一格补上。 */
+bool CCodeGen::arrayElemIsDeclaredBoolean(const IndexOrCallExpr& call) const {
+    if (!call.callee || call.positional.empty()) return false;
+    if (call.callee->kind == ASTNodeKind::IdentifierExpr) {
+        auto& id = static_cast<const IdentifierExpr&>(*call.callee);
+        auto it = arrayElemTypes_.find(Symbol::toLower(id.name));
+        return it != arrayElemTypes_.end() && it->second == Vb6Type::Boolean;
+    }
+    if (call.callee->kind == ASTNodeKind::MemberAccessExpr
+        || call.callee->kind == ASTNodeKind::WithMemberExpr) {
+        bool isArr = false;
+        Vb6Type et = inferUdtFieldVb6Type(call.callee.get(), &isArr);
+        return isArr && et == Vb6Type::Boolean;
+    }
+    return false;
+}
+
 Vb6Type CCodeGen::inferExprType(Expr& expr) const {
     C3ScopeTimer _c3t(1);   // ai/030 续: 累计统计计在包装层 (缓存命中也算一次问)
     const uint32_t ep = g_inferCacheEpoch;
@@ -392,6 +414,13 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
         case ASTNodeKind::IndexOrCallExpr: {
             // 函数调用: 返回函数返回类型
             auto& call = static_cast<IndexOrCallExpr&>(expr);
+
+            // §11.157 (第一百七十四刀): Boolean 数组元素读 = Boolean。
+            // 声明侧那一问在 arrayElemIsDeclaredBoolean 一处 (表 = arrayElemTypes_ /
+            // inferUdtFieldVb6Type)。答 Boolean 之后: 拼串站走 vb6_CStrBool
+            // ("True"/"False")，而 `元素 And True` 这一形也跟着回到 Boolean
+            // (以前元素答 Variant ⇒ And 降成 int32 ⇒ 拼串打 "-1")。
+            if (arrayElemIsDeclaredBoolean(call)) return Vb6Type::Boolean;
 
             // C30-11 第八十刀 (§B228): `Len(<数值变量>)` 的真机档位是 **Integer**。
             // 真机探针 (`.temp/k78/lena.bas` D1/D2): Len(Integer 变)=2 / Len(Long 变)=4，

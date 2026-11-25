@@ -12664,6 +12664,15 @@ $b176Needles = @(
 "B176-1=13", "B176-2=41", "B176-3=3", "B176-4=11", "B176-5=12", "B176-DONE")
 Test-Vbp 'b176_str_prop_num_arg' "$Tests\b176_str_prop_num_arg\B176Res.vbp" $b176Needles
 Test-Vbp 'b176_str_prop_num_arg_x86' "$Tests\b176_str_prop_num_arg\B176Res.vbp" $b176Needles -Arch "x86"
+
+# 账 #305 §11.157 (第一百七十四刀): Boolean 数组元素在拼串里的档位。
+# 改前元素读答 Variant ⇒ 装箱成 int16 ⇒ 打 "-1"; VB6 打 "True"/"False"。
+# B177-2 是同一件事的另一形 (元素 And True); B177-4 是反向证人 (数值上下文仍是 -1)。
+$b177Needles = @(
+"B177-1=True", "B177-2=True", "B177-3=False", "B177-4=-1",
+"B177-5=True", "B177-6=False", "B177-DONE")
+Test-Vbp 'b177_bool_arr_str' "$Tests\b177_bool_arr_str\B177Res.vbp" $b177Needles
+Test-Vbp 'b177_bool_arr_str_x86' "$Tests\b177_bool_arr_str\B177Res.vbp" $b177Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

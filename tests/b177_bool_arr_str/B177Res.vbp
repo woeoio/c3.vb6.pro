@@ -1,0 +1,4 @@
+Type=Exe
+Module=B177Main; B177Main.bas
+Startup="Sub Main"
+ExeName32="B177Res.exe"
