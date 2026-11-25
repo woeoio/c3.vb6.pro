@@ -12808,6 +12808,18 @@ $b191Needles = @(
 "B191-DONE")
 Test-Vbp 'b191_currency_math' "$Tests\b191_currency_math\B191Res.vbp" $b191Needles
 Test-Vbp 'b191_currency_math_x86' "$Tests\b191_currency_math\B191Res.vbp" $b191Needles -Arch "x86"
+
+# 账 #305 §11.167 (第一百八十四刀): Format 数值段里的字面量 / 负号段 / 零段 / Percent 分组。
+# 真机 .temp/k184p (P197.bas) 逐格。H9 (零段) 与 H15 (#.##) 是本刀两枚边角证人。
+$b192Needles = @(
+"H1=[(1234.57)]", "H2=[-1234.57]", "H3=[(1234.57)]",
+"H4=[1234.57x]", "H5=[1234.57-]", "H6=[-1234.57-]",
+"H7=[#1234.57]", "H8=[1234.57]", "H9=[zero]",
+"H10=[123456.78%]", "H11=[-123456.78%]", "H12=[12.50%]",
+"H13=[1234.57]", "H14=[1.50]", "H15=[.5]", "H16=[1.0]",
+"B192-DONE")
+Test-Vbp 'b192_format_literal' "$Tests\b192_format_literal\B192Res.vbp" $b192Needles
+Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b192Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

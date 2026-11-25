@@ -213,6 +213,44 @@ if (-not $defM.Success) {
     }
 }
 
+# ---- R13: Format 数值段的字面量/零段/前导 0 与 Percent 分组 (§11.167 第一百八十四刀) ----
+# 判据 (真机 P197): H1/H3/H4/H5/H6/H7 的字面量必须出现; H9 零段只打字面量;
+# H15 `#.##` 的 0.5 = `.5`; H10/H11 Percent 不带千分位。
+$tailSrc = $null
+$tailPath = Join-Path $Root 'src/rtl/core/vb6rtl/detail/vb6rtl_format_numeric_tail.inc'
+if (Test-Path -LiteralPath $tailPath) { $tailSrc = Get-Content -LiteralPath $tailPath -Raw -Encoding UTF8 }
+if ($null -eq $tailSrc) { $viol += 'R13 找不到 Format 数值尾部片段' }
+else {
+    if ($tailSrc -notmatch '§11\.167') { $viol += 'R13 字面量拼装没有登记 (§11.167 段标缺)' }
+    foreach ($t in @('prefix', 'suffix', 'dropLeadZero', 'lastPh')) {
+        if ($tailSrc -notmatch [regex]::Escape($t)) { $viol += ('R13 拼装缺 ' + $t) }
+    }
+    if ($tailSrc -match 'int dotEmitted') { $viol += 'R13 旧的「不定位字面量」那段还在 (dotEmitted 是它的标记)' }
+}
+$parsePath = Join-Path $Root 'src/rtl/core/vb6rtl/detail/vb6rtl_format_parse.inc'
+$parseSrc = $null
+if (Test-Path -LiteralPath $parsePath) { $parseSrc = Get-Content -LiteralPath $parsePath -Raw -Encoding UTF8 }
+if ($null -eq $parseSrc) { $viol += 'R13 找不到 Format 解析片段' }
+else {
+    if ($parseSrc -notmatch 'vb6_FormatPercent\(numVal, 2, -1, 0, 0\)') {
+        $viol += 'R13 Percent 命名格式必须不带千分位 (groupDigits=0)'
+    }
+}
+$runSrcFmt = Join-Path $Root 'tests/run_tests.ps1'
+if (Test-Path -LiteralPath $runSrcFmt) {
+    $runTxt = Get-Content -LiteralPath $runSrcFmt -Raw -Encoding UTF8
+    $fmtCells = ([regex]::Matches($runTxt, "Test-Vbp 'b192_format_literal")).Count
+    if ($fmtCells -ne 2) { $viol += ('R13 b192 夹具格数 = ' + $fmtCells + ', 要 2 (x64 + x86)') }
+    $fmtMain = Join-Path $Root 'tests/b192_format_literal/B192Main.bas'
+    if (-not (Test-Path -LiteralPath $fmtMain)) { $viol += 'R13 夹具 B192Main.bas 不在' }
+    else {
+        $fmtTxt = Get-Content -LiteralPath $fmtMain -Raw -Encoding UTF8
+        foreach ($w in @('H9', 'H15')) {
+            if ($fmtTxt -notmatch ('"' + $w + '"')) { $viol += ('R13 夹具缺证人 ' + $w) }
+        }
+    }
+}
+
 Write-Host ('census: table=' + $tableNames.Count + ' rtlSlot=' + $rtlSlot.Keys.Count +
             ' rtlPtr=' + $rtlPtr.Keys.Count + ' rtlMacro=' + $rtlMacro.Keys.Count +
             ' emittedNames=' + $emitted.Keys.Count +
@@ -224,5 +262,6 @@ if ($viol.Count -gt 0) {
     Write-Host ('FAIL builtin_slot_returns: ' + $viol.Count + ' 条违规 —— 修法是把表与 RTL 对账 (补名/撤名), 不是往白名单里加名字; 真要走例外请连带写清理由并重跑 §B146 那把 400 份 A/B')
     exit 1
 }
-Write-Host 'PASS builtin_slot_returns (R1..R12)'
+Write-Host 'PASS builtin_slot_returns (R1..R13)'
 exit 0
+

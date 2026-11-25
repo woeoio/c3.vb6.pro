@@ -70,7 +70,9 @@
         }
         if (strcmp(fmtLower, "percent") == 0) {
             free(fmtStr);
-            return vb6_FormatPercent(numVal, 2, -1, 0, -1);
+            // §11.167 (第一百八十四刀): 真机 P197 H10/H11 = `123456.78%` / `-123456.78%`
+            // —— **不带千分位**。改前递 -1 (系统默认 = 分组) ⇒ `123,456.78%`。
+            return vb6_FormatPercent(numVal, 2, -1, 0, 0);
         }
         if (strcmp(fmtLower, "scientific") == 0) {
             free(fmtStr);
