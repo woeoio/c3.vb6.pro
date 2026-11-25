@@ -9939,6 +9939,77 @@ B176-3=3    "1.5" → Double  (×2)
 - **ByRef Boolean 未归一**：Boolean 形参（`int16_t`）现在会走 `vb6_CInt`，值与 -1/0
   的口径差仍在册。
 
+## §11.157（第一百七十四刀）Boolean 数组元素在拼串里打 -1
+
+这一刀的病不在格式化站，在**型推断**：`inferExprType` 对数组元素读一律答 Variant，
+于是拼串站走装箱：
+
+```c
+vb6_CStr(vb6_VariantFromValue(VB6_SA_AT(int16_t, flags, 1)))
+```
+
+`_Generic` 按 int16 装成 VT_I2，`vb6_CStr` 交 `"-1"`；VB6 交 `"True"`。
+
+### 为什么只有 Boolean 看得出
+
+同一份探针把六档元素全打了一遍（`.temp/k174/p2`）：
+
+```
+Q1=42  Q2=43  Q3=44  Q4=1.5  Q5=True  Q6=abc
+```
+
+Q1..Q4 改前也是这几个数 —— Long/Integer/Byte/Double 的元素装箱后，`_Generic` 选到
+对应 VT，`vb6_CStr` 拆箱后格式化交出来的字与直连 `vb6_CStrLong/CStrDbl` **碰巧相同**。
+只有 Boolean 的装箱档拿不到 `"True"`/`"False"` 这条形状。所以本刀**只补这一档**：
+加其余档会让每一格数组元素都换发码形状，而那是另一件事（要逐档实证差异才能动）。
+
+### 改法（一问，两个站受益）
+
+```cpp
+bool CCodeGen::arrayElemIsDeclaredBoolean(const IndexOrCallExpr& call) const {
+    // 裸标识符 → arrayElemTypes_；成员数组 → inferUdtFieldVb6Type(…, &isArr)
+}
+```
+
+`inferExprType` 的 `IndexOrCallExpr` 臂开头问它，答 Boolean 就返回 Boolean。两个受益点：
+
+1. 拼串站（`wrapToBSTR`）走 `vb6_CStrBool` ⇒ `"True"`；
+2. **`f(1) And True`** —— 元素答 Variant 时 `And` 降成 int32、结果也是 `"-1"`；
+   元素答 Boolean 后 `And` 自己回到 Boolean（`B177-2` 钉的就是这一形）。
+
+证据与窄化站同源（`arrayElemTypes_` / `inferUdtFieldVb6Type`），不新开第二张表。
+
+### 夹具 `tests/b177_bool_arr_str`
+
+```
+B177-1=True   元素拼串              B177-4=-1    反向证人：数值上下文仍是 -1
+B177-2=True   元素 And True         B177-5=True  变量对照（本来就对）
+B177-3=False  Not 元素              B177-6=False False 元素
+```
+
+B177-4 是故意反向的：VB6 的 True 在**数值**上下文就是 -1，本刀只动拼串那一档，
+不能把数值口径也改掉。
+
+门：`check_implicit_cstr_station.ps1` 加 **R17 五条**（helper 定义/声明/推断臂调用/
+「只认 Boolean」不得加宽/夹具两格），闸到 R1..R17；runner 两格（x64 + x86 均实跑
+通过）；九门 9/9。
+
+### 清单
+
+856 行（新增 2 行 = 新夹具两份输入）。**其余与本机上一版逐字节相同** —— 语料里没有
+第二个工程把 Boolean 数组元素放进去拼串，这一刀只碰得到那一形。本机与 CI 那台在 6 份
+环境相关输入上的差异仍照旧（期望值保持 CI 那一版）。
+
+### 在册（本刀不碰）
+
+- 其余元素档（Long/Integer/Byte/Double/Date/Currency）仍走装箱那条路：目前靠「拆箱后
+  格式化结果相同」活着，Date 与 Currency 两档**没有实证**；要换成声明档得逐档跑差异；
+- **Currency 赋值不圈 4 位小数**：`c = 10.123456` 实测打 `10.123456`，VB6 存 `10.1235`
+  （`.temp/k174/p1` 的 P5）。这是表示层老账，影响的不只是格式化；
+- 晚绑定调用点仍拿不到形参声明型（§11.156 在册）；
+- ByRef Boolean 未归一（同上）。
+
+
 
 
 
