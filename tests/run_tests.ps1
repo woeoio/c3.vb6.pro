@@ -10231,6 +10231,15 @@ if ($Category -in @("all", "run", "vbp")) {
     if (-not $SkipGui) { Invoke-GuiVbpTable }
     # 第328刀: 窗体图标落在**产物的资源目录**里 —— 判据只能真链接之后读 .rsrc。
     Test-FormIconResources
+    # 账 #305 工具刀 (2026-11-25): -SkipGui 时 GUI 表没跑，而下面这条资源判据要的
+    # BalloonTooltips.exe 原本是那张表建出来的（同组 -ShardGroup "balloon" 就是为这个
+    # 接续写的）。被修圆：自己建一份，**判据不打折** —— 这一条只读产物字节，不涉
+    # 起窗/抓屏。CI 头一轮就是这么红的（run 45596651256 / Tests (vbp #3): no exe）。
+    if ($SkipGui) {
+        $btDir = Join-Path $OutDir "BalloonTooltips"
+        New-Item -ItemType Directory -Force -Path $btDir | Out-Null
+        $null = & cmd /c ('"' + $C3 + '" "' + $Tests + '\BalloonTooltips\prjBalloonTooltips.vbp" --output-dir "' + $btDir + '" 2>&1')
+    }
     Test-ProductManifest "balloon_manifest_is_user_supplied" "$OutDir\BalloonTooltips\BalloonTooltips.exe" 1 "dpiAware" -ShardGroup "balloon"
     # axcontrolsadd: 运行期 Me.Controls.Add 免注册创建第三方 OCX 控件 (NewTabCtl.NewTab), 验证
     # Object= 免注册表在运行时路径被查询 (regfree hit); OCX 在工程目录, 由 harness 复制到 exe 旁,
