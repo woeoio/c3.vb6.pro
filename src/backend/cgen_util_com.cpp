@@ -1136,6 +1136,21 @@ std::string CCodeGen::comPackExpr(Expr& expr) {
 std::string narrowArgText(const std::string& expr, const std::string& toC,
                           const std::string& fromC) {
     if (toC == fromC || toC.empty() || fromC.empty()) return expr;
+    /* 账 #305 §11.155 (第一百七十二刀): BSTR 也是"可换算的源"。以前这里没有这一臂，
+     * `n = "12"` 与属性读那一格都把 BSTR 指针当整数递进 vb6_Chk*（实测：
+     * `n = "12"` 直接出 Error 6；Long 属性递 String 形参当场 0xC0000005）。
+     * 折数只问 RTL 的 _Generic 家族 —— vb6_CLng / CInt / CDbl / CSByte / CCur /
+     * CLngLng 都有 BSTR 臂，解析主人是 vb6_NumVal 那一位 (账 #416)。
+     * Byte 那一档没有 BSTR 臂 ⇒ 先折 double 再收宽 (vb6_CByte(double))。 */
+    if (fromC == "BSTR") {
+        if (toC == "int16_t") return "vb6_CInt(" + expr + ")";
+        if (toC == "uint8_t") return "vb6_CByte(vb6_CDbl(" + expr + "))";
+        if (toC == "int32_t") return "vb6_CLng(" + expr + ")";
+        if (toC == "int64_t") return "vb6_CLngLng(" + expr + ")";
+        if (toC == "double")  return "vb6_CDbl(" + expr + ")";
+        if (toC == "float")   return "(float)vb6_CSng(" + expr + ")";
+        return "((" + toC + ")(" + expr + "))";
+    }
     const bool fromFp = (fromC == "float" || fromC == "double");
     const bool fromI64 = (fromC == "int64_t");
     if (toC == "int16_t") {
@@ -1157,6 +1172,24 @@ std::string narrowArgText(const std::string& expr, const std::string& toC,
         return "vb6_ChkLong((int64_t)(" + expr + "))";
     }
     return "((" + toC + ")(" + expr + "))";
+}
+
+// 账 #305 §11.155 (第一百七十二刀): 数值 → BSTR 的唯一选档口。
+// 为什么不能从 C 型文本选: `int16_t` 既是 Integer 也是 Boolean（CStr 结果一个是
+// "12"、一个是 "True"），`uint8_t` 是 Byte、`double` 又盖着 Date 与 Currency。
+// 所以出入的都是**声明档**，与 R8/R9 那条口径一致。
+static std::string cstrOfVt(const std::string& expr, Vb6Type vt) {
+    switch (vt) {
+        case Vb6Type::Integer:  return "vb6_CStrLong((int32_t)(" + expr + "))";
+        case Vb6Type::Long:     return "vb6_CStrLong(" + expr + ")";
+        case Vb6Type::LongLong: return "vb6_CStrLongLong(" + expr + ")";
+        case Vb6Type::Byte:     return "vb6_CStrByte(" + expr + ")";
+        case Vb6Type::Boolean:  return "vb6_CStrBool(" + expr + ")";
+        case Vb6Type::Single:   return "vb6_CStrSingle(" + expr + ")";
+        case Vb6Type::Double:   return "vb6_CStrDbl(" + expr + ")";
+        case Vb6Type::Date:     return "vb6_CStrDate(" + expr + ")";
+        default:                return expr;
+    }
 }
 
 bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
@@ -1299,7 +1332,12 @@ bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
     if (propVt == Vb6Type::Currency) return false;
     const std::string propC = mapType(propVt);
     const bool conv152 = !wantCType.empty() && wantCType != propC;
-    if (conv152 && propVt == Vb6Type::String) return false;  // BSTR 不换算
+    /* §11.155 (第一百七十二刀): 数值属性 → String 形参这一向开了 (以前它落到兜底强转，
+     * 发 `BSTR _pb = ((BSTR)(get_N1(b)))` ⇒ 体里一拼串就 0xC0000005)。
+     * 反方向 (String 属性 → 数值形参) 仍在册: 它要两枚临时量 (BSTR + 数值) 且写回时
+     * 还得再遁一枚 BSTR —— 账上另开，本刀不偷开。 */
+    if (conv152 && propVt == Vb6Type::String) return false;  // 在册
+    const bool toBstr155 = conv152 && wantCType == "BSTR";
     const std::string packFn = comByRefPackFnForVbType(propVt);
     if (packFn.empty()) return false;
     const std::string tmp = "_pb" + std::to_string(tempCounter_++);
@@ -1308,12 +1346,18 @@ bool CCodeGen::comPropReadWriteArg(Expr& expr, const std::string& argText,
     if (lpInFn == std::string::npos) return false;
     letFn = letFn.substr(0, lpInFn) + "_prop_let_" + letFn.substr(lpInFn + 10);
     const std::string declC = conv152 ? wantCType : propC;
-    const std::string declVal = conv152 ? narrowArgText(argText, wantCType, propC) : argText;
-    const std::string setVal = conv152 ? narrowArgText(tmp, propC, wantCType) : tmp;
+    const std::string declVal = toBstr155
+        ? cstrOfVt(argText, propVt)
+        : (conv152 ? narrowArgText(argText, wantCType, propC) : argText);
+    const std::string setVal = conv152
+        ? (toBstr155 ? narrowArgText(tmp, propC, "BSTR")
+                     : narrowArgText(tmp, propC, wantCType))
+        : tmp;
     comPropWrites_.push_back(ComPropWriteBack{
         declC + " " + tmp + " = " + declVal + ";",
         letFn + "(" + baseOnly + idxArgs + ", " + setVal + ");",
-        propVt == Vb6Type::String ? "vb6_BSTR_Free(" + tmp + ");" : std::string()});
+        (propVt == Vb6Type::String || toBstr155)
+            ? "vb6_BSTR_Free(" + tmp + ");" : std::string()});
     outVt = propVt;
     outVar = tmp;
     return true;

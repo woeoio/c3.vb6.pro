@@ -31,13 +31,14 @@ $helpers = Join-Path $root 'src\backend\detail\util\cgen_helpers.inc'
 $bindInc = Join-Path $root 'src\backend\detail\expr\cgen_expr_call_com_bind.inc'
 $stateInc = Join-Path $root 'src\backend\detail\util\cgen_state.inc'
 $callCpp = Join-Path $root 'src\backend\stmt\cgen_call.cpp'
+$typeCpp = Join-Path $root 'src\backend\cgen_util_type.cpp'
 $argEmit = Join-Path $root 'src\backend\detail\expr\cgen_expr_call_arg_emit.inc'
 $harness = Join-Path $root 'tests\run_tests.ps1'
 $fixBas  = Join-Path $root 'tests\b239_byrefarg\B239k.bas'
 $fixVbp  = Join-Path $root 'tests\b239_byrefarg\B239k.vbp'
 
 foreach ($p in @($packC, $comHdr, $utilC, $helpers, $bindInc, $harness, $fixBas, $fixVbp,
-                $stateInc, $callCpp, $argEmit)) {
+                $stateInc, $callCpp, $argEmit, $typeCpp)) {
     if (-not (Test-Path -LiteralPath $p)) { Write-Host ('FAIL missing ' + $p) -ForegroundColor Red; exit 1 }
 }
 
@@ -150,6 +151,18 @@ Expect 'R9 prop-rw two callers'     ((Count-Pattern $utilC 'comPropReadWriteArg\
 Expect 'R9 early-bound site'        (Count-Pattern $argEmit 'pvt148, pvar148, cType\)\) \{') 1 '早绑定那一族把形参 C 型递进去 (型不一致也接 —— 主人内部换算)'
 Expect 'R9 statement window open'   (Count-Pattern $callCpp 'comPropWriteWindow_ = true;') 1 '只在语句位置开窗'
 Expect 'R9 statement window close'  (Count-Pattern $callCpp 'comPropWriteWindow_ = false;') 2 'emitExpr 之后 + CallArgScope102'
+
+# ---- R10 (§11.155 第一百七十二刀): String 与数值之间的隐式换算 ----
+# 两个站 (赋值 / 实参) 共一份折数主人: RTL 的 _Generic 家族 (BSTR 臂 → vb6_NumVal)。
+Expect 'R10 bstr source arm'     (Count-Pattern $utilC 'if \(fromC == "BSTR"\) \{') 1 'narrowArgText 认 BSTR 源 (以前裸强转 ⇒ Error 6 / 0xC0000005)'
+Expect 'R10 bstr long arm'       (Count-Pattern $utilC 'toC == "int32_t"\) return "vb6_CLng\(') 1 'Long 档: vb6_CLng 的 BSTR 臂'
+Expect 'R10 bstr int arm'        (Count-Pattern $utilC 'toC == "int16_t"\) return "vb6_CInt\(') 1 'Integer 档'
+Expect 'R10 bstr byte via dbl'   (Count-Pattern $utilC 'vb6_CByte\(vb6_CDbl\(') 1 'Byte 无 BSTR 臂 ⇒ 先折 double'
+Expect 'R10 num to bstr by vt'   (Count-Pattern $utilC 'static std::string cstrOfVt\(') 1 '数值→BSTR 选档问声明档 (int16_t 盖着 Boolean)'
+Expect 'R10 to-bstr branch'      (Count-Pattern $utilC 'const bool toBstr155 = conv152 && wantCType == "BSTR";') 1 '数值属性 → String 形参那一格'
+Expect 'R10 to-bstr frees'       (Count-Pattern $utilC 'propVt == Vb6Type::String \|\| toBstr155') 1 'BSTR 临时量归调用方退 (两向都算)'
+Expect 'R10 assign string arm'   (Count-Pattern $typeCpp 'if \(vt == Vb6Type::String\) \{') 1 'narrowCheckAssign 的 String 源臂'
+Expect 'R10 fixture cases'       ([regex]::Matches($h, "Test-Vbp 'b175_str_num_conv")).Count 2 '两格: x64 + x86'
 Expect 'R5 absent lesion' ([regex]::Matches($h, 'vb6_ComPackInt\(&n\)')).Count 1 '改前那一形只许留在 Absent'
 
 if ($fails.Count -gt 0) {

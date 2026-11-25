@@ -2364,6 +2364,19 @@ std::string CCodeGen::narrowCheckAssign(Expr* target, Expr* value,
         vt == Vb6Type::Date)
         return std::string(fn) + "(vb6_FltToLng(" + cValue + "))";
 
+    /* 账 #305 §11.155 (第一百七十二刀): String 源 → 窄整型目标。
+     * 以前直接发 `vb6_ChkLong(<BSTR>)` —— 把指针当整数 (实测 `n = "12"` 抛 Error 6)。
+     * 折数交给 RTL 的 _Generic 家族 (BSTR 臂 → vb6_NumVal 那位主人)，不在这里手写解析。 */
+    if (vt == Vb6Type::String) {
+        switch (tt) {
+            case Vb6Type::Integer:  return "vb6_CInt(" + cValue + ")";
+            case Vb6Type::Byte:     return "vb6_CByte(vb6_CDbl(" + cValue + "))";
+            case Vb6Type::Long:     return "vb6_CLng(" + cValue + ")";
+            case Vb6Type::LongLong: return "vb6_CLngLng(" + cValue + ")";
+            default: break;
+        }
+    }
+
     // C30-10 第四十六刀: `+ - * \ Mod` 两侧都是 Integer 档那条路，**发码里已经逐步套过
     // vb6_ChkInt**（越界即错误 6）⇒ 这里再套一层只是把同一个检查做两遍（热循环里每个
     // `i = i + 1` 多一次 RTL 调用）。判据问 AST，不认文本。

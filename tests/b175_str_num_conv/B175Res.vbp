@@ -1,0 +1,5 @@
+Type=Exe
+Module=B175Main; B175Main.bas
+Class=B175Box; B175Box.cls
+Startup="Sub Main"
+ExeName32="B175Res.exe"

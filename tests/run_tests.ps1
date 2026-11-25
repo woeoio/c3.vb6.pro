@@ -12646,6 +12646,15 @@ $b171Needles = @(
 "B171-Q5=11.5", "B171-Q6=7.25", "B171-Q7=11.5", "B171-DONE")
 Test-Vbp 'b171_currency_prop_str' "$Tests\b171_currency_prop_str\B171Res.vbp" $b171Needles
 Test-Vbp 'b171_currency_prop_str_x86' "$Tests\b171_currency_prop_str\B171Res.vbp" $b171Needles -Arch "x86"
+
+# 账 #305 §11.155 (第一百七十二刀): String 与数值之间的隐式换算。
+# 1-4 是赋值站 (以前发 `vb6_ChkLong(<BSTR>)`, 实测 Error 6); 5-6 是属性读交 String 形参
+# (以前发 `BSTR _pb = ((BSTR)(get_N(b)))`, 体里一拼串就 0xC0000005); 7-8 是同档对照。
+$b175Needles = @(
+"B175-1=12", "B175-2=34", "B175-3=200", "B175-4=1.5",
+"B175-5=70", "B175-6=1.55", "B175-7=15", "B175-8=4", "B175-DONE")
+Test-Vbp 'b175_str_num_conv' "$Tests\b175_str_num_conv\B175Res.vbp" $b175Needles
+Test-Vbp 'b175_str_num_conv_x86' "$Tests\b175_str_num_conv\B175Res.vbp" $b175Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
