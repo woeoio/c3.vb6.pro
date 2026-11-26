@@ -9148,7 +9148,10 @@ if ($Category -in @("all", "run", "vbp")) {
         '? (vb6_Left(gBig, 64)) : NULL;',
         'vb6_BSTR_AssignMove(&s, _av',
         'vb6_BSTR_AssignMove(&t, vb6_String((*n), 67));',
-        'vb6_BSTR_AssignMove(&(*o), vb6_MakeTag((&(int32_t){3})));',
+        # 第一百九十二刀 (§11.175): MakeTag 自身没有 On Error ⇒ 这行进了语句级守卫
+        # （目标吃临时量: 先算进 _avN, 序号没变才移动、变了就释放 —— 真机 D1 那族）。
+        # 钉“守卫后仍走移动”这个形状，不钉 _avN 的编号（它随 stmtAbortSeq_ 走）。
+        'if (_e0 == vb6_ErrSerial()) vb6_BSTR_AssignMove(&(*o), _av',
         'vb6_BSTR_Assign(&d, s);'
     )
     Test-EmitcAbsent "strleak_emitc_no_move_borrowed" @("$Tests\test_str_leak.bas") @(
