@@ -6683,7 +6683,7 @@ if ($Category -in @("all", "run", "bas")) {
     # 3/"Long"（描述符指针被折进标量档），现在与 ml 同形 8195/"Long()"。两条负控都跑过：
     # 把那条秩数护栏从 <= 1 改成 <= 0（等于关掉这一问）⇒ 这一条退回 3/"Long"；
     # 把这一问挪到那张 inferExprType 表之后 ⇒ 哨兵 A18 新加的「赋值站顺序」那条报红。
-    Add-BasTest "test_com_latebound" "$Tests\test_com_latebound.bas" @("LB-1:OK", "LB-2:OK", "LB-3:OK", "LB-4:OK", "LB-5:OK", "P24-10b: 5/5", "VB-b159-ml=8195/Long()/3/7002", "VB-b159-mb=8209/Byte()/2/66", "VB-b159-mx=8195/Long()/3/7022", "VB-b159-bl=8203/Boolean()/1/True", "VB-b159-sg=8196/Single()/1/1.25", "VB-b159-loc=8195/Long()/1/7100", "VB-b159-mu=0/Empty(e13)/", "VB-b159-ms=0/Empty(e13)/", "VB-b159-va=8195/Long()/3/7002")
+    Add-BasTest "test_com_latebound" "$Tests\test_com_latebound.bas" @("LB-1:OK", "LB-2:OK", "LB-3:OK", "LB-4:OK", "LB-5:OK", "P24-10b: 5/5", "VB-b159-ml=8195/Long()/3/7002", "VB-b159-mb=8209/Byte()/2/66", "VB-b159-mx=8195/Long()/3/7022", "VB-b159-bl=8203/Boolean()/1/True", "VB-b159-sg=8196/Single()/1/1.25", "VB-b159-loc=8195/Long()/1/7100", "VB-b159-mu=0/Empty(e13)(e13)", "VB-b159-ms=0/Empty(e13)(e13)", "VB-b159-va=8195/Long()/3/7002")
     # 账 #611: `On Error GoTo 0` 只关本过程 —— 之后的 Err.Raise 必须落到调用方的
     # On Error GoTo label。修前 C3 清的是全局 jmp 标志, 外层 setjmp 一并作废 ⇒
     # vb6_ErrRaise 走 "Unhandled error" → ExitProcess (JSonFast 第 5 按钮一点就死)。
@@ -13056,6 +13056,34 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "G6 last_stmt: hits=1 err=11")
     Test-Vbp 'b201_resume_scope' "$Tests\b201_resume_scope\B201Res.vbp" $b201Needles
     Test-Vbp 'b201_resume_scope_x86' "$Tests\b201_resume_scope\B201Res.vbp" $b201Needles -Arch "x86"
+    # §11.177 第一百九十四刀: 一维 Variant 下标的错误档。
+    # 槽不是数组（Empty / Long / Null / String / Boolean）→ 13；数组没分配 / 越界（上下同）→ 9；
+    # 界内照常取值；读侧 vb6_VariantArrayGet 与写侧 vb6_VariantArraySet 同一口径，
+    # 二维 vb6_VariantArrayGetND 也是 13 / 9。真机: .temp/k194p/p223.txt / p224.txt / p225.txt。
+    # 不钉 raise 之后目标槽的内含 —— 真机保持原值、本仓仍写 Empty（192 刀的 Variant 目标缺口）。
+    $b202Needles = @(
+    "V1 empty-err=13",
+    "V2 long-err=13",
+    "V3 null-err=13",
+    "V4 string-err=13",
+    "V5 bool-err=13",
+    "V6 inrange=7",
+    "V6 inrange-err=0",
+    "V7 oob_hi-err=9",
+    "V8 oob_lo-err=9",
+    "V9 longarr=11",
+    "V10 unalloc-err=9",
+    "V11 arrayfn=22",
+    "V12 set_empty-err=13",
+    "V13 set_oob-err=9",
+    "V14 ubound_empty=0-err=13",
+    "V15 lbound_empty=0-err=13",
+    "V16 empty2d-err=13",
+    "V17 inrange2d=31",
+    "V18 oob2d-err=9",
+    "V19 hits=1-err=13")
+    Test-Vbp 'b202_variant_subscript' "$Tests\b202_variant_subscript\B202Res.vbp" $b202Needles
+    Test-Vbp 'b202_variant_subscript_x86' "$Tests\b202_variant_subscript\B202Res.vbp" $b202Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

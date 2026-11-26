@@ -1608,19 +1608,35 @@ static vb6_VARIANT vb6_VariantElemFromSlotData(void* data, int32_t off, vb6_safe
     return result;
 }
 
+/* 第一百九十四刀 (§11.177): 一维 Variant 下标的错误档。
+   改前三个出口对「槽不是数组」「数组没分配」「下标越界」一律**静默交回 Empty /
+   静默丢弃」，于是 `.temp/k194p/P223.bas` 的 A1–A5 / A7 / A8 / A12 / A13 八格全是
+   「不报错」，而真机逐格报 13 / 13 / 13 / 13 / 13 / 9 / 9 / 13 / 9：
+     非数组槽（Empty / Long / Null / String / Boolean 都算）→ 13
+     数组没分配（parray 为空）→ 9
+     下标越界（上、下同）→ 9
+   13 与 9 的分界是**槽本身是不是数组**，与下标无关；写侧（Set）同形。
+   地址侧（vb6_VariantArrayElemPtr）本刀不动 —— 那一档交 NULL 给发码侧，
+   语义另记（见 §11.177 第五节）。 */
+static void vb6_VariantArrayRaiseNotArray(void) { vb6_ErrRaiseNumber(13); }
+static void vb6_VariantArrayRaiseUnalloc(void)  { vb6_ErrRaiseNumber(9); }
+static void vb6_VariantArrayRaiseOOB(void)     { vb6_ErrRaiseNumber(9); }
+
 /* Variant数组索引: 从持有SafeArray的Variant中取/设元素 */
 vb6_VARIANT vb6_VariantArrayGet(vb6_VARIANT* v, int32_t index) {
     vb6_VARIANT result;
     memset(&result, 0, sizeof(result));
     result.vt = vb6_vtEmpty;
-    if (!v || !(v->vt & vb6_vtArray) || !v->parray) return result;
+    if (!v) return result;                       /* 只有 NULL 槽才留静默: 发码侧不会这么发 */
+    if (!(v->vt & vb6_vtArray)) { vb6_VariantArrayRaiseNotArray(); return result; }
     /* 富贵竹 FIX-011 惰性兜底 (账 #610 第341刀): 槽里挂的其实是**真 SAFEARRAY**
      * (vt 出参写了 oleaut32 自家布局) 而不是 C3 描述符 —— 走收尾函数
      * vb6_ComVariantOuts 的调用点早已归一化, 这里兜住没走那条路站点:
      * 不归一化就会把真 SAFEARRAY 当描述符读 (魔数位当字段 = 垃圾下界)。 */
     if (vb6_SlotHasRealSafeArray(v)) vb6_VariantNormalizeComSlot(v);
+    if (!v->parray) { vb6_VariantArrayRaiseUnalloc(); return result; }
     vb6_SafeArray1D* arr = v->parray;
-    if (index < arr->lBound || index > arr->uBound) return result;
+    if (index < arr->lBound || index > arr->uBound) { vb6_VariantArrayRaiseOOB(); return result; }
     return vb6_VariantElemFromSlotData(arr->data, index - arr->lBound, arr->elemType);
 }
 
@@ -1631,9 +1647,12 @@ vb6_VARIANT vb6_VariantArrayGetND(vb6_VARIANT* v, int32_t rank, ...) {
     vb6_VARIANT result;
     memset(&result, 0, sizeof(result));
     result.vt = vb6_vtEmpty;
-    if (!v || !(v->vt & vb6_vtArray) || !v->parray || rank < 1 || rank > 16) return result;
+    if (!v) return result;
+    if (!(v->vt & vb6_vtArray)) { vb6_VariantArrayRaiseNotArray(); return result; }
+    if (rank < 1 || rank > 16) { vb6_VariantArrayRaiseNotArray(); return result; }
     /* 富贵竹 FIX-011 惰性兜底: 与一维那条同口径 (真 SAFEARRAY 先归一化再读)。 */
     if (vb6_SlotHasRealSafeArray(v)) vb6_VariantNormalizeComSlot(v);
+    if (!v->parray) { vb6_VariantArrayRaiseUnalloc(); return result; }
     vb6_SafeArrayND* nd = (vb6_SafeArrayND*)v->parray;
     int32_t idx[16];
     va_list ap;
@@ -1657,7 +1676,10 @@ vb6_VARIANT vb6_VariantArrayGetND(vb6_VARIANT* v, int32_t rank, ...) {
    与 vb6_VariantArraySet(v, index, val) 同形, 发码侧那两处「Get 改 Set」的改写只换函数名、
    把装箱后的值追加在末尾, 不必再拼一次参数。 */
 void vb6_VariantArraySetND(vb6_VARIANT* v, int32_t rank, ...) {
-    if (!v || !(v->vt & vb6_vtArray) || !v->parray || rank < 1 || rank > 16) return;
+    if (!v) return;
+    if (!(v->vt & vb6_vtArray)) { vb6_VariantArrayRaiseNotArray(); return; }
+    if (!v->parray) { vb6_VariantArrayRaiseUnalloc(); return; }
+    if (rank < 1 || rank > 16) { vb6_VariantArrayRaiseNotArray(); return; }
     vb6_SafeArrayND* nd = (vb6_SafeArrayND*)v->parray;
     if (nd->elemType != vb6_sa_variant) return;   /* 与一维那条同口径: 只有 Variant 数组可写 */
     int32_t idx[16];
@@ -1679,9 +1701,11 @@ void vb6_VariantArraySetND(vb6_VARIANT* v, int32_t rank, ...) {
 }
 
 void vb6_VariantArraySet(vb6_VARIANT* v, int32_t index, vb6_VARIANT val) {
-    if (!v || !(v->vt & vb6_vtArray) || !v->parray) return;
+    if (!v) return;
+    if (!(v->vt & vb6_vtArray)) { vb6_VariantArrayRaiseNotArray(); return; }
+    if (!v->parray) { vb6_VariantArrayRaiseUnalloc(); return; }
     vb6_SafeArray1D* arr = v->parray;
-    if (index < arr->lBound || index > arr->uBound) return;
+    if (index < arr->lBound || index > arr->uBound) { vb6_VariantArrayRaiseOOB(); return; }
     int32_t off = index - arr->lBound;
     if (arr->elemType == vb6_sa_variant) {
         vb6_VARIANT* slot = &((vb6_VARIANT*)arr->data)[off];
