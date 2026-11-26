@@ -13028,3 +13028,101 @@ if ((lDate && rStr) || (lStr && rDate)) {
   比较站是“编得过、答得理直气壮”；而 `Select Case` 错得更隐蔽（主语被截成 int32_t，
   读数据看着像“日期范围判断总是不命中”）。找它们的办法只有一个：真机逐格对读，
   再把每一个读数钉成夹具里的一行。
+
+---
+
+## §11.191 Date 与 Variant 相比：装成 VT_DATE、文本按日期解、Null 为无序（第二百零八刀）
+
+### 一、问题
+
+上一刀把 **Date 与 String** 那一档收了口，紧接着的自然问题是：右值是 **Variant** 呢？
+改前 C3 把 Date 侧装成 `vb6_VariantFromValue(d)` —— `_Generic` 看 double ⇒ **VT_R8**，
+于是 RTL 按账 §38 那条「数值恒小于字符串」比，而 Null 又被当成 0 解包：
+
+| 右值（Variant 里装的） | 真机 | 改前 C3 |
+| --- | --- | --- |
+| 文本日期 `"2020-12-31"` | 真（Z1） | **假** |
+| 文本日期等于 d | 真（Z2） | **假** |
+| 数值 45000 | 假（Z3） | 假 |
+| `"abc"` | 假、**且不报错**（Z4） | 假、不报错 |
+| `Null` | 假（Z5） | **真** |
+| `Empty` | 真（Z6） | 真 |
+| Date 元素 vs Variant 日期 | 真（Z7） | 真 |
+| Variant 在左、Date 在右 | 真（Z8） | **假** |
+
+四条错里 Z1/Z2/Z8 是同一个根（Date 丢了身份），Z5 是另一个根（Null 被当 0）。
+
+### 二、真机读数（VB6Mini `/make`，`.temp/k208p`）
+
+```
+Z1 gt=1 err=0   Z2 eq=1 err=0   Z3 num=0 err=0   Z4 bad=0 err=0
+Z5 null=0 err=0 Z6 empty=1 err=0 Z7 elem=1 err=0  Z8 rev=1 err=0
+```
+
+两条最值钱的读数：
+
+- **Z4：文本解不开时答假，但不报 13** —— 与上一刀的类型化 String 那档（报 13）**不同**。
+  所以这一腿不能直接复用 `vb6_DateVal`，必须是“静默解析”。
+- **Z5：Null 参与比较的结果是假，也不报错** —— VB6 的 Null 传播在这里表现为“六个出口
+  全假”，而不是“按 0 解包”。这一条是**通用**的（不只 Date）。
+
+### 三、判据与改法
+
+**cgen（装箱）**：`wrapOperand132` 从只看 C 文本改成也看 AST —— Date 侧用
+`vb6_VariantDate(...)`（VT_DATE），其余仍 `vb6_VariantFromValue`。
+
+**RTL（比较口径，`vb6_VarCmpOrder` 一处）**：
+
+1. 任一侧 `VT_NULL` ⇒ 返回 **2 = 无序**；六个出口统一把 2 当假（`Ne` 也算假，
+   否则 `<>` 会反着开口）。
+2. `VT_DATE` 与 `VT_BSTR` ⇒ 用新加的 `vb6_TryDateValQuiet` 把文本静默折成序列再比；
+   解不开也返回无序（Z4）。
+
+`vb6_TryDateValQuiet` 放在 `vb6rtl_date.c`，仍然只消费 `vb6_TryDateFromStr` 那**一个**
+解析站点 —— 新增的是**消费方**，不是第二个解析器。
+
+### 四、为什么这样改
+
+- **在 RTL 收口而不是在 cgen 打补丁**：比较的档位语义（Null 无序、日期 vs 文本）不属于
+  某一个站点，六枚出口（`Eq/Ne/Lt/Gt/Le/Ge`）共用一份 `vb6_VarCmpOrder` 才是它们的家。
+- **为什么装箱也得改**：光改 RTL 没用 —— VT_R8 的 44259 与“日期”在外观上无法区分，
+  RTL 只能猜。身份在装箱那一刻就丢了，就得在装箱那一刻补回来。
+- **为什么静默解析单独开一枚**：`vb6_DateVal` 会报 13（类型化 String 那档需要），
+  而 Variant 比较这档真机不报 —— 两档不同，不能合。
+
+### 五、读数与随刀改的针
+
+- 新夹具 `tests/b215_date_variant_compare`（Z1–Z8 八行，与真机逐字相同），x64/x86 **逐行相同**。
+- 新哨兵 R22（VT_DATE 装箱 + Null 无序 + 静默解析三枚钉子）、R23（b215 两台在跑）。
+- 两条**旧哨兵的语义迁移**（都是真变化，不是误报）：
+  - `check_date_conv` R1 与 `check_ispred_text` R2 的 `vb6_TryDateFromStr` 消费方 4→5
+    （新增第四位：静默解析）；`VarDateFromStr` 仍只 1 处。
+  - `check_owned_temp_keeps` K5 快照多了 `vb6_TryDateValQuiet|0`，用 `-Bless` 重新登记。
+- 改坏即红：把 NULL 那行条件抹成 `if (0)` ⇒ `R22 Null-is-unordered rule = 0`，还原后 PASS。
+- 存量形状三份变化，逐行看过差异：`test_varcmp_scalar.bas`（`_vcmp_12/13 = vb6_VariantDate(...)`）、
+  `b165` 两行（`vb6_VariantDate(vb6_DateSerial(2020,1,2))`）—— **正是本刀想要的形状**，按 CI 数重登记。
+- 闸门（本机全 PASS）：`check_date_conv`（`vcmp-cells=2`）、`check_ispred_text`、
+  `check_owned_temp_keeps`、`check_manifest_coverage`（inputs=924）、`check_static_sentinel_registration`、
+  `check_sa_access`、`check_caseis_shape`、`check_select_*`。
+
+### 六、神谕与清单
+
+- 真机神谕：`.temp/k208p/P249.bas` / `p249.txt`（八行）。
+- 修前取证：`.temp/k208p/c3a`（Z1/Z2/Z8 答 0、Z5 答 1）与 `--emit-c` 的
+  `vb6_VARIANT _vcmp_0 = vb6_VariantFromValue(d);`。
+- 门：run `45912815096`（`dev`、head `19195e31`）**23/23 全绿**（上两跑：`4694deba` 红在两条
+  旧哨兵的 4→5 与 K5 快照 + 三份形状；均已归因后重登记）。
+- 刻意不跟的格（背账）：`Select Case` 的 **Variant 标签**那条链（`vb6_VarSelCmp*`）未按本刀口径
+  验过 Null/日期；**类型化 String** 与日期比仍走上一刀（报 13）那条腿，与 Variant 文本不同档，
+  这是有意保留的差异；成员/委托当操作数同样未接。
+
+### 七、记账
+
+- 探针：`.temp/k208p/P249.bas`（八格）、`c3a`（改前读数）、`rows215.ps1`（清单两行复算）。
+- 夹具：`tests/b215_date_variant_compare`，注册在 `tests/run_tests.ps1`（x64 + x86）。
+- 代码：`4694deba`（VT_DATE 装箱 + Null 无序 + 静默解析 + 夹具 + 哨兵 R22/R23）；
+  `19195e31`（两条旧哨兵 4→5、K5 重 bless、三份形状重登记）。
+- **号**：本节 = 第二百零八刀 / §11.191。
+- 教训：**“同一个转换”在不同类型对上是不同规则。** 类型化 `String` 面对日期"折不了就报 13"，
+  `Variant` 面对日期却“折不了就答假” —— 两边都不是随便定的，都是真机读出来的。
+  落实现时最危险的动作是“复用刚刚那枚”，因为它看上去一模一样。
