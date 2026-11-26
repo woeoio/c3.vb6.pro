@@ -211,6 +211,7 @@ vb6_TimeSet|0	0		0	open	BSTR
 vb6_TimeValue|0	0	handoff-reads:vb6_DateParse	0	open	BSTR
 vb6_Trim|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_TrimV|0	1	store	0	open	VARIANT
+vb6_TryDateValQuiet|0	0	handoff-reads:vb6_TryDateFromStr	0	open	BSTR
 vb6_TypeName|0	0	handoff-to-plain:vb6_Host_TypeNameOf	0	open	VARIANT
 vb6_UCase_str|0	0	handoff-reads:vb6_UCase	0	open	BSTR
 vb6_UCase|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
@@ -416,6 +417,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [alias] vb6_VarConcatNullV VARIANT
 [alias] vb6_VarConcatNullVV VARIANT
 [alias] vb6_VariantArray VARIANT
+[alias] vb6_VariantArrayCopy VARIANT
 [alias] vb6_VariantArrayGet VARIANT
 [alias] vb6_VariantArrayGetND VARIANT
 [alias] vb6_VariantArrayGetVal VARIANT
@@ -423,6 +425,8 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [alias] vb6_VariantFromStackVARIANT VARIANT
 [alias] vb6_VariantIdentity VARIANT
 [alias] vb6_VariantObject VARIANT
+[alias] vb6_VariantObjectBorrowed VARIANT
+[alias] vb6_VariantObjectTransfer VARIANT
 [alias] vb6_VariantSetCopyChecked VARIANT
 [alias] vb6_VariantString VARIANT
 # --- 消费轴（账 #463 §B164 研究新增）：消费者**自己放掉**自己的形参的那几格 ---

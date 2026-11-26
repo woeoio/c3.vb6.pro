@@ -51,7 +51,9 @@ $r2can = N '^int32_t vb6_DateCanParse\(BSTR s\) \{' $D
 $r2try = N 'vb6_TryDateFromStr\(' $D
 $r2raise = N $RAISE $D
 if ($r2can -ne 1) { $fail += ('R2 vb6_DateCanParse definition = ' + $r2can + ' (want 1)') }
-if ($r2try -ne 4) { $fail += ('R2 vb6_TryDateFromStr sites = ' + $r2try + ' (want 4 = def + three owners)') }
+# §11.191 第二百零八刀: 第四位消费方 = vb6_TryDateValQuiet (Variant 比较的静默解析)。
+# VarDateFromStr 仍只 1 处 —— 多的是消费方, 不是第二个解析站点。
+if ($r2try -ne 5) { $fail += ('R2 vb6_TryDateFromStr sites = ' + $r2try + ' (want 5 = def + four owners)') }
 if ($r2raise -ne 1) { $fail += ('R2 raise-13 outlets in date.c = ' + $r2raise + ' (want 1: the predicate must not raise)') }
 # R3
 $r3num = N 'return vb6_IsNumericText\(v\.bstrVal\);' $C
