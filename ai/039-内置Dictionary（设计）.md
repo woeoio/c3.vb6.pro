@@ -11670,3 +11670,103 @@ G5 next_stmt: n=0 hits=1 err=11      G6 last_stmt: hits=1 err=11
   （此前 `45798686898` 三红：manifest 未装行 + `Tests (compile #1)` / `Tests (bas #2)` 各由
   `manifest_coverage` 与 `test_com_latebound` 一条针翻红）。
 - 记账坑（沿用第一百九十二刀，未再新增）：`cgen_state.inc` 属 PCH 内容，两个 PCH 都要顶。
+## §11.177 一维 Variant 下标的错误档：非数组 13、越界与未分配 9（第一百九十四刀）
+
+### 一、问题
+
+上一刀量 `test_com_latebound` 的 `mu/ms` 两格时撞见了根子：`vb6_VariantArrayGet` 对
+「槽不是数组」「数组没分配」「下标越界」三种情况**一律静默交回 `Empty`**，写侧
+`vb6_VariantArraySet` 同样静默丢弃（二维那两条 `…GetND` / `…SetND` 对非数组槽也是静默交
+`Empty`）。于是 `.temp/k194p/P223.bas` 的 A1–A5 / A7 / A8 / A10 / A12 / A13 八格在 C3 上
+全是「不报错、目标被写空」，真机逐格报 13 / 9 —— 这是「C3 让错误消失」的典型形：
+程序不崩、读数全错，比崩溃更难查。
+
+### 二、真机读数（VB6Mini `/make` 实跑）
+
+一维（`.temp/k194p/P223.bas`，读侧 `x = r(i)` 与写侧 `r(i) = 77` 都量了）：
+
+| 格 | 槽 | 真机 |
+|---|---|---|
+| A1 | `Empty` | `err=13`，`x` 不动 |
+| A2 | `5`（Long） | `err=13` |
+| A3 | `Null` | `err=13`（**不是** 94） |
+| A4 | `"abc"` | `err=13` |
+| A5 | `True` | `err=13` |
+| A6 | `Variant()` 界内 | `x=7`，`err=0` |
+| A7 / A8 | `Variant()` 越界上 / 下 | `err=9` |
+| A9 | `Long()` 数组界内 | `x=11`，`err=0`（元素提升） |
+| A10 | 未分配的 `Variant()` 动态数组 | `err=9` |
+| A11 | `Array(21,22)` | `x=22`，`err=0` |
+| A12 | 写侧：`Empty` 槽 `r(0)=77` | `err=13` |
+| A13 | 写侧：越界写 | `err=9` |
+| A14 / A15 | `UBound` / `LBound(Empty)` | `err=13`（`err=13` 这一档早就是对的，作对照） |
+
+二维（`.temp/k194p/P224.bas`）：空槽 / Long 槽 → `13`，`a2(0,1)` → `31`，`a2(2,0)` → `9`。
+
+分界只有一条：**槽本身是不是数组**决定 13 与 9，与下标无关；读侧、写侧、一维、二维同口径。
+
+### 三、判据与改法
+
+四处出口按同一条分界 raise（`vb6_ErrRaiseNumber`，与除零那族同一个入口）：
+
+```c
+static void vb6_VariantArrayRaiseNotArray(void) { vb6_ErrRaiseNumber(13); }
+static void vb6_VariantArrayRaiseUnalloc(void)  { vb6_ErrRaiseNumber(9); }
+static void vb6_VariantArrayRaiseOOB(void)      { vb6_ErrRaiseNumber(9); }
+```
+
+- `vb6_VariantArrayGet`：`!v` 仍留静默交 `Empty`（发码侧不会这么发，属防御）；`vt` 无数组位
+  → 13；归一一枚真 SAFEARRAY 之后 `parray` 为空 → 9；下标出界 → 9。
+- `vb6_VariantArraySet`：同形，写侧原来「静默丢弃」的三种情况同样 13 / 9 / 9。
+- `vb6_VariantArrayGetND` / `…SetND`：非数组槽 → 13，未分配 → 9，秩数非法 → 13；
+  越界本来就由 `vb6_SaNdElemPtr` / `vb6_SaNdElemFail` 抛 9，未动。
+
+四处的先后顺序是**先判「是不是数组」再判「分配没分配」**：`vt` 位是槽的类型标签，`parray`
+是运行期内容；反过来判会让「Empty 槽」与「未分配数组」都落进 9，而真机把前者算 13。
+
+### 四、读数（`tests/b202_variant_subscript`，x64 与 x86 逐字相同）
+
+```
+V1 empty-err=13      V2 long-err=13       V3 null-err=13      V4 string-err=13
+V5 bool-err=13       V6 inrange=7         V6 inrange-err=0    V7 oob_hi-err=9
+V8 oob_lo-err=9      V9 longarr=11        V10 unalloc-err=9   V11 arrayfn=22
+V12 set_empty-err=13 V13 set_oob-err=9    V14 ubound_empty=0-err=13
+V15 lbound_empty=0-err=13                 V16 empty2d-err=13
+V17 inrange2d=31     V18 oob2d-err=9      V19 hits=1-err=13
+```
+
+19 格与真机一一对上（V19 那一格另用 `.temp/k194p/P225.bas` 取的真机：出错语句之后的下一条
+照跑、`Err` 留着）。改前 V1–V5 / V7 / V8 / V10 / V12 / V13 / V16 / V18 全是 0。
+
+### 五、本刀明示不开口的三处
+
+- **raise 之后目标槽的内含**：真机保持原值（`x=-99` 不动），本仓仍写 `Empty` —— 这是
+  第一百九十二刀留下的 Variant 目标缺口（`(VARIANT)0` 不是合法初始化），夹具因此只钉错误号
+  与界内取值，不钉 raise 之后的内含。
+- **地址侧 `vb6_VariantArrayElemPtr`**：仍对非数组槽交 `NULL`（发码侧用它做元素引用 /
+  `VarPtr`）。那一档要动的是「NULL 之后发码侧怎么办」，另立。
+- **非 Variant 数组元素的写侧**：`vb6_VariantArraySet` 对 `elemType != vb6_sa_variant` 的数组
+  仍然静默不写（注释原文「仅 Variant 数组支持赋值」）。真机这一档是另一种型别转换错误，
+  本次没量，不猜。
+
+### 六、神谕与清单
+
+- 副作用（朝真机走）：`test_com_latebound` 的 `VB-b159-mu/ms` 由上刀的 `0/Empty(e13)/`
+  变成 `0/Empty(e13)(e13)` —— 与真机 `P222` 的 `mu` **逐字相同**；`ms` 仍差 VarType
+  （真机 `8200/String()`、本仓 `0/Empty`，属 b159 那套 SAFEARRAY 老缺口）。
+- 真项目烟测：VBFlexGrid x86 编过 `rc=0`（这套控件是最重的 Variant 下标消费者）。
+- 门禁：`check_sa_access.ps1` PASS、`check_builtin_slot_returns.ps1` PASS。
+- manifest 按 CI `45805710855` 的产物装行：`changed=0 added=2 removed=0`，复检 896/896 相同。
+  `changed=0` 本身就是这一刀的判据读数 —— **只动 RTL 的 `.c`，发码侧一个字节没变**；
+  若这里出现几十上百行，就说明改动跑到了发码侧，要回头查。
+- 该次 GA（`45805710855`）的另外两红都是例行项：`manifest_coverage`（新夹具没装行）与
+  `Emit manifest`；`Tests (bas #1/#2…)` 全过 —— 语料里没有「靠下标越界静默取 Empty」活着的用例。
+
+### 七、记账
+
+- 探针：`.temp/k194p/P223.bas`（一维 15 格）、`P224.bas`（二维 4 格）、`P225.bas`（隐式 resume
+  与 Err 留存）。
+- 夹具：`tests/b202_variant_subscript`（V1–V19，`Debug.Print` 走 stdout）。
+- 代码 `2a476cf3`（清旁产物 `407dc948`）；清单 `c45a3791`；GA `45808179408` 23/23 全绿。
+- 小坑：夹具目录里用 VB6Mini 试编时落的 `VB6.exe` / `*.exe` / `vb.out` 会被 `git add` 顺手带上，
+  提交后要 `git rm --cached` 清掉（本次踩了一次）。
