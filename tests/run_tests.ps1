@@ -4106,11 +4106,34 @@ function Test-SyntaxMulti {
 # Codegen-stage probes (ai/022 B08e-6): diagnostics raised while C is being emitted never
 # reach --syntax-only (driver_compile.cpp returns before codegen), and a full build would
 # pay for cl.exe + link. `--emit-c` runs the whole front end plus codegen and stops there.
+# 账 #491 (§11.174 收尾): `--emit-c` 的 stdout 是 C3 自己写的 UTF-8, 而 PS5.1 的
+# [Console]::OutputEncoding 默认是 OEM 代码页 (中文机器 = 936) ⇒ 含中文注释的针脚在
+# CI (PS5.1) 与本机 (pwsh 7, 默认 UTF-8) 判据不一致: 同一份产物一边“在”、一边“不在”，
+# 而红的是**判据**不是产物 (k3100 那一轮就吃过这个: 本机 5 红 / CI 3 红)。
+# 口径统一在这里: 抓 --emit-c 时把解码口顶成 UTF-8, 抓完还原 —— cl.exe 那一路的诊断
+# 仍按原代码页解, 不被牵连。
+function Invoke-C3EmitC {
+    param([string]$ArgumentLine)
+    $prevConsole = $null
+    $prevOutEnc = $OutputEncoding
+    try { $prevConsole = [Console]::OutputEncoding } catch { }
+    try {
+        try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
+        $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+        $out = & cmd /c ('"' + $C3 + '" ' + $ArgumentLine + ' 2>&1')
+        $script:lastC3Exit = $LASTEXITCODE
+    } finally {
+        if ($null -ne $prevConsole) { try { [Console]::OutputEncoding = $prevConsole } catch { } }
+        $OutputEncoding = $prevOutEnc
+    }
+    return $out
+}
+
 function Invoke-CodegenProj {
     param([array]$Sources)
     $argList = (($Sources | ForEach-Object { '"' + $_ + '"' }) -join ' ')
-    $out = & cmd /c ('"' + $C3 + '" ' + $argList + ' --emit-c 2>&1')
-    $script:codegenProjExit = $LASTEXITCODE
+    $out = Invoke-C3EmitC ($argList + ' --emit-c')
+    $script:codegenProjExit = $script:lastC3Exit
     return (($out | Out-String) -replace '\s+', ' ')
 }
 
@@ -4183,8 +4206,8 @@ function Test-EmitcShape {
     $script:total++
     Write-Host -NoNewline "  [EMITC-SHAPE] $Name ... "
     $argList = (($Sources | ForEach-Object { '"' + $_ + '"' }) -join ' ')
-    $out = & cmd /c ('"' + $C3 + '" ' + $argList + ' --emit-c 2>&1')
-    $code = $LASTEXITCODE
+    $out = Invoke-C3EmitC ($argList + ' --emit-c')
+    $code = $script:lastC3Exit
     $raw = ($out | Out-String)
     $bad = @($Needles | Where-Object { -not $raw.Contains($_) })
     $odd = 0
@@ -4223,8 +4246,8 @@ function Test-EmitcAbsent {
     $script:total++
     Write-Host -NoNewline "  [EMITC-ABSENT] $Name ... "
     $argList = (($Sources | ForEach-Object { '"' + $_ + '"' }) -join ' ')
-    $out = & cmd /c ('"' + $C3 + '"' + ' ' + $argList + ' --emit-c 2>&1')
-    $code = $LASTEXITCODE
+    $out = Invoke-C3EmitC ($argList + ' --emit-c')
+    $code = $script:lastC3Exit
     $raw = ($out | Out-String)
     $hit = @($Needles | Where-Object { $raw.Contains($_) })
     if ($code -eq 0 -and $hit.Count -eq 0) {
