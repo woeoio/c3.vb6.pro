@@ -11997,9 +11997,13 @@ if (v->parray && vb6_SaIs1DOwned(v->parray)) { ... free ... }
 if ((v->vt & vb6_vtArray) && v->parray && vb6_SaIs1DOwned(v->parray)) { ... }
 ```
 
-同一坑还有第二面：这条 AV 在**改前也存在**（把本刀 RTL 全 stash 掉、同一探针照样崩），
-只是没人写过 `Dim v() As Variant` 的元素赋值 —— 它不属本刀引入，但本刀必须绕开，
-否则夹具自己都跑不绿。
+同一坑还有第二面：这条 AV 是**本刀自己引入的**，不是存量。改前那台 RTL（`a56c900c`）跑
+同一探针 `P231` 是 `exit=0`，末行读数 `G wrote slot0=88 src0=88` —— 它正好就是本刀要修的
+共用语义（写槽把源也写了），但至少不崩。
+
+> 一条差点写进文档的错误结论：RTL 是**烘进 `C3.exe`** 的模板 —— 只 `git stash` 源码、
+> 不重跑 `build.bat`，编出来的仍是改前那台，对照组等于没做。第一版据此写了「改前也存在」，
+> 重做时得 `git checkout <旧 commit> -- src/rtl` 再 `build.bat` 才是真对照。
 
 ### 五、读数与随刀改的针
 
@@ -12012,6 +12016,9 @@ if ((v->vt & vb6_vtArray) && v->parray && vb6_SaIs1DOwned(v->parray)) { ... }
   `cgen_variant_slot_prefixes.inc`，表从 63 名长到 64 名 —— 改 RTL 不改生成物，闸门就是红的）。
 - 压测 `.temp/k196p/P232.bas`：20000 轮「装箱 → 写槽 → Variant→Variant → 换档装箱」，
   退出码 0，无重复释放、无崩溃。这条专治「只测一次看不出释放权写错」。
+- 对照（同一探针 `P231`，两架构退码都是 0）：
+  - 改前 RTL `a56c900c`：`G wrote slot0=88 src0=88`（写槽把源也写了）。
+  - 改后 `e34b194b`：`G wrote slot0=88 src0=7`（副本；与真机 M4 的 `88`/`7` 同形）。
 
 ### 六、神谕与清单
 
@@ -12028,8 +12035,7 @@ if ((v->vt & vb6_vtArray) && v->parray && vb6_SaIs1DOwned(v->parray)) { ... }
 - 复检 `618f381d` 之后 GA `45825330657` 23/23 全绿。
 - 背账（本刀明示不开口）：
   1. **ND 数组装箱仍借用**（`vb6_SafeArrayND` 没有不破布局的标记槽）；
-  2. **未分配数组装箱后 `VarType`** 真机 8195 / 本仓 8204（元素档只能从声明类型取）；
-  3. `Dim v() As Variant` 的元素赋值在**改前**就崩（第四节末尾），留作独立一刀。
+  2. **未分配数组装箱后 `VarType`** 真机 8195 / 本仓 8204（元素档只能从声明类型取）。
 
 ### 七、记账
 
