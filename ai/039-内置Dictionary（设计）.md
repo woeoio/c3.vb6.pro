@@ -11904,3 +11904,141 @@ b = vb6_ChkByte((-1));
   清单 `5e832fc1`；GA `45817293525` 23/23 全绿。
 - 教训：**「恢复点」这种机器，只有「连续两句都报错」才验得出它是不是真的在前进。**
   §11.176 的六格全是「报错后下一句不报错」，恰好绕过了这一半。
+
+## §11.179 数组装进 Variant 是副本：描述符深拷与两枚标记（第一百九十六刀）
+
+### 一、问题
+
+§11.178 末尾明示不开口的那一条：`r = <数组>` 之后，写 `r(0)` 会把源数组的 `la(0)`
+一起改掉。改前的装箱口是 `vb6_VariantArray` 那一枚 inline（`vb6rtl_variant.h`）：
+
+```c
+static inline vb6_VARIANT vb6_VariantArray(void* _arr) {
+    vb6_VARIANT v; memset(&v, 0, sizeof(v));
+    v.vt = (vb6_vartype)vb6_SaVtOfArrayPtr(_arr); v.parray = _arr; return v;
+}
+```
+
+`_Generic` 的两条数组臂（`struct vb6_SafeArray1D*` / `struct vb6_SafeArrayND*`）都指向它
+⇒ 槽里躺的是源描述符**本身**。于是两边其实是同一份数据，只是没人写而已 —— 一旦哪一边
+写进去，另一边立刻跟着变。VB6 不是这样。
+
+### 二、真机读数（VB6Mini `/make` 实跑）
+
+探针 `.temp/k196p/P230.bas`（M1–M9），VB6Mini 编出来的 `P230.exe` 输出：
+
+```
+M1 slot=99 src=11
+M2 src=55 slot=11
+M3 r1=11 r2=77
+M4 slot=88 src=7
+M5 slot=bb src=aa
+M6 src_ub=9 slot_ub=2 slot0=11
+M7 vt=8200 tn=String()
+M8 isarr=True vt=8195 lb=0 ub=2
+M9 vt=8195 isarr=True
+M9 ub_err_pre=0
+```
+
+六档全是**副本**：
+
+- M1 写槽不动源（`99` / `11`）；M2 写源不动槽（`55` / `11`）。
+- M3 `r2 = r` 之后两边各持一份（`11` / `77`）。
+- M4 `Variant()` 数组、M5 `String()` 数组同理 —— 元素级独立（`88`/`7`、`bb`/`aa`）。
+- M6 源被 `ReDim` 之后，槽仍是**旧的那一份**：`src_ub=9` 而 `slot_ub=2`、`slot0=11`。
+  共用描述符时这一格必然是 `9`，它是「副本」最硬的一枚证人。
+- M7/M8 说明副本的**标签与界**照旧（8200/"String()"、8195/True/0/2）。
+
+M9（`Dim da() As Long` 未 ReDim 就装箱）真机答 `8195`/`IsArray=True`，本仓答 `8204`
+—— 那是「未分配数组装箱时元素档从哪来」的另一道题（描述符为 NULL 时只剩声明类型可问），
+本刀不碰，记进背账。
+
+### 三、判据与改法
+
+一维描述符的 `fFeatures` 本来就放着一枚 C3 标记（`VB6_SA1D_FFEATURES = 0xA1D1`），
+它唯一的作用是让 `vb6_SaIs1D` 把 C3 的 1D 描述符与 `vb6_SafeArrayND` / 真 SAFEARRAY
+分开。本刀把它拆成**两枚值**：
+
+| 值 | 含义 | 销毁权 |
+| --- | --- | --- |
+| `0xA1D1` 借用 | 静态数组载体、control array、COM 归化那一枚 | 别人 |
+| `0xA1D2` 私有副本 | `vb6_SaClone1D` 造出来的装箱副本 | 持有它的那枚 Variant |
+
+- `vb6_SaFfIsOurs` 统一判「这是我们的描述符」；`vb6_SaIs1D` 与
+  `vb6_SlotHasRealSafeArray` 都改问它 —— 后者若仍与 `0xA1D1` 硬比，**私有副本会被当成
+  外来 SAFEARRAY 就地归一化掉**，副本当场被换成一枚真 SAFEARRAY。
+- `vb6_SaClone1D`：新描述符 + 新数据块 + 逐元素独立所有权。元素档只分三种走法，且与
+  `vb6_SafeArrayDestroy1D` 的释放口径**成对**：`bstr` 另分配一只、`variant` 先清成
+  Empty 再 `vb6_VariantCopy`、其余 `memcpy`。`ptr`（本工程类裸实例）快照照旧只拷指针
+  —— 引用计数与 `Terminate` 仍归声明它的那份数组管，与今天每处数组拷贝同一口径。
+- `vb6_VariantArrayCopy` 是新的**装箱口**（声明在 `vb6rtl_variant.h`、定义在
+  `vb6rtl_array.c`，与 `vb6_SaVtOfArrayPtr` 同一个理由：伞头里 variant.h 排在 array.h
+  之前，那边看不见描述符）：1D 先深拷再装，ND / 真 SAFEARRAY 仍借用。
+- 释放：`vb6_VariantValueFree` 销毁 OWNED 副本（先置空再 free，避免二次释放）；
+  `vb6_VariantValueCopy` 对数组档**再拷一份** —— 这样「值拷贝」在数组档上也成立，
+  两边的销毁权各自独立（M3 要的就是这个）。
+
+### 四、x64 的 VARIANT 是联合：一条只会在 x64 上崩的检查
+
+第一版这么写：
+
+```c
+if (v->parray && vb6_SaIs1DOwned(v->parray)) { ... free ... }
+```
+
+`vb6_VariantInt(7)` 装箱出来是 `vt=2`、`iVal=7`；而 x64 的 `VARIANT` 是个联合，
+`parray` 与 `iVal` **同槽** ⇒ 这一句读到的「指针」是 `0x0000000000000007`，`vb6_SaIs1DOwned`
+把它当描述符解引用 ⇒ `0xC0000005`。现场是 `Dim va() As Variant: va(0) = 7` 这一句直接崩，
+栈上只剩 `[VA] cleared` 一行（`P231.bas` 逐步打印定位）。
+
+判据必须先问 `vt` 的**阵列位**：
+
+```c
+if ((v->vt & vb6_vtArray) && v->parray && vb6_SaIs1DOwned(v->parray)) { ... }
+```
+
+同一坑还有第二面：这条 AV 在**改前也存在**（把本刀 RTL 全 stash 掉、同一探针照样崩），
+只是没人写过 `Dim v() As Variant` 的元素赋值 —— 它不属本刀引入，但本刀必须绕开，
+否则夹具自己都跑不绿。
+
+### 五、读数与随刀改的针
+
+- 夹具 `tests/b204_variant_array_copy`（T1–T8）x64/x86 逐字相同，8 行与真机 P230 全对上。
+- `tests/test_redim_elem`：`R17-boxed-vt=8195 tn=Long() cell=4242` 与 `R17-boxw=99` 两枚
+  都不动 —— 装箱改了副本，`R17-boxw` 读的仍是槽自己那份，正是它一直想要的语义。
+- `b201`（6 针）/ `b202`（20 针）/ `b203`（33 针）三个夹具逐字未动。
+- `scripts/check_sa_access.ps1` PASS；`scripts/check_builtin_slot_returns.ps1` 由红转绿
+  （新出口 `vb6_VariantArrayCopy` 必须先跑 `scripts/gen_variant_slot_prefixes.ps1` 重派生
+  `cgen_variant_slot_prefixes.inc`，表从 63 名长到 64 名 —— 改 RTL 不改生成物，闸门就是红的）。
+- 压测 `.temp/k196p/P232.bas`：20000 轮「装箱 → 写槽 → Variant→Variant → 换档装箱」，
+  退出码 0，无重复释放、无崩溃。这条专治「只测一次看不出释放权写错」。
+
+### 六、神谕与清单
+
+- 真机神谕：VB6Mini `/make P230.vbp`（读数见上），与 C3 x64/x86 两份输出逐行相同。
+- manifest 按 CI `45823093251` 的产物装行：`changed=0 added=2 removed=0`（1431 行）。
+  `changed=0` 本身就是读数：本刀只改 RTL，**存量 400+ 份输入的发码一个字节未动**；
+  `added=2` 是新夹具的两行。
+- 首次 GA `45823093251` 两红，两条都不是行为回归：
+  1. `manifest_coverage` + `Emit manifest` —— 新夹具没装行（装完即绿）；
+  2. `com_variant_out_ref` 的 **R6**：那道闸门钉的是上游 FIX-011 §6.2 的**文本**
+     「cDims == 1 且 fFeatures != 0xA1D1」。第一版把它收敛成 `!vb6_SaFfIsOurs(...)`，
+     语义更宽但把被钉的那一问挪走了 ⇒ 红。改法是两问都留着（与两枚标记分别比），
+     同时仍**不**写成 `!vb6_SaIs1D(parray)`（那会把 ND 描述符判成真 SAFEARRAY）。
+- 复检 `618f381d` 之后 GA `45825330657` 23/23 全绿。
+- 背账（本刀明示不开口）：
+  1. **ND 数组装箱仍借用**（`vb6_SafeArrayND` 没有不破布局的标记槽）；
+  2. **未分配数组装箱后 `VarType`** 真机 8195 / 本仓 8204（元素档只能从声明类型取）；
+  3. `Dim v() As Variant` 的元素赋值在**改前**就崩（第四节末尾），留作独立一刀。
+
+### 七、记账
+
+- 探针：`.temp/k196p/P230.bas`（副本六档 + 标签界）、`P231.bas`（x64 联合崩溃最小化）、
+  `P232.bas`（20000 轮释放权压测）。
+- 夹具：`tests/b204_variant_array_copy`（`B204Main.bas` / `B204Res.vbp`），
+  注册在 `tests/run_tests.ps1`（x64 + x86）。
+- 代码 `e34b194b`（RTL 三处 + 夹具 + run_tests 注册）；复检 `618f381d`（manifest 装行 + R6 判据）。
+- GA `45823093251`（两红，见第六节）→ `45825330657` 23/23 全绿。
+- 教训：**「共用 vs 副本」这种所有权题，只有「写一边看另一边」才验得出**；
+  而所有权一旦落到「谁 free」，C 的联合体就会在另一种类型上把它变成野指针 ——
+  判据得挂在 `vt` 的阵列位上，不能挂在指针非空上。
