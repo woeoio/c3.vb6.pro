@@ -713,6 +713,13 @@ int32_t vb6_IsNumeric(vb6_VARIANT v) {
         case (vb6_vartype)VT_UI8:
         /* 账 #305 (§B141): Decimal 也是数值子类型 —— VB6 的 IsNumeric(CDec(...)) 恒真。
          * 与上面那档同一条口径（这一族问的是「这枚 Variant 里是不是数」）。 */
+        /* 账 #305 §11.172 (第一百八十九刀): Empty 也是「数」—— 真机 P215 E1 `IsNumeric(Empty)`
+         * 与 V1（`v = Empty` 后 `IsNumeric(v)`）都是 **True**；本仓以前落到 default 答 False。
+         * 依据是 Empty 的缺省值就是 0（数值语境里与 0 同用），与 Null 不同：
+         * E3 `IsNumeric(Null)` 真机 False。左边几行各自都写着同一条口径
+         * （“问的是里面是不是数”），少这一行就是同一个问题两种答案。 */
+        case vb6_vtEmpty:
+            return -1;
         case vb6_vtDecimal:
             return -1;  // VB6 True
         /* 账 #418 (§B192): 文本档以前根本不在这一族里 —— IsNumeric 只看 vt 标签，

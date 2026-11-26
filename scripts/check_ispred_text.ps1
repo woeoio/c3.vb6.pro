@@ -73,6 +73,13 @@ $r5sent = N 'check_ispred_text\.ps1' $T
 if ($r5cells -ne 2) { $fail += ('R5 b418 run cells = ' + $r5cells + ' (want 2 = x64 + x86)') }
 if ($r5sent -ne 1) { $fail += ('R5 this sentinel is not registered in run_tests.ps1 = ' + $r5sent + ' (want 1)') }
 
+# R6 (账 #305 §11.172, 第一百八十九刀): IsNumeric 的 Empty 档 —— 真机 P215 E1/V1 两格都是 True，
+# 而 switch 以前落到 default 答 False。这里钉两件: 那一档仍在、且夹具 b197 两台都登记。
+$r6empty = N 'case vb6_vtEmpty:\s*\r?\n\s*return -1;' $C
+if ($r6empty -ne 1) { $fail += ('R6 IsNumeric 的 VT_EMPTY 臂 = ' + $r6empty + ' (want 1)') }
+$r6cells = N "Test-Vbp 'b197_ispred_variant" $T
+if ($r6cells -ne 2) { $fail += ('R6 b197 run cells = ' + $r6cells + ' (want 2 = x64 + x86)') }
+
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
     exit 1
