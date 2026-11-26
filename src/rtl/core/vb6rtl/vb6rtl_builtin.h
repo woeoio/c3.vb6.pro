@@ -453,6 +453,9 @@ double vb6_TimeValue(BSTR timeStr);
 // 实测口径见 .build/k234_cdate.vbs / k235_datescan.vbs / k236_datefail.vbs。
 double vb6_DateParse(BSTR s);
 double vb6_DateVal(BSTR s);
+// §11.191 (第二百零八刀): 静默版的“文本→日期序列” (Variant 比较那一档用 —— 真机 Z4 答假且
+// 不报错, 所以不能复用会报 13 的 vb6_DateVal)。返回 0 = 解不开。
+int32_t vb6_TryDateValQuiet(BSTR s, double* out);
 // 账 #418 (§B192): 同一句问「像不像」而不是「折出几号」—— IsDate 的文本档问这一枚，
 // 它**不报错**（判据不是一次转换），收下集合就是那条唯一解析站点的成功集。
 int32_t vb6_DateCanParse(BSTR s);

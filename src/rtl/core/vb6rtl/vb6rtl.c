@@ -1022,7 +1022,29 @@ static int32_t vb6_VarIsNumber(vb6_VARIANT* v) {
 
 /* 返回 a 相对 b 的次序: -1 / 0 / 1。六个比较出口共用这一份, 不留第二条口径。 */
 static int vb6_VarCmpOrder(vb6_VARIANT* a, vb6_VARIANT* b) {
+    /* §11.191 (第二百零八刀): 两处补档, 都来自真机 `.temp/k208p/p249.txt`:
+       · **Null 参与比较** —— VB6 的结果是 Null, 六个出口全假 (Z5: `d > Null` 答 0、Err=0)。
+         旧实现把 Null 按 0 解包 ⇒ `d > Null` 答真。用 2 表示“无序”, 下面六个出口各自
+         把它当假 (Ne 也算假 —— 否则 `<>` 会反着开口)。
+       · **VT_DATE 与文本** —— 文本按**日期**解析再比序列 (Z1/Z2/Z8 真机为真), 不是
+         “数值恒小于串”; 解析不了时 VB6 答假且**不报错** (Z4), 所以走静默解析。 */
+    if ((a && a->vt == (vb6_vartype)VT_NULL) || (b && b->vt == (vb6_vartype)VT_NULL))
+        return 2;
     int as = vb6_VarIsString(a), bs = vb6_VarIsString(b);
+    int ad = (a && a->vt == (vb6_vartype)vb6_vtDate);
+    int bd = (b && b->vt == (vb6_vartype)vb6_vtDate);
+    if (ad && bs) {
+        double dv = 0.0;
+        if (!vb6_TryDateValQuiet(b->bstrVal, &dv)) return 2;
+        double da = vb6_VarToDouble_internal(a);
+        return da < dv ? -1 : (da > dv ? 1 : 0);
+    }
+    if (bd && as) {
+        double dv = 0.0;
+        if (!vb6_TryDateValQuiet(a->bstrVal, &dv)) return 2;
+        double db = vb6_VarToDouble_internal(b);
+        return dv < db ? -1 : (dv > db ? 1 : 0);
+    }
     int ae = a && a->vt == (vb6_vartype)VT_EMPTY;
     int be = b && b->vt == (vb6_vartype)VT_EMPTY;
     if (as && (bs || be)) {
@@ -1037,18 +1059,17 @@ static int vb6_VarCmpOrder(vb6_VARIANT* a, vb6_VARIANT* b) {
         return c < 0 ? -1 : (c > 0 ? 1 : 0);
     }
     if (as && vb6_VarIsNumber(b)) return 1;   /* 数值 < 字符串 */
-    if (bs && vb6_VarIsNumber(a)) return -1;
-    double da = vb6_VarToDouble_internal(a);
+    if (bs && vb6_VarIsNumber(a)) return -1;    double da = vb6_VarToDouble_internal(a);
     double db = vb6_VarToDouble_internal(b);
     return da < db ? -1 : (da > db ? 1 : 0);
 }
 
-int32_t vb6_VarCmpEq(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarCmpOrder(a, b) == 0 ? -1 : 0; }
-int32_t vb6_VarCmpNe(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarCmpOrder(a, b) != 0 ? -1 : 0; }
-int32_t vb6_VarCmpLt(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarCmpOrder(a, b) <  0 ? -1 : 0; }
-int32_t vb6_VarCmpGt(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarCmpOrder(a, b) >  0 ? -1 : 0; }
-int32_t vb6_VarCmpLe(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarCmpOrder(a, b) <= 0 ? -1 : 0; }
-int32_t vb6_VarCmpGe(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarCmpOrder(a, b) >= 0 ? -1 : 0; }
+int32_t vb6_VarCmpEq(vb6_VARIANT* a, vb6_VARIANT* b) { int o = vb6_VarCmpOrder(a, b); return o == 0 ? -1 : 0; }
+int32_t vb6_VarCmpNe(vb6_VARIANT* a, vb6_VARIANT* b) { int o = vb6_VarCmpOrder(a, b); return (o == 0 || o == 2) ? 0 : -1; }
+int32_t vb6_VarCmpLt(vb6_VARIANT* a, vb6_VARIANT* b) { int o = vb6_VarCmpOrder(a, b); return o == -1 ? -1 : 0; }
+int32_t vb6_VarCmpGt(vb6_VARIANT* a, vb6_VARIANT* b) { int o = vb6_VarCmpOrder(a, b); return o == 1 ? -1 : 0; }
+int32_t vb6_VarCmpLe(vb6_VARIANT* a, vb6_VARIANT* b) { int o = vb6_VarCmpOrder(a, b); return (o == -1 || o == 0) ? -1 : 0; }
+int32_t vb6_VarCmpGe(vb6_VARIANT* a, vb6_VARIANT* b) { int o = vb6_VarCmpOrder(a, b); return (o == 0 || o == 1) ? -1 : 0; }
 
 /* Select Case 专用次序: 标签是**静态类型**的字面量时, 真 VB6 把主语先换成标签那一档再比
    —— 与二进制比较那套"数值恒小于字符串"是两条口径 (实测 VB6 /make, 2026-11-07):

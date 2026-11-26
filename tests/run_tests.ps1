@@ -13351,6 +13351,19 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "Y7 time=0 err=0")
     Test-Vbp 'b214_date_string_compare' "$Tests\b214_date_string_compare\B214Res.vbp" $b214Needles
     Test-Vbp 'b214_date_string_compare_x86' "$Tests\b214_date_string_compare\B214Res.vbp" $b214Needles -Arch "x86"
+    # §11.191 第二百零八刀: Date 与 Variant 相比 —— 文本按日期解、Null 参与则全假。
+    # 真机 .temp/k208p/p249.txt 八行; 改前 Date 被装成 VT_R8 ⇒ Z1/Z2/Z8 答 0, Null 按 0 解包 ⇒ Z5 答 1。
+    $b215Needles = @(
+    "Z1 gt=1 err=0",
+    "Z2 eq=1 err=0",
+    "Z3 num=0 err=0",
+    "Z4 bad=0 err=0",
+    "Z5 null=0 err=0",
+    "Z6 empty=1 err=0",
+    "Z7 elem=1 err=0",
+    "Z8 rev=1 err=0")
+    Test-Vbp 'b215_date_variant_compare' "$Tests\b215_date_variant_compare\B215Res.vbp" $b215Needles
+    Test-Vbp 'b215_date_variant_compare_x86' "$Tests\b215_date_variant_compare\B215Res.vbp" $b215Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

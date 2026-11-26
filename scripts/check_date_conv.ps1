@@ -68,7 +68,9 @@ $r1dp = N '^double vb6_DateParse\(BSTR s\) \{' $D
 $r1dv = N '^double vb6_DateVal\(BSTR s\) \{' $D
 $r1old = N '\(double\)\(int32_t\)result' $D
 if ($r1parse -ne 1) { $fail += ('R1 VarDateFromStr in date.c = ' + $r1parse + ' (want 1)') }
-if ($r1try -ne 4) { $fail += ('R1 vb6_TryDateFromStr sites = ' + $r1try + ' (want 4 = def + the three owners)') }
+# §11.191 第二百零八刀: 第四位消费方是 vb6_TryDateValQuiet (Variant 比较那一档的静默解析)。
+# VarDateFromStr 仍然只 1 处 —— 新增的是消费方, 不是第二个解析站点。
+if ($r1try -ne 5) { $fail += ('R1 vb6_TryDateFromStr sites = ' + $r1try + ' (want 5 = def + the four owners)') }
 if ($r1raise -ne 1) { $fail += ('R1 raise-13 outlet in date.c = ' + $r1raise + ' (want 1, inside vb6_DateParse)') }
 if ($r1dp -ne 1) { $fail += ('R1 vb6_DateParse definition = ' + $r1dp + ' (want 1)') }
 if ($r1dv -ne 1) { $fail += ('R1 vb6_DateVal definition = ' + $r1dv + ' (want 1)') }
@@ -186,6 +188,20 @@ if ($r20sel -ne 1) { $fail += ('R20 Select Case Date carrier = ' + $r20sel + ' (
 # R21: b214 夹具两台在跑。
 $r21cells = N '\$Tests\\b214_date_string_compare\\B214Res\.vbp' $T
 if ($r21cells -ne 2) { $fail += ('R21 b214 run cells = ' + $r21cells + ' (want 2 = x64 + x86)') }
+# R22 (§11.191 第二百零八刀): Date 与 Variant 相比 —— 两处都在 RTL 里, 一处也不许消失:
+#   ① Date 侧装箱必须是 VT_DATE (否则 RTL 按“数值恒小于串”比, 真机 Z1/Z2/Z8 全反);
+#   ② VT_NULL 参与比较 = 无序 ⇒ 六个出口全假 (真机 Z5), 不许再按 0 解包。
+$R = Get-Content -Raw (Join-Path $root 'src\rtl\core\vb6rtl\vb6rtl.c')
+$D = Get-Content -Raw (Join-Path $root 'src\rtl\core\vb6rtl\vb6rtl_date.c')
+$r22box = ([regex]::Matches($B, 'return "vb6_VariantDate\(" \+ e \+ "\)";', 'Multiline')).Count
+$r22null = ([regex]::Matches($R, 'VT_NULL\) \|\| \(b && b->vt == \(vb6_vartype\)VT_NULL\)\)', 'Multiline')).Count
+$r22quiet = ([regex]::Matches($D, 'int32_t vb6_TryDateValQuiet\(BSTR s, double\* out\)', 'Multiline')).Count
+if ($r22box -ne 1) { $fail += ('R22 Date operand boxed as VT_DATE = ' + $r22box + ' (want 1)') }
+if ($r22null -ne 1) { $fail += ('R22 Null-is-unordered rule = ' + $r22null + ' (want 1)') }
+if ($r22quiet -ne 1) { $fail += ('R22 quiet date parse = ' + $r22quiet + ' (want 1)') }
+# R23: b215 夹具两台在跑。
+$r23cells = N '\$Tests\\b215_date_variant_compare\\B215Res\.vbp' $T
+if ($r23cells -ne 2) { $fail += ('R23 b215 run cells = ' + $r23cells + ' (want 2 = x64 + x86)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -194,5 +210,5 @@ if ($fail.Count -gt 0) {
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
     ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells +
-    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells)
+    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells)
 exit 0

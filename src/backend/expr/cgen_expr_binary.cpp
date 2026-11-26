@@ -985,7 +985,7 @@ void CCodeGen::visit(BinaryExpr& node) {
             // vb6_VariantFromValue 包装 —— 它按"值指针"解释 void* 得 VT_EMPTY,
             // 使 `If coll.Item(i) <= 0` 恒真 (TreeMaps 所有值被判 <=0 而写成 0.0001,
             // 蓝色梯度消失)。COM 结果必须走 vb6_VariantFromComResult 解引用。
-            auto wrapOperand132 = [&](const std::string& e) -> std::string {
+            auto wrapOperand132 = [&](const std::string& e, Expr* ast) -> std::string {
                 if ((e.find("vb6_ComCall(") != std::string::npos
                      || e.find("vb6_ComCallByDispid(") != std::string::npos)
                     && e.find("vb6_VariantFromComResult(") == std::string::npos)
@@ -993,6 +993,10 @@ void CCodeGen::visit(BinaryExpr& node) {
                 if (e.find("vb6_VariantFromComResult(") != std::string::npos
                     || e.find("vb6_VariantFromValue(") != std::string::npos)
                     return e;
+                // §11.191 (第二百零八刀): Date 侧必须装成 **VT_DATE**。旧法用 FromValue(_Generic)
+                // 把 double 装成 VT_R8, RTL 就按「数值恒小于字符串」比 ⇒ 真机 Z1/Z2/Z8 全反。
+                if (ast && inferExprType(*ast) == Vb6Type::Date)
+                    return "vb6_VariantDate(" + e + ")";
                 return "vb6_VariantFromValue(" + e + ")";
             };
             // 账 #238: 取址之前还要问"这个名字是不是 vb6_VARIANT 那份存储" —— 判据在一处
@@ -1000,10 +1004,10 @@ void CCodeGen::visit(BinaryExpr& node) {
             // 的地址当 vb6_VARIANT* 递进 RTL 会按 VARIANT 布局读一个 8 字节标量。
             std::string leftAddr = (isLvalue(left) && cmpOperandMayTakeAddr(left, node.left.get()))
                 ? ("&" + left)
-                : ([&]{ std::string tmp = "_vcmp_" + std::to_string(vcmpCounter_++); c_.emitLine("vb6_VARIANT " + tmp + " = " + wrapOperand132(left) + ";"); return "&" + tmp; }());
+                : ([&]{ std::string tmp = "_vcmp_" + std::to_string(vcmpCounter_++); c_.emitLine("vb6_VARIANT " + tmp + " = " + wrapOperand132(left, node.left.get()) + ";"); return "&" + tmp; }());
             std::string rightAddr = (isLvalue(right) && cmpOperandMayTakeAddr(right, node.right.get()))
                 ? ("&" + right)
-                : ([&]{ std::string tmp = "_vcmp_" + std::to_string(vcmpCounter_++); c_.emitLine("vb6_VARIANT " + tmp + " = " + wrapOperand132(right) + ";"); return "&" + tmp; }());
+                : ([&]{ std::string tmp = "_vcmp_" + std::to_string(vcmpCounter_++); c_.emitLine("vb6_VARIANT " + tmp + " = " + wrapOperand132(right, node.right.get()) + ";"); return "&" + tmp; }());
             lastExpr_ = "(vb6_VarCmp" + cmpFn + "(" + leftAddr + ", " + rightAddr + "))";
             return;
         }

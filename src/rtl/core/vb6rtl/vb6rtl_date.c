@@ -545,6 +545,17 @@ double vb6_DateVal(BSTR s) {
     return vb6_NumVal(s);
 }
 
+// §11.191 (第二百零八刀): Variant 比较里「日期 vs 文本」那一档要的是**静默**解析 ——
+// 真机 `.temp/k208p/p249.txt` 的 Z4 (`d > "abc"`) 答假且 **Err=0**，与类型化 String 那档
+// 报 13 不同。所以这条腿不复用 vb6_DateVal/vb6_DateParse (它们会报 13)，只把
+// “解开了没有”交给调用方：解不开就返回 0，让比较答假。
+int32_t vb6_TryDateValQuiet(BSTR s, double* out) {
+    DATE d = 0.0;
+    if (!vb6_TryDateFromStr(s, &d)) return 0;
+    if (out) *out = d;
+    return -1;
+}
+
 // 账 #418 (§B192): IsDate 那一问要的是「这串文本像不像日期」= 上面那条站点的**成功本身**，
 // 不是「折出来是几号」更不是「折不出报几号」。实测 (尺 .build/k253_isfam.vbs) 运行期
 // IsDate("2026/1/1") 真、IsDate("46000") 假 —— 收下集合与 vb6_TryDateFromStr 一字不差，
