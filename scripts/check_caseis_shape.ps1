@@ -67,7 +67,9 @@ if ($storedFake -ne 0) { $bad += ('C2 parseCaseValue stores a fabricated identif
 
 # C3
 $reads = @([regex]::Matches($select, 'mapBinaryOp\(cv\.relOp\)')).Count
-if ($reads -ne 3) { $bad += ('C3 cgen_select reads cv.relOp ' + $reads + ' times (want 3: string/float/integer)') }
+# §11.190 第二百零七刀: 第四条腿是 Date 主语 —— 标签是串时折成日期序列 (vb6_DateVal),
+# 其余按数值比。读数仍走 mapBinaryOp(cv.relOp) 那一份唯一出口, 只是多了一档消费方。
+if ($reads -ne 4) { $bad += ('C3 cgen_select reads cv.relOp ' + $reads + ' times (want 4: string/date/float/integer)') }
 $recast = @([regex]::Matches($select, 'static_cast<BinaryExpr&>\(\*cv\.value\)')).Count
 if ($recast -ne 0) { $bad += ('C3 cgen_select still unpacks cv.value as a BinaryExpr ' + $recast + ' times (want 0)') }
 
