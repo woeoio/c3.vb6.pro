@@ -11293,3 +11293,68 @@ case vb6_vtEmpty:
 撤格之后两台（x64/x86）各 66 行、逐条对针全中且无多余行；
 check_sa_access / check_no_locale_needles / check_vbp_fixture_census /
 check_test_helper_integrity 四条闸本地全 c=0。
+
+## §11.173 `StrConv` 的档位语义（第一百九十刀）
+
+§11.172 收口后，`StrConv` 是语料里调用次数最多的一条还没判过的字符串函数。它一直卡着，
+是因为两档**字节重解释**（`vbUnicode` / `vbFromUnicode`）在 VB6Mini 上给出自相矛盾的读数
+（见 `.temp/k189p/P213.bas` 的 S2/S14）—— 不是探针写错，是 VB6Mini 自己在这两档上不稳。
+
+判据改走 TwinBASIC（TB 用 VB6 语法、字符串是 Unicode，与 C3 同形）。探针
+`.temp/k189p/TB_StrConv.bas`（用户机器 zh-CN / cp936 上跑），C3 侧的对照探针
+`.temp/k189p/P216.bas` 与它**逐标签一一对应**。
+
+### 改前三档各自错在一个地方
+
+| 格 | 真机 (TB) | 改前 C3 | 病因 |
+|---|---|---|---|
+| S1 `StrConv("ABC", vbUnicode)` | len 6：`65,0,66,0,67,0` | len 3：`65,66,67` | 这一档在 RTL 里是 `no-op` 兜底 |
+| S2 `StrConv("ABC", vbFromUnicode)` | len 1：`16961` | len 3：`65,66,67` | 同上 |
+| S7 `StrConv("Ä", vbUnicode)` | len 2：`63,0` | len 1：`196` | 同上 |
+| X1 `vbUnicode + vbUpperCase` | `ERR 5` | 原样返回、无错、也没折大小写 | 组合档没人验 |
+| X3 `StrConv("abc", 999)` | `ERR 5` | 全角 `65345,65346,65347` | `999 & 0x3C` 被拆成 `vbWide+vbHiragana` 走了 `LCMapStringEx` |
+
+X3 那一格最说明问题：位域截得太松，一个非法参数被**静默**解释成另一种合法转换 —— 这比报错
+更坏，因为调用方拿到的是一串看着有内容的错值。
+
+### 改后：字节重解释就是「把缓冲当字节流」
+
+`vb6rtl_compat.c` 的 `vb6_StrConv`：
+
+1. **`vbUnicode = 64`**：把 BSTR 的 UTF-16LE 缓冲**当 ANSI（`CP_ACP`）字节流**重解释，
+   交给 `MultiByteToWideChar`。`"ABC"` 的缓冲是 `41 00 42 00 43 00`，按 ACP 解出来正是
+   `A,NUL,B,NUL,C,NUL` —— 与真机 S1 的 6 个码点逐位相同。非 ASCII 那格也随之对上：
+   `"Ä"`（`C4 00`）在 cp936 下前导字节后面跟 `00` 是非法序列，ACP 解码给出 `?` 再跟 NUL，
+   就是真机的 `63,0`。
+2. **`vbFromUnicode = 128`**：先 `WideCharToMultiByte` 窄化成 ACP 字节，再把字节流当
+   UTF-16LE 重解释，宽字符数取 **`floor(字节数/2)`**（真机 S2 的 `"ABC"` → 1 个字符
+   `0x4241`，就是 `'A','B'` 两个字节）。
+3. **位域校验**：只认 0..255 那位域，`vbUnicode` 与 `vbFromUnicode` 不许同现，字节两档不许
+   与大小写档同用 —— 命中就 `Err 5`（真机 X1/X3）。`conversion == 0` 仍是原样返回（真机 C4）。
+
+### 夹具
+
+`tests/b198_strconv_bytes`：**18 格 + DONE**，x64/x86 各 19 行逐字相同，与 TB 逐格对齐。
+
+钉的格：S1/S2/S3/S4/S5、S7L（只钉 Len）、S8/S9/S10、C1..C5、X1E/X2/X3E、X5、L1。
+其中 S1/S2/C1..C5/L1 是纯 ASCII，跨代码页稳定；S3/S9/S10/S8 是长度，也稳定。
+
+### 在册（这一刀**故意没钉**的四类，各有明确原因）
+
+1. **S6 双重往返**（`StrConv(StrConv("ABC", vbFromUnicode), vbUnicode)`）：真机给出
+   len 3 `ABC`，C3 给出 len 2 `AB`。差别不在转换，在**容器**：TB 的字节串把「3 个字节」
+   这个长度藏在字符串的隐式长度里（`Len` 只报 `floor(3/2)=1`，但 `vbUnicode` 能取到 3 字节），
+   C3 的 `String` 只有宽字符长度一个字段，奇数字节无处可存。要补就得给 String 加一枚
+   「字节长度」—— 那是表示层改动，不塞进这一刀。
+2. **S7 的逐字符码点**：跟代码页走（zh-CN `63,0` / en-US `196,0`）。真值不唯一，
+   与 §11.172 的 N14 同一条纪律 —— 只钉长度。
+3. **X1/X3/X4 的值那半边**：`Err` 已经对了（5 / 5 / 94），但 raise 之后调用方**照样拿到
+   返回值**，所以探针会多打一行 `X1=[len 0 :]`、`X4=[len 0 :]`。这是「语句中止」闸的活
+   （§11.80 的机制只覆盖实参含晚绑定 COM 读的情形），不是 `StrConv` 自己的问题。
+4. **`vbWide/vbNarrow/vbKatakana/vbHiragana`（4/8/16/32）这几档**：这一刀只验了位域边界，
+   没逐档对读数（它们走 `LCMapStringEx` + 默认 `ja-JP`，本来就该另开一刀）。
+
+### 收口
+
+代码 `cf65aced`，manifest 登记 `38211999`（888 行，added=2 changed=0，两行取自 CI 的
+`ci/emit-manifest`），GA `45754472749` 23/23 全绿。本节即 `38211999` 之后的文档提交。
