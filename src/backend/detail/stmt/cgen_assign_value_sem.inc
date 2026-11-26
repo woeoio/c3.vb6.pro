@@ -346,13 +346,20 @@
             // `VB6_SA_AT(double, q, 0)`, 而名字表 knownDateVars_ 里只有裸名/字段,
             // 于是整条 Date 腿不 firing ⇒ 裸 BSTR 赋给 double ⇒ cl C2440 (无 exe)。
             // 按声明那张表 arrayElemTypes_ (与 §11.180/§11.181 同一份) 认出「Date
-            // 数组的一枚元素」。只认一维单下标: 多维阶位不在这一问里猜 (认不出就落
-            // 原路, 不新造 C2440)。
+            // 数组的一枚元素」。
+            //
+            // §11.184 (第二百零一刀): 上一刀只认一维单下标, 多维那形留着当欠账 ——
+            // `VB6_SA_ND_AT2/AT3/ATN(double, …)` 的左值同样是 double 槽, 秩不是这一问
+            // 的判据。真机 `.temp/k201p/p242.txt` (VB6Mini /make) 六条读数逐字: 静态
+            // 2D/3D 元素与 ReDim 出来的 2D 元素都答 44259/44687/45115 err=0, 非法文本
+            // 抛 13 且保住旧值。故这里按「秩 ≥ 1 且声明是 Date 数组」认, 不再按秩分叉
+            // (秩只影响 emitExpr 发哪个宏, 与本腿无关)。仍然只认裸标识符 callee ——
+            // 数组 UDT 成员那一形 (me->m.arr(i)) 没有现成的元素声明查询, 留债不着色。
             if (!dateTarget183 && node.target
                 && node.target->kind == ASTNodeKind::IndexOrCallExpr) {
                 const auto& ic183 = static_cast<const IndexOrCallExpr&>(*node.target);
                 if (ic183.callee && ic183.callee->kind == ASTNodeKind::IdentifierExpr
-                    && ic183.positional.size() == 1) {
+                    && !ic183.positional.empty()) {
                     auto it183 = arrayElemTypes_.find(Symbol::toLower(
                         static_cast<const IdentifierExpr&>(*ic183.callee).name));
                     if (it183 != arrayElemTypes_.end() && it183->second == Vb6Type::Date)

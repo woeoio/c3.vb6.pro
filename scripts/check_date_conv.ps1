@@ -26,6 +26,13 @@
 #   R5  两位主人在 vb6rtl_builtin.h 各有声明 (发码那侧之外的人也得问得到它们)。
 #   R6  发码那张表一字没动: cdate / datevalue / timevalue 三行各自还在 (本刀不动发码)。
 #   R7  判据两头都在: run_tests.ps1 里 b417 两台各 1、本哨兵已登记。
+#   R8  §11.183: 隐式转换矩阵里 String→Date 与 数值→Date 各恰好一行。
+#   R9  §11.183: 赋值站的数组元素腿 —— 判据名/声明档问句/出口各恰好一处。
+#   R10 §11.183: b208 夹具两台在跑。
+#   R11 §11.184: 赋值站那一腿**不再按秩分叉** (`positional.size() == 1` 不许回来,
+#       改成非空即认)。
+#   R12 §11.184: 装箱站 (dateElemVariantBox) 同口径 —— `size() != 1` 不许回来。
+#   R13 §11.184: b209 夹具两台在跑。
 # ============================================================
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -37,6 +44,8 @@ $T = Get-Content -Raw (Join-Path $root 'tests\run_tests.ps1')
 # §11.183 (第二百刀): 赋值站的 String→Date 隐含转换 —— 矩阵那一半与发码那一半各一份形状。
 $S = Get-Content -Raw (Join-Path $root 'src\semantics\type_system.cpp')
 $A = Get-Content -Raw (Join-Path $root 'src\backend\detail\stmt\cgen_assign_value_sem.inc')
+# §11.184 (第二百零一刀): 同一问题的另一站 —— Date 元素装进 Variant 的那张标签。
+$B = Get-Content -Raw (Join-Path $root 'src\backend\cgen_util_ctrl.cpp')
 # 整棵 RTL 树的日期解析站点计数 (R2 的面): 递归读每个 .c/.h, 只数 VarDateFromStr
 $rtlFiles = Get-ChildItem -Path (Join-Path $root 'src\rtl') -Recurse -Include *.c,*.h -File
 $r2sites = 0
@@ -112,11 +121,27 @@ if ($r9emit -ne 1) { $fail += ('R9 Date emit outlet = ' + $r9emit + ' (want 1)')
 # R10: 夹具两台在跑，且台账里登记。
 $r10cells = N '\$Tests\\b208_string_to_date\\B208Res\.vbp' $T
 if ($r10cells -ne 2) { $fail += ('R10 b208 run cells = ' + $r10cells + ' (want 2 = x64 + x86)') }
+# R11 (§11.184 第二百零一刀): 赋值站那条腿不再按秩分叉。旧形 `positional.size() == 1`
+# 把多维那一形挡在外面 ⇒ 裸 BSTR 进 double 槽 (真机 p242 的 S1/S3/S4 三条前全部 C2440)。
+$r11old = N 'ic183\.positional\.size\(\) == 1' $A
+$r11new = N '!ic183\.positional\.empty\(\)' $A
+if ($r11old -ne 0) { $fail += ('R11 assignment leg still gates on rank = ' + $r11old + ' (want 0)') }
+if ($r11new -ne 1) { $fail += ('R11 assignment leg rank-free gate = ' + $r11new + ' (want 1)') }
+# R12: 装箱站同一口径。旧形对多维交空串 ⇒ _Generic 按 double 装成 VT_R8 (真机 p243 的 T4
+# 改前答 5/Double, 而 T1/T2/T3 早就是 7/Date)。
+$r12old = N 'ic198\.positional\.size\(\) != 1' $B
+$r12new = N 'ic198\.positional\.empty\(\)' $B
+if ($r12old -ne 0) { $fail += ('R12 boxing leg still gates on rank = ' + $r12old + ' (want 0)') }
+if ($r12new -ne 1) { $fail += ('R12 boxing leg rank-free gate = ' + $r12new + ' (want 1)') }
+# R13: b209 夹具两台在跑。
+$r13cells = N '\$Tests\\b209_nd_date_elem\\B209Res\.vbp' $T
+if ($r13cells -ne 2) { $fail += ('R13 b209 run cells = ' + $r13cells + ' (want 2 = x64 + x86)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
     exit 1
 }
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
-    ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells)
+    ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
+    ' nd-cells=' + $r13cells)
 exit 0

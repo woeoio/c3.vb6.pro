@@ -4639,8 +4639,11 @@ bool CCodeGen::cExprIsVariantCarrier(const std::string& cExpr) const {
 // 账 §11.181 (第一百九十八刀): Date 数组的**元素**装进 Variant 要答 VT_DATE (VarType 7 /
 // TypeName "Date"), 而元素在 C 侧就是 double (VB6_SA_AT(double, q, i)) —— _Generic 只能答
 // VT_R8。这一问按声明那张表 arrayElemTypes_ (与第一百九十七刀同一份) 认出「Date 数组的
-// 一枚元素」, 再把标签补上。真机 P234: C3 elem vt=7 tn=Date。只认一维单下标 —— 多维阶位
-// 不在这一问里猜 (认不出就交空串, 走改前那一档)。
+// 一枚元素」, 再把标签补上。真机 P234: C3 elem vt=7 tn=Date。
+// §11.184 (第二百零一刀): 上一刀只认一维单下标, 多维那形留在原档 —— 真机
+// `.temp/k201p/p243.txt` 的对照读数 (T1 标量 / T2 一维动态 / T3 一维静态 全答 7/Date,
+// T4 二维静态答 5/Double) 说明差额只在**秩**上, 元素声明与 C 侧 double 槽都一样。
+// 故这里也按「秩 ≥ 1 且声明是 Date 数组」认, 不再按秩分叉。
 std::string CCodeGen::dateElemVariantBox(const Expr* expr, const std::string& cExpr) const {
     if (!expr || expr->kind != ASTNodeKind::IndexOrCallExpr) return std::string();
     /* 幂等: 实参站与存储站会各问一次装箱 (wrapVariantValue 末尾就交回 boxToVariant),
@@ -4648,7 +4651,7 @@ std::string CCodeGen::dateElemVariantBox(const Expr* expr, const std::string& cE
     if (cExpr.rfind("vb6_VariantDate(", 0) == 0) return std::string();
     const auto& ic198 = static_cast<const IndexOrCallExpr&>(*expr);
     if (!ic198.callee || ic198.callee->kind != ASTNodeKind::IdentifierExpr) return std::string();
-    if (ic198.positional.size() != 1) return std::string();
+    if (ic198.positional.empty()) return std::string();
     const std::string nm198 = Symbol::toLower(
         static_cast<const IdentifierExpr&>(*ic198.callee).name);
     auto it198 = arrayElemTypes_.find(nm198);

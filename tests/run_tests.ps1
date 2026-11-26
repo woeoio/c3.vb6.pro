@@ -13229,6 +13229,24 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "S8 vt=7 tn=Date")
     Test-Vbp 'b208_string_to_date' "$Tests\b208_string_to_date\B208Res.vbp" $b208Needles
     Test-Vbp 'b208_string_to_date_x86' "$Tests\b208_string_to_date\B208Res.vbp" $b208Needles -Arch "x86"
+    # §11.184 第二百零一刀: Date 元素的身份与**秩**无关 (多维那一形)。
+    # 真机 .temp/k201p/p242.txt + p243.txt (VB6Mini /make): 2D/3D 静态元素与 ReDim 出来的
+    # 2D 元素都按日期折算 (44259/44687/45115 err=0)，非法文本抛 13 保住旧值 (45000 / 0)；
+    # VarType 四档 (标量/1D动态/1D静态/2D静态) 全答 7/Date。
+    # 修前多维那一形发裸 BSTR 进 double 槽 (cl C2440, 无 exe)，装箱那站答 5/Double。
+    $b209Needles = @(
+    "S1 d=44259 err=0",
+    "S2 d=44259 err=0",
+    "S3 d=44687 err=0",
+    "S4 d=45115 err=0",
+    "S5 d=45000 err=13",
+    "S6 d=0 err=13",
+    "T1 scalar vt=7 tn=Date",
+    "T2 1d-dyn vt=7 tn=Date",
+    "T3 1d-sta vt=7 tn=Date",
+    "T4 2d-sta vt=7 tn=Date")
+    Test-Vbp 'b209_nd_date_elem' "$Tests\b209_nd_date_elem\B209Res.vbp" $b209Needles
+    Test-Vbp 'b209_nd_date_elem_x86' "$Tests\b209_nd_date_elem\B209Res.vbp" $b209Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
