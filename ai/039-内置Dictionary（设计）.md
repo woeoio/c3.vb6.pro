@@ -12844,3 +12844,91 @@ return;
 - 教训：**最贵的错不是编不过，是编得过还答得理直气壮。** 这一刀的四个错读数（2021 / 0 / 0 / 0）
   在 C 侧都长得像好代码 —— 因为 `vb6_VariantToDouble` 确实是个真函数、确实没崩。要发现它们，
   只能靠真机逐格对读；要防它们回来，只能靠哨兵钉住「哪个槽用哪个出口」。
+
+---
+
+## §11.189 Variant 右值的第二形：调用返回值（第二百零六刀）
+
+### 一、问题
+
+§11.188 只接了**裸标识符**那一形，理由是「其它表达式答 Variant 时其 C 文本未必真是
+`vb6_VARIANT`」。真机一测，`d = FText()`（`Function FText() As Variant`）与局部变量那一组
+**逐档相同**，而 C3 仍然发 `vb6_VariantToDouble(vb6_FText())`：文本日期答 2021、`"abc"` 与
+`Null` 静默答 0。
+
+至于当初的担心：返回 Variant 的函数在 C 侧是 `vb6_VARIANT FText(void)`，调用表达式就是
+`vb6_FText()` —— 它**正是** `vb6_VARIANT` 值。担心的那个形（成员调用/委托）才不是。
+
+### 二、真机读数（VB6Mini `/make`，`.temp/k206p`）
+
+`P246.bas`（九格，函数 FText/FNum/FBad/FDate/FEmpty/FNull）：
+
+```
+W1 d=44259 err=0   W2 d=44259 err=0   W3 d=45000 err=0   W4 d=45000 err=13
+W5 d=45000 err=13  W6 d=44259 err=0   W7 d=0 err=0       W8 d=45000 err=94
+W9 vt=8 tn=String
+```
+
+与 §11.188 的 p245 **逐行同值** —— 右值是变量还是调用，对 VB6 语义没有区别。W9 是自证格：
+`VarType(FText()) = 8`（VT_BSTR），证明那格确实是个 Variant，不是我猜的。
+
+### 三、判据与改法
+
+载体形从一种扩到三种，但**语义门不变**（`inferExprType == Variant`）：
+
+1. 已是 `vb6_VARIANT` 的 C 文本（`cExprIsVariantCarrier`）；
+2. 裸标识符且已登记为 Variant（`knownVariantVars_`）；
+3. 裸名被调/下标，**且该名字不是已知数组**。
+
+第 3 条的后半是这刀真正的坑：第一版写成「只要 callee 是裸名就算」，结果 `d2 = q(3)`
+（`q` 是 Date 数组）也被包成了 `vb6_CDate(VB6_SA_AT(double, q, 3))` —— **编得过、答得对**，
+但形状错了一个数量级：一个 double 被隐式转成 `vb6_VARIANT` 再转回 Date。
+本地全量清单当场抓到 b206 两行。所以这条腿必须问 `arrayElemTypes_`：
+
+```cpp
+auto ae188 = arrayElemTypes_.find(cn188);
+if (knownVariantVars_.count(cn188)) shapeOk = true;        // Variant 变量/数组元素
+else if (ae188 != end) shapeOk = false;                   // 已知数组且元素不是 Variant
+else shapeOk = true;                                      // 不是数组 ⇒ 函数调用
+```
+
+### 四、为什么这样改
+
+- **语义门 + 载体形两道**：光有语义门会把 `d2 = q(3)` 包进去（`inferExprType` 对数组元素
+  答 Variant），光有载体形会把 `obj.GetV()` 包进去（C 侧不是 `vb6_VARIANT`）。两道同时成立才改装。
+- **不新开函数返回类型表**：`knownVariantVars_` 记的是返回槽（`vb6_ret_F`），不是函数名 ——
+  所以第 3 条只能靠语义门 + 「不是数组」来认函数调用，而不是再建一张「哪些函数返回 Variant」的表。
+- **为什么不顺手接成员调用**：`obj.GetV()` 的 C 文本是 cls 调用形状，是否真是 `vb6_VARIANT`
+  要另问 `classMemberMethodReturnsVariant`；没真机读数不接（留债）。
+
+### 五、读数与随刀改的针
+
+- 新夹具 `tests/b213_variant_call_to_date`（W1–W9 九行，与真机 P246 逐字相同），x64 与 x86
+  **逐行相同**。
+- 新哨兵：R18（调用形在腿上 + 已知数组排除式存在）、R19（b213 两台在跑）。
+- 改坏即红：把 `ae188 != arrayElemTypes_.end()` 改成 `false`
+  ⇒ `R18 known-array exclusion = 0`，还原后 PASS。
+- 闸门（本机全 PASS）：`check_date_conv`（`call-cells=2`）、`check_manifest_coverage` K1..K3
+  （inputs=920 `[.vbp=358 .bas=562]` / registered=920）、`check_static_sentinel_registration`、`check_sa_access`。
+- **形状回归的本机做法**：开一个 `git worktree` 到上一刀的 head，用旧二进制与新二进制对 918 份
+  语料逐一 `--emit-c` 作行级 diff —— 结果 b206 的 `d2 = q(3)` 是**唯一**真变化（这就是『改宽了』的证据），
+  其余 6 份差异在旧二进制上同样存在（是本机路径/环境串，不是发码）。修掉后 b206 回到逐行 0 差异。
+
+### 六、神谕与清单
+
+- 真机神谕：`.temp/k206p/P246.bas` / `p246.txt`（九行）。
+- 修前取证：`.temp/k206p/c3a`（W1=2021、W4/W5/W8=0 err=0）与 `--emit-c` 的
+  `d = vb6_VariantToDouble(vb6_FText());`。
+- 门：run `45899002299`（`dev`、head `5cc36bfb`）**23/23 全绿**。
+- 刻意不跟的格（背账）：成员调用/委托当右值（`obj.GetV()`）；`d = FText`（不带括号的调用）。
+
+### 七、记账
+
+- 探针：`.temp/k206p/P246.bas`（九格）、`c3a`（改前读数）、`rows213.ps1`（清单两行复算）。
+- 夹具：`tests/b213_variant_call_to_date`（`B213Main.bas` / `B213Res.vbp`），注册在
+  `tests/run_tests.ps1`（x64 + x86）。
+- 代码：`5cc36bfb`（载体形三档 + 已知数组排除 + 夹具 + 哨兵 R18/R19 + 清单两行）。
+- **号**：本节 = 第二百零六刀 / §11.189。
+- 教训：**「能编能跑」不是验收标准，形状也是语义。** 第一版看着完全正确（读数全对），
+  但它把一个 double 绕道 `vb6_VARIANT` 再回来；只有拿上一刀的二进制逐份对发码才看得见。
+  下一刀开始前先问一句：这次放宽的判据会不会把**本来已经对的格**也一起改了？
