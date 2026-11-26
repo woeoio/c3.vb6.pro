@@ -11558,3 +11558,115 @@ F10 n=0 err=11
   `vb6c3-cgen.dir` 与 `c3.dir`。只顶前者时 driver 那几个 TU 不重编，仍按旧 `CCodeGen`
   布局跑新库，表现为 `--emit-c` 直接 0xC0000005（本机实测，改前同一份文件能编过）。
   加类成员后要一并顶掉 `c3.dir\cmake_pch.hxx` 或把 `src\driver\*.cpp` 全部摸一遍。
+## §11.176 `On Error Resume Next` 是真捕获：帧、逐语句 resume 点、dispatch switch（第一百九十三刀）
+
+### 一、问题
+
+第一百九十二刀把「赋值站要不要写目标」判到了静态调用树上，但它默认了一件事：raise 之后
+控制流**已经**落在调用方的下一条语句。实际不是。改前 `OnErrorKind::ResumeNext` 只是
+
+1. 记一下 `Err` 序号（`vb6_SaveErrState`-系），
+2. 让 `vb6_ErrRaise` **就地 return**。
+
+`return` 只退出当下这一层 RTL 调用，于是 raise 之后：
+
+- 被调方（自己没有处理器）**剩下的语句照跑** —— 真机不跑（G1：`hits=0`，本仓改前 `hits=100`）；
+- 调用方那条语句也照常完成，把被调方交回的普通返回值写进目标 —— 真机整条中止（G3：`n=0`）；
+- 「出错语句的下一条」靠语句顺序偶然对上，跨过程、跨块就散（`b137_resume_in_block` 只是没踩到）。
+
+也就是说 `Resume Next` 此前是「`Err` 记账」而不是「控制流」。真机语义是**过程级**的：raise 一旦
+发生，被调方剩余语句与调用方这条语句都不再执行，控制流落到最近的 `Resume Next` 帧，从「出错
+语句的下一条」继续；且**隐式 resume 不清 `Err`**。
+
+### 二、真机读数（VB6Mini `/make` 实跑，`.temp/k193p/P220.bas`）
+
+| 格 | 形状 | 真机 |
+|---|---|---|
+| G1 | `Call PEscape`（被调方无处理器，raise 后还有一条 `hits=hits+100`） | `hits=0 err=11` |
+| G2 | `Call PSwallow`（被调方自己 `Resume Next`） | `hits=1 err=0` |
+| G3 | `n = FEscape()`（函数式，raise 后还有 `hits=hits+1000` / 赋值） | `n=0 hits=0 err=11` |
+| G4 | 两跳 `n = FMid()` → `FEscape()` | `n=0 hits=10 err=11` |
+| G5 | 出错语句**之后**还有一条 `hits=hits+1` | `n=0 hits=1 err=11` |
+| G6 | 最后一条语句出错，随后调用方继续 | `hits=1 err=11` |
+
+G4 的 `hits=10` 是外层函数入口那一句（`hits=hits+10`）留下的，`+20` 与 `+1000` 都没跑 ——
+「两跳各层剩余语句都不执行」的读数指纹。G5 的 `err=11` 说明隐式 resume **没有**清 `Err`
+（这条决定了 `b159` 那两格为什么该是 `(e13)(e13)` 而不是一格）。
+
+### 三、判据与改法
+
+`OnErrorKind::ResumeNext` 现在真的架帧，且**每条语句**前面落一个 resume 点：
+
+```c
+vb6_error_jmp_ptr = &vb6_local_err_jmp;
+vb6_error_jmp_set = 1;
+vb6_err_jmp_active = 1;
+vb6_err_resume_next = 1;
+if (setjmp(vb6_local_err_jmp) != 0) {
+    vb6_err_dispatch = vb6_err_resume_next_point;
+    goto vb6_err_dispatch_switch;
+}
+vb6_err_resume_point = 0;
+vb6_err_resume_next_point = 1;
+vb6_resume_0:;
+s = s & "/" & CStr(UBound(r));
+vb6_err_resume_point = 1;
+vb6_err_resume_next_point = 2;
+vb6_resume_1:;
+...
+vb6_err_dispatch_switch:
+switch (vb6_err_dispatch) { case 0: goto vb6_resume_0; case 1: goto vb6_resume_1; ... }
+```
+
+配套三点：
+
+- `vb6_ErrRaise` 改为**先 longjmp**（帧有效时），内联那条 `resume_next` 早退只留作没有帧时的兜底；
+- `errFrameReady_` 只在 `cgen_decl_func.cpp` / `cgen_decl_proc.cpp` 两个真正的过程体入口置位。
+  Property、继承类、控件片段这几个发射器不置位 ⇒ 退回老行为，不会踩到「没有 `jmp_buf` 却去
+  longjmp」；这条护栏是本刀在 VBFlexGrid x86 上撞出来的（`C2094 标签未声明` +
+  `C2065 vb6_local_err_jmp` 各一次）；
+- `hasResumeNextInStmts` + `hasResumeNext_` 与第一百九十二刀同一个 `state_scan` 段建好，用来判
+  「这个过程的语句要不要逐条落 resume 点」（没有 `Resume Next` 的过程一个点都不多）。
+
+### 四、读数（`tests/b201_resume_scope`，x64 与 x86 逐字相同，且与真机一致）
+
+```
+G1 call_escape: hits=0 err=11      G2 call_swallow: hits=1 err=0
+G3 assign_escape: n=0 hits=0 err=11   G4 two_hop: n=0 hits=10 err=11
+G5 next_stmt: n=0 hits=1 err=11      G6 last_stmt: hits=1 err=11
+```
+
+改前 G1 `hits=100`、G3 `n=9 hits=1000`、G4 `hits=1030` —— 三格是「raise 只 return 一层」的直接指纹。
+
+### 五、随刀暴露、本刀不开口的两处（读数已留）
+
+- **`VariantArrayGet` 对 Empty 不报 13**：真机 `r(0)`（`r` 为 Empty）报 13、目标不动
+  （`.temp/k193p/P221.bas` H2/H4）；本仓静默交回 Empty。`test_com_latebound` 的 `mu/ms` 两格因此
+  仍差最后一段（真机 `0/Empty(e13)(e13)`，本仓 `0/Empty(e13)/`）。
+- **`d("ms")` 的 VarType**：未 ReDim 的 `String()` 装进 Dictionary 再取回，真机答
+  `8200/String()`（`.temp/k193p/P222.bas`），本仓仍答 `0/Empty`。这是 b159 那套「模块级数组 ↔
+  COM SAFEARRAY」的老缺口，与 `Resume Next` 无关。
+
+两处都在 `test_com_latebound` 的针上留了痕：`VB-b159-mu` / `VB-b159-ms` 由 `0/Empty/-1(e13)`
+重钉为 `0/Empty(e13)/`。重钉的**方向**是朝真机走 —— 改前那句 `UBound` 不再把 `-1` 写进 `s`，
+`(e13)` 由紧接着的那个 `If Err.Number <> 0` 补上；真机正是这个顺序（P221 H3：`s` 停在 `A`）。
+
+### 六、神谕与清单
+
+- `b137_resume_in_block` 十条针全过（Resume Next 落在块内的老夹具，未改一针）。
+- 真项目烟测：Charts 2020 x64 `rc=0`；VBFlexGrid x86 `rc=0`（改 `errFrameReady_` 之前 x86 直接
+  编不过，见上）。
+- manifest 按 CI `45801177450` 的产物装行：`changed=101 added=2 removed=0`，复检 894/894 相同
+  （`diffEntries=0`），没有 `-Bless`。101 份存量变化的形状抽 `test_com_latebound` 当场发码核对：
+  `vb6_resume_N:;` + `vb6_err_resume_next_point = N;` + `vb6_err_dispatch_switch`，三样之外无漂移；
+  新增 2 行是本刀夹具 `b201_resume_scope`。
+
+### 七、记账
+
+- 探针：`.temp/k193p/P220.bas`（六格作用面）、`P221.bas`（`UBound(Empty)` / `r(0)` 单点）、
+  `P222.bas`（逐字复刻 `B159Show` 取整串）。
+- 夹具：`tests/b201_resume_scope`（G1–G6，`Debug.Print` 走 stdout）。
+- 代码 `cd9c21e6`；针 `7fe0f0ee`；清单 `6f59f74f`；GA `45802555558` 23/23 全绿
+  （此前 `45798686898` 三红：manifest 未装行 + `Tests (compile #1)` / `Tests (bas #2)` 各由
+  `manifest_coverage` 与 `test_com_latebound` 一条针翻红）。
+- 记账坑（沿用第一百九十二刀，未再新增）：`cgen_state.inc` 属 PCH 内容，两个 PCH 都要顶。
