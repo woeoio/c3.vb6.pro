@@ -217,7 +217,11 @@ Token Lexer::scanToken() {
             offset_ = saveOff;
             column_ = saveCol;
 
-            if (afterDigits == '/' || afterDigits == '-') {
+            // 账 §11.186（第二百零三刀）: 纯时间形日期字面量 `#h:mm:ss AM/PM#` 的分隔符是 `:`
+            //   —— 旧判据只认 `/` 与 `-`, 于是 `#12:00:00 PM#` 被当成文件号 `#12` 切下去,
+            //   后面那串 `:00:00 PM#` 全成了垃圾 token (实测 P246: VB2002/VB2003/VB2004 连报)。
+            //   文件号 `#1` 后面只会跟 `,` / `)` / 换行, 不会是 `:`, 两条路不撞。
+            if (afterDigits == '/' || afterDigits == '-' || afterDigits == ':') {
                 // 日期字面量: 回退 # 由scanDateLiteral处理
                 offset_--;
                 column_--;

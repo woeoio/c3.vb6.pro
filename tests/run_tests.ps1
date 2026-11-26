@@ -13241,6 +13241,24 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "N5 ub0 err=9")
     Test-Vbp 'b208_nd_bounds' "$Tests\b208_nd_bounds\B208Res.vbp" $b208Needles
     Test-Vbp 'b208_nd_bounds_x86' "$Tests\b208_nd_bounds\B208Res.vbp" $b208Needles -Arch "x86"
+    # §11.186 第二百零三刀: **纯时间形日期字面量** `#h:mm:ss AM/PM#`。
+    # 真机 .temp/k202p/p247.txt（11 行）。改前 C3 在**词法**就把 `#12:00:00 PM#`
+    # 当成文件号 `#12` 切下去（判据只认 `/` 与 `-`），后头那串成为垃圾 token。
+    # 解析侧 foldDateLiteralToOADate 本就支持纯时间形，缺的只是词法那一格。
+    $b210Needles = @(
+    "T1 isdate=True err=0",
+    "T2 fmt=12:00:00 err=0",
+    "T3 cdbl=0.5 err=0",
+    "T4 fmt=13:05:00 err=0",
+    "T5 fmt=00:30:00 err=0",
+    "T6 fmt=23:59:59 err=0",
+    "T7 datepart=1899-12-30 err=0",
+    "T8 cmp=True err=0",
+    "T9 cdate=12:00:00 err=0",
+    "T10 cdbl=0 err=0",
+    "T11 fmt=13:02:03 err=0")
+    Test-Vbp 'b210_time_literal' "$Tests\b210_time_literal\B210Res.vbp" $b210Needles
+    Test-Vbp 'b210_time_literal_x86' "$Tests\b210_time_literal\B210Res.vbp" $b210Needles -Arch "x86"
     # §11.183 第二百刀: String→Date 的隐式转换 (赋值站)。
     # 真机 `.temp/k200p/p241.txt` (VB6Mini /make) 八行逐字：字面量 / 数组元素 / String 变量 /
     # 元素取变量 / CDate 五条都答 44259 err=0；非法文本两条保住旧值 45000 并抛 13。
