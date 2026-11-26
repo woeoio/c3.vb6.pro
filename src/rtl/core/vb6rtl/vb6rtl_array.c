@@ -310,6 +310,65 @@ void vb6_SafeArrayDestroy1D(vb6_SafeArray1D* arr) {
     free(arr);
 }
 
+/* 账 §11.179 (第一百九十六刀): 1D 描述符的深副本 —— 见 vb6rtl_array.h 的声明处注释。
+   真机 P230 的六档都答「副本」, 而装箱口原来是 `v.parray = _arr` 共用一枚描述符:
+   写槽改源 (M1 应为 slot=99/src=11)、写源改槽 (M2 应为 src=55/slot=11)、源被 ReDim
+   后槽的界也跟着变 (M6 应为 src_ub=9/slot_ub=2)。
+   元素档只分三种走法:
+     bstr    另分配一只 (与 Destroy1D 的释放口径**成对**)
+     variant 先清成 Empty 再 vb6_VariantCopy (值档 BSTR 另分配; 不搬源槽的指针)
+     其余    memcpy —— 标量/Currency(double)/Date(double)/UDT/ptr 都是纯字节
+   ptr (本工程类裸实例) 快照照旧只拷指针: 与 Shallow 语义同档, 引用计数与 Terminate
+   仍归声明它的那一份数组管 (今天每处数组拷贝都这样, 本刀不改那一口径)。 */
+vb6_SafeArray1D* vb6_SaClone1D(const vb6_SafeArray1D* src) {
+    if (!src) return NULL;
+    vb6_SafeArray1D* d = (vb6_SafeArray1D*)calloc(1, sizeof(vb6_SafeArray1D));
+    if (!d) return NULL;
+    *d = *src;
+    d->fFeatures = (uint16_t)VB6_SA1D_FFEATURES_OWNED;
+    d->data = NULL;
+    if (!src->data || src->count <= 0 || src->elemSize <= 0) {
+        /* 未分配 (ReDim 之前的动态数组) / 空数组: 只在描述符里把界与类型对好 */
+        return d;
+    }
+    size_t bytes = (size_t)src->count * (size_t)src->elemSize;
+    d->data = calloc(1, bytes);
+    if (!d->data) {
+        /* 分配失败: 退成「未分配」形态, 不让半成品冒充有数据的数组 */
+        d->count = 0;
+        d->uBound = d->lBound - 1;
+        return d;
+    }
+    memcpy(d->data, src->data, bytes);
+    if (src->elemType == vb6_sa_bstr) {
+        for (int32_t i = 0; i < src->count; i++) {
+            BSTR* slot = (BSTR*)((char*)d->data + (size_t)i * (size_t)d->elemSize);
+            if (*slot) *slot = vb6_BSTR_FromBSTR(*slot);
+        }
+    } else if (src->elemType == vb6_sa_variant) {
+        for (int32_t i = 0; i < src->count; i++) {
+            vb6_VARIANT* dst = (vb6_VARIANT*)((char*)d->data + (size_t)i * (size_t)d->elemSize);
+            vb6_VARIANT* s = (vb6_VARIANT*)((char*)src->data + (size_t)i * (size_t)src->elemSize);
+            vb6_VARIANT empty = vb6_VariantEmpty();
+            *dst = empty;              /* 先清掉 memcpy 搬来的那个指针 */
+            vb6_VariantCopy(dst, s);   /* BSTR 另分配 / Dispatch AddRef */
+        }
+    }
+    return d;
+}
+
+/* 账 §11.179 (第一百九十六刀): 数组 → Variant 的唯一**装箱口**。
+   1D 描述符先深拷一份再装 (副本语义, 见 vb6rtl_array.h 的两枚标记), 该副本带 OWNED 标记,
+   随那枚 Variant 一起销毁。ND / 真 SAFEARRAY 照旧借用 —— 多维这一档的拥有权今天仍未定
+   (跟 1D 同一道题, 但得先给 vb6_SafeArrayND 找一枚不破布局的标记槽), 记在 §11.179 的背账里。 */
+vb6_VARIANT vb6_VariantArrayCopy(void* _arr) {
+    if (_arr && vb6_SaIs1D(_arr)) {
+        vb6_SafeArray1D* c = vb6_SaClone1D((const vb6_SafeArray1D*)_arr);
+        if (c) _arr = c;
+    }
+    return vb6_VariantArray(_arr);
+}
+
 // 账 #305 §B218 (甲) 腿⑤ 数组档 (第一百四十刀): 见 vb6rtl_array.h 的注释。
 // 逐元素放手时先把槽清空: 被放手那枚的 Class_Terminate 若回头写这一格
 // (`Set holder.mKids(i) = Nothing`), 清过的槽不会被退第二遍。

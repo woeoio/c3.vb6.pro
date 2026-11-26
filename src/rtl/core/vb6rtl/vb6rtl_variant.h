@@ -229,6 +229,9 @@ static inline vb6_VARIANT vb6_VariantBool(int16_t val) {
 // 为什么声明在本文件、定义在 vb6rtl_array.c: 伞头里 variant.h 排在 array.h **之前**（那边的
 // vb6_VariantFromUdtBytes 注释记着这条顺序），这里看不见 elemtype 枚举与两套描述符。
 int32_t vb6_SaVtOfArrayPtr(const void* arr);
+/* 账 §11.179 (第一百九十六刀): 装箱口。1D → 深拷一份副本 (带 OWNED 标记, 随 Variant 销毁);
+   ND / 真 SAFEARRAY → 照旧借用。声明在本文件、定义在 vb6rtl_array.c, 与上面那枚同一个理由。 */
+vb6_VARIANT vb6_VariantArrayCopy(void* _arr);
 static inline vb6_VARIANT vb6_VariantArray(void* _arr) {
     vb6_VARIANT v; memset(&v, 0, sizeof(v));
     v.vt = (vb6_vartype)vb6_SaVtOfArrayPtr(_arr); v.parray = (struct vb6_SafeArray1D*)_arr; return v;
@@ -357,7 +360,7 @@ struct vb6_SafeArrayND; // forward declaration (1D 的那一枚在 vb6rtl_builti
     float:                vb6_VariantSingle, \
     double:               vb6_VariantDouble, \
     wchar_t*:             vb6_VariantString, \
-    struct vb6_SafeArray1D*: vb6_VariantArray, \
+    struct vb6_SafeArray1D*: vb6_VariantArrayCopy, \
     struct vb6_SafeArrayND*: vb6_VariantArray, \
     struct tagSAFEARRAY*:  vb6_VariantFromParamArray, \
     vb6_VARIANT:          vb6_VariantIdentity, \
@@ -380,7 +383,7 @@ struct vb6_SafeArrayND; // forward declaration (1D 的那一枚在 vb6rtl_builti
     float:                vb6_VariantSingle, \
     double:               vb6_VariantDouble, \
     wchar_t*:             vb6_VariantString, \
-    struct vb6_SafeArray1D*: vb6_VariantArray, \
+    struct vb6_SafeArray1D*: vb6_VariantArrayCopy, \
     struct vb6_SafeArrayND*: vb6_VariantArray, \
     struct tagSAFEARRAY*:  vb6_VariantFromParamArray, \
     vb6_VARIANT:          vb6_VariantIdentity, \

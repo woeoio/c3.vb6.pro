@@ -576,6 +576,16 @@ void* vb6_VariantToObjectVal(vb6_VARIANT v) {
 // 对象照旧借用不计数 —— 与改前一字不差，见 vb6_Host_FromWinVariant。
 void vb6_VariantValueFree(vb6_VARIANT* v) {
     if (!v) return;
+    /* 账 §11.179 (第一百九十六刀): 1D 数组的**私有副本** (装到里时的 OWNED 标记)
+       随持有者一起走。借用档 (静态数组载体 / control array / COM 归化那一枚) 标记不同,
+       一个字节不动 —— 否则会把别人的描述符 free 掉。
+       ⚠ 必须先问 vt 的阵列位: x64 的 VARIANT 是个联合, `parray` 与 iVal/lVal 同槽,
+       非数组档的 parray 是**秩值本身** (VariantInt(7) 的 parray == 7), 直接当指针读就是 AV。 */
+    if ((v->vt & vb6_vtArray) && v->parray && vb6_SaIs1DOwned(v->parray)) {
+        void* dead = v->parray;
+        v->parray = NULL;
+        vb6_SafeArrayDestroy1D((vb6_SafeArray1D*)dead);
+    }
     if (v->vt == vb6_vtBSTR && v->bstrVal) {
         vb6_BSTR_Free(v->bstrVal);
         v->bstrVal = NULL;
@@ -594,6 +604,13 @@ void vb6_VariantValueFree(vb6_VARIANT* v) {
 void vb6_VariantValueCopy(vb6_VARIANT* dst, const vb6_VARIANT* src) {
     if (!dst || !src) return;
     *dst = *src;  // 浅拷贝
+    /* 账 §11.179 (第一百九十六刀): 数组档也要「值拷贝」—— 真机 M3 是 r1=11 / r2=77:
+       两枚 Variant 各持一份描述符, 写一边不动另一边。所以副本再拷一份 (带 OWNED 标记),
+       两边的销毁权各自独立。ND 仍借用 (与装箱口 vb6_VariantArrayCopy 同一道背账)。 */
+    if ((src->vt & vb6_vtArray) && src->parray && vb6_SaIs1D(src->parray)) {
+        vb6_SafeArray1D* c = vb6_SaClone1D((const vb6_SafeArray1D*)src->parray);
+        if (c) dst->parray = (struct vb6_SafeArray1D*)c;
+    }
     if (src->vt == vb6_vtBSTR && src->bstrVal) {
         dst->bstrVal = vb6_BSTR_FromBSTR(src->bstrVal);
     }
@@ -653,6 +670,7 @@ void vb6_VariantCopy(vb6_VARIANT* dst, const vb6_VARIANT* src) {
 // 对照: 同一份代码里的 m_Keys (String 数组) 走 vb6_BSTR_Assign 深拷贝, 所以它一直是对的。
 void vb6_VariantAssign(vb6_VARIANT* dst, vb6_VARIANT src) {
     if (!dst) return;
+    vb6_VariantClear(dst);
     vb6_VariantClear(dst);        /* 释放旧值 (BSTR / Dispatch / x86 DECIMAL) */
     vb6_VariantCopy(dst, &src);   /* *dst = src + BSTR 另分配 / Dispatch AddRef / x86 DECIMAL 另分配 */
 }

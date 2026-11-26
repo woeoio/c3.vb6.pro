@@ -72,7 +72,17 @@ typedef struct vb6_SafeArray1D {
 // 1D 描述符的 fFeatures 标记。真实 SAFEARRAY 的 fFeatures 是 FADF_* 位集，这里借它
 // 放一枚 C3 标记：既让 `vb6_SaIs1D` 能把 1D 描述符与 `vb6_SafeArrayND`
 // (首字段 dimCount = 2..16，offset 2 恒 0) 区分开，又让 `.fFeatures` 保持非零。
+/* 账 §11.179 (第一百九十六刀): 这一槽现在有**两个**值, 都表示「这是 C3 的 1D 描述符」,
+   差异只在谁负责销毁 ——
+     VB6_SA1D_FFEATURES        借用档: 描述符另有主人 (静态数组的载体、control array、COM 归化那一枚),
+                               Variant 只是替人拿着, 清空时**不许** free。
+     VB6_SA1D_FFEATURES_OWNED  私有副本: `v = <数组>` 装箱时由 vb6_SaClone1D 造出来, 所有权在
+                               那枚 Variant 手里, vb6_VariantClear/覆盖时随它一起销毁。
+   真机 (P230) 的每一档都答「副本」: 写槽不影响源 (M1 slot=99/src=11), 写源不影响槽
+   (M2 src=55/slot=11), Variant→Variant 各自独立 (M3 r1=11/r2=77), 源被 ReDim 后槽的
+   界与值都留在旧的那一份 (M6 src_ub=9/slot_ub=2/slot0=11)。共用一枚描述符就一条都做不到。 */
 #define VB6_SA1D_FFEATURES 0xA1D1u
+#define VB6_SA1D_FFEATURES_OWNED 0xA1D2u
 
 // ⚠ 注意 offset 8 的 `elemType` 占的是 SAFEARRAY.cLocks 的位置。oleaut32 的
 // SafeArrayLock/Unlock 会把 cLocks 当计数器加减 —— 对 C3 描述符调用它就会篡改
@@ -106,11 +116,28 @@ static inline void vb6_Sa1DInit(vb6_SafeArray1D* arr) {
     arr->fFeatures = (uint16_t)VB6_SA1D_FFEATURES;
 }
 
+/* 这两枚标记是不是「我们自己的描述符」？ —— 判「真 SAFEARRAY」的地方不许再跟某一个
+   具体值比, 否则私有副本会被当成外来 SAFEARRAY (见 vb6rtl_com.c 的 vb6_SaSlotIsRealSafeArray)。 */
+static inline int vb6_SaFfIsOurs(uint16_t ff) {
+    return ff == (uint16_t)VB6_SA1D_FFEATURES || ff == (uint16_t)VB6_SA1D_FFEATURES_OWNED;
+}
+
 // 这是不是 C3 的 1D 描述符？(ND 描述符首 WORD 是 dimCount = 2..16，offset 2 恒 0)
 static inline int vb6_SaIs1D(const void* p) {
     const vb6_SafeArray1D* a = (const vb6_SafeArray1D*)p;
-    return a != NULL && a->cDims == 1 && a->fFeatures == (uint16_t)VB6_SA1D_FFEATURES;
+    return a != NULL && a->cDims == 1 && vb6_SaFfIsOurs(a->fFeatures);
 }
+
+// 这一枚 1D 描述符是不是「谁都不欠」的私有副本 (Variant 装箱时造的, 销毁权在持有者手里)？
+static inline int vb6_SaIs1DOwned(const void* p) {
+    const vb6_SafeArray1D* a = (const vb6_SafeArray1D*)p;
+    return a != NULL && a->cDims == 1 && a->fFeatures == (uint16_t)VB6_SA1D_FFEATURES_OWNED;
+}
+
+/* 1D 描述符的**深副本** (第一百九十六刀): 新描述符 + 新数据块 + 逐元素独立所有权
+   (BSTR 另分配一只; Variant 元素走 vb6_VariantCopy)。新的那一枚带 OWNED 标记,
+   由持有者销毁。源为 NULL 时答 NULL。 */
+vb6_SafeArray1D* vb6_SaClone1D(const vb6_SafeArray1D* src);
 
 // P14.2.3: 字符串数组函数
 vb6_SafeArray1D* vb6_Split(BSTR expr, BSTR delimiter, int32_t limit, int32_t compare);

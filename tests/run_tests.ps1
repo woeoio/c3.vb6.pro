@@ -13125,6 +13125,21 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "T17 long_after=12-err=0")
     Test-Vbp 'b203_typed_elem_write' "$Tests\b203_typed_elem_write\B203Res.vbp" $b203Needles
     Test-Vbp 'b203_typed_elem_write_x86' "$Tests\b203_typed_elem_write\B203Res.vbp" $b203Needles -Arch "x86"
+    # §11.179 第一百九十六刀: 数组装进 Variant 是**副本**（改前共用一枚描述符）。
+    # 真机读数: .temp/k196p/p230.txt。T1 写槽源不动 / T2 写源槽不动 / T3 Variant→Variant 各持一份 /
+    # T4 Variant() 数组逐元素另拷 / T5 String() 数组 BSTR 另分配 / T6 源被 ReDim 后槽留旧界旧值 /
+    # T7 槽换档后标签跟着换 / T8 界与身份照旧。背账: 未分配数组装箱的 VarType（真机 8195，本仓 8204）。
+    $b204Needles = @(
+    "T1 slot=99 src=11",
+    "T2 src=55 slot=11",
+    "T3 r1=11 r2=77",
+    "T4 slot=88 src=7",
+    "T5 slot=bb src=aa",
+    "T6 src_ub=9 slot_ub=2 slot0=11",
+    "T7 vt=8200 tn=String()",
+    "T8 isarr=True vt=8195 lb=0 ub=2")
+    Test-Vbp 'b204_variant_array_copy' "$Tests\b204_variant_array_copy\B204Res.vbp" $b204Needles
+    Test-Vbp 'b204_variant_array_copy_x86' "$Tests\b204_variant_array_copy\B204Res.vbp" $b204Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
