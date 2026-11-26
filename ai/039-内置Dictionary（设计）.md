@@ -11770,3 +11770,137 @@ V17 inrange2d=31     V18 oob2d-err=9      V19 hits=1-err=13
 - 代码 `2a476cf3`（清旁产物 `407dc948`）；清单 `c45a3791`；GA `45808179408` 23/23 全绿。
 - 小坑：夹具目录里用 VB6Mini 试编时落的 `VB6.exe` / `*.exe` / `vb.out` 会被 `git add` 顺手带上，
   提交后要 `git rm --cached` 清掉（本次踩了一次）。
+## §11.178 有类型数组元素的写侧，与 resume 点标签的次序（第一百九十五刀）
+
+### 一、问题
+
+`vb6_VariantArraySet` 的注释一直写着「仅 Variant 数组支持赋值」：Variant 槽里装的是
+`Long()` / `String()` / `Boolean()` 这类**有类型**数组时，`r(0) = 99` 整条语句**静默丢弃**。
+上一刀（§11.177）补齐了读侧的错误档之后，这一格的读数第一次变得可判 —— 读得到、写得丢，
+是最容易被当成「程序自己的逻辑」的那种缺口。
+
+顺带撞出两个必须同刀处理的东西：
+
+1. 溢出 `vb6_OvfChk ⇒ vb6_RaiseError(6)` 这一路**不中止语句**：`Resume Next` 下只改 `Err`、
+   语句照常完成，于是 `r(0) = 300`（`Byte()` 数组）把 44 写了进去（真机是 err 6、元素不动）。
+   根因是 `vb6_RaiseError` 先问 `resume_next` 再问帧 —— 与 §11.176 在 `vb6_ErrRaise` 上做的
+   修正没同步。
+2. 一维读侧把 Currency 元素的 `值×10000` **截断成 Long**（`r(0)` 答 12346，真机 1.2346）。
+   写侧要盯回读，这一格不能留。
+
+### 二、真机读数（VB6Mini `/make` 实跑）
+
+写侧（`.temp/k195p/P226.bas`）：
+
+| 格 | 槽 | 写入 | 真机 |
+|---|---|---|---|
+| W1 | `Long()` | `99` | `err=0`，回读 99 |
+| W3 | `String()` | `77` | `err=0`，回读 `"77"` |
+| W4 | `String()` | `"new"` | `err=0`，回读 `"new"` |
+| W5 | `Boolean()` | `2` | `err=0`，回读 `True` |
+| W6 | `Double()` | `3` | `err=0`，回读 3 |
+| W7 | `Long()` | `"42"` | `err=0`，回读 42 |
+| W8 | `Long()` | 越界 `5` | `err=9` |
+
+转换与溢出（`.temp/k195p/P227.bas`）：
+
+| 格 | 写入 | 真机 |
+|---|---|---|
+| X1 | `Byte()` ← 300 | `err=6`，元素**保持 1** |
+| X3 | `Integer()` ← 40000 | `err=6`，元素保持 1 |
+| X4 | `Currency()` ← 1.23456 | `err=0`，回读 `1.2346` |
+| X5 | `Long()` ← Null | `err=94`，元素不动 |
+| X6 | `Long()` ← Empty | `err=0`，回读 0 |
+| X7 | `String()` ← Null | `err=94`，元素保持 `"z"` |
+| X8 | `Long()` ← `"abc"` | `err=13`，元素不动 |
+| X9 | `Long()` ← 1.9 | `err=0`，回读 2 |
+
+还有一条**不在本刀范围**的读数：W1 之后源数组 `la(0)` 在真机上仍是 11 —— 数组装进 Variant
+是真副本。本仓这条装箱仍是共用（`la(0)` 变成 99），属既有缺口，见第五节。
+
+### 三、判据与改法
+
+写侧按元素档分诊，转换与溢出判定**全部复用** `CLng/CInt/CByte/CBool/CDbl/CSng/CCur` 那一族
+`*V` 内联 —— Null→94、Empty→0、银行家舍入、越界 6 都是它们已有的口径，本刀不写第二遍：
+
+```c
+switch (arr->elemType) {
+    case vb6_sa_long:   ((int32_t*)arr->data)[off] = vb6_CLngV(val); break;
+    case vb6_sa_int:    ((int16_t*)arr->data)[off] = vb6_CIntV(val); break;
+    case vb6_sa_byte:   ((uint8_t*)arr->data)[off] = vb6_CByteV(val); break;
+    case vb6_sa_bool:   ((int16_t*)arr->data)[off] = vb6_CBoolV(val); break;
+    case vb6_sa_double: ((double*)arr->data)[off] = vb6_CDblV(val); break;
+    case vb6_sa_single: ((float*)arr->data)[off] = (float)vb6_CSngV(val); break;
+    case vb6_sa_currency: ((int64_t*)arr->data)[off] = vb6_CurrencyScale(vb6_CCurV(val)); break;
+    case vb6_sa_bstr: { BSTR nb = vb6_CStrStrict(val); ... }   /* Null ⇒ 94 */
+    default: break;                                            /* ptr / udt 不动 */
+}
+```
+
+转换先于存储 ⇒ 报错时元素自然不动（X1/X3/X5/X7/X8 五格同形）。`String` 档走 `vb6_CStrStrict`
+而不是宽松的 `vb6_CStr`：后者是 `&` / `Debug.Print` 那一路的口径（Null 打印成 `"Null"`），
+元素写侧真机是 94。
+
+另外两处：`vb6_RaiseError` 改成**有帧就先 longjmp**（与 `vb6_ErrRaise` 同口径）；
+`vb6_VariantElemFromSlotData` 的 Currency 档改回真 Currency（`vt=vCurrency, cyVal=值×10000`）。
+
+### 四、resume 点标签的次序：一个死循环
+
+补上写侧之后 `test_overflow` 两个架构都 **run timeout**（CPU 45–56s 原地打转）。
+最小化探针（`.temp/k195p/P228.bas` / `P229.bas`）三分：裸语句、`If` 块都正常，`Select Case`
+挂 —— 因为 Case 体里下一句还在**同一个 if/else-if 链的另一支**上。
+
+根因不在 Select Case，而在 §11.176 发的形状本身：
+
+```c
+vb6_err_resume_point = 2;        /* ← 先推进 */
+vb6_err_resume_next_point = 3;
+vb6_resume_2:;                   /* ← 后落标签: dispatch 跳进来时跳过了上面两行 */
+b = vb6_ChkByte((-1));
+```
+
+跳进标签时 `vb6_err_resume_next_point` 还停在「进这一句之前」的号上，这一句自己再报错就又
+dispatch 回同一标签 —— **同一句反复重放**。改法是标签放到两行赋值**之前**
+（`cgen_stmt.cpp` 的语句级 resume 点与 `cgen_with.cpp` 的块尾补点同一处口径）：
+
+```c
+vb6_resume_2:;
+vb6_err_resume_point = 2;
+vb6_err_resume_next_point = 3;
+b = vb6_ChkByte((-1));
+```
+
+跳到标签就等于「开始执行这一句」，推进必须跟着走。§11.176 那六个格没暴露它，是因为它们
+恢复后的下一条语句不再报错；只要有**连续两句都报错**（`test_overflow` 的 `Select Case` 是
+同一链上两支），就会原地打转。
+
+### 五、读数与随刀改的针
+
+- 夹具 `tests/b203_typed_elem_write`（T1–T17）x64/x86 逐字相同，34 行与真机全对上。
+- `test_overflow` 恢复 15 格 `OVF-OK` + `OVF-VAL/VAL2/GOTO`，两架构都秒回。
+- `test_redim_elem` 的 `R17-boxw` 由 `4242` 改为 `99` —— 那枚针的注释原文就写着
+  「谁修好 B155 cell 3，这一针就该红，那是成功信号不是回归」，本刀正是把它修好。
+- `b137_resume_in_block` 10 针不变；`b201` / `b202` / `b203` 三个夹具 66 行逐字未动。
+
+**本刀明示不开口的一处**：`r = la`（数组装进 Variant）本仓是**共用**、真机是副本 ——
+写 `r(0)` 会把 `la(0)` 一起改掉。夹具 T17 因此先写回哨兵，避免被前几格污染。这条不是
+本刀引入的（改前写不进去所以看不见），要修得动「数组→Variant」的装箱路径，另立。
+
+### 六、神谕与清单
+
+- manifest 按 CI `45815450824` 的产物装行：`changed=109 added=2 removed=0`，复检 898/898 相同。
+  109 份存量变化就是 resume 点的**行序重排**（判定号不变），抽 `test_overflow` 当场发码核对过。
+- 该次 GA 的两红都是例行项：`manifest_coverage`（新夹具未装行）与 `Emit manifest`；
+  `Tests (bas #1/#2)` 全过。
+- 前一次的 `45811863927` 是**真回归**：`test_overflow` 两架构 run timeout、`test_redim_elem`
+  两架构 output mismatch（`R17-boxw`），两条本刀都处理了。
+
+### 七、记账
+
+- 探针：`.temp/k195p/P226.bas`（写侧七格）、`P227.bas`（转换与溢出九格）、`P228/P229.bas`
+  （死循环三分最小化）。
+- 夹具：`tests/b203_typed_elem_write`。
+- 代码 `f26360ef`（写侧 + RaiseError + Currency 读）；死循环修复 `9ac937d1`（含 `R17-boxw` 改针）；
+  清单 `5e832fc1`；GA `45817293525` 23/23 全绿。
+- 教训：**「恢复点」这种机器，只有「连续两句都报错」才验得出它是不是真的在前进。**
+  §11.176 的六格全是「报错后下一句不报错」，恰好绕过了这一半。
