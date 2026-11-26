@@ -12173,3 +12173,112 @@ if ((v.vt & vb6_vtArray) && !v.parray) return NULL;   /* 真数组但未分配 �
 - 代码 `1dc75291`。
 - 教训：**「未分配」不是一种缺失，是一种状态** —— 它有自己的标签（声明档）、自己的错误号
   （9，而不是「不是数组」那个 13），而且这些都能在没有一个字节数据的情况下答出来。
+
+## §11.181 Date 元素档：数组与元素都答 Date，而不是 Double（第一百九十八刀）
+
+### 一、问题
+
+上一刀的 A7 留下一格偏差：`Dim q() As Date` 装进 Variant 之后 `VarType` 答 8197
+（Double()），而真机答 8199（Date()）。原因不在装箱口，而在**元素枚举里根本没有 Date 那一档**
+—— `vb6_safearray_elemtype` 只有 double，`mapSaElemType(Date)` 就把 Date 数组并进 double，
+于是「8 字节浮点」这个事实在标签这一层被抹掉了。
+
+同一个缺失还漏出另外三处：元素 `q(0)` 读出来答 VT_R8 / "Double"、`For Each` 循环变量答
+VT_R8、数组元素的文本输出走数值格式。它们都是同一句话的不同落点：**存储相同，标签不同**。
+
+### 二、真机读数（VB6Mini `/make`，`.temp/k198p/P234.bas`）
+
+```
+C1 unalloc  vt=8199 isarr=True tn=Date()        ub=9
+C2 alloc    vt=8199 tn=Date() lb=0 ub=2
+C3 elem     vt=7    tn=Date   dbl=43832.6278356481     （q(0) = #1/2/2020 3:04:05 PM#）
+C4 num      vt=7    tn=Date   dbl=45000.5              （q(1) = 45000.5）
+C5 box      vt=7    tn=Date   dbl=45000.5              （v = q(1)）
+C6 arr      vt=8199 tn=Date() isarr=True lb=0 ub=2
+C7 aftererase vt=8199 tn=Date() ub=2                   （装箱后再 Erase 源，槽不动）
+C8 src      vt=8199 tn=Date()                          （Erase 之后的源）
+C9 literal  vt=7    tn=Date   dbl=44259                （q(0) = #3/4/2021#）
+C10 each    vt=7    tn=Date                            （For Each）
+C11 scalar  vt=7    tn=Date   dbl=36525.9999884259
+C12 back    vt=7    tn=Date   dbl=38020.2125810185      （q(1) = v，v 是 VT_DATE）
+C13 pres    vt=8199 tn=Date() ub=3 dbl=39606            （ReDim Preserve 之后）
+C14 tovar   dbl=39606
+```
+
+一句话：**Date 在 Variant 里的标签是 VT_DATE(7)，数组是 8199，名字是 "Date"/"Date()"，
+而载体始终是那 8 个字节的日期序列号。**
+
+### 三、判据与改法
+
+1. **元素枚举补一档**（`vb6_safearray_elemtype` 加 `vb6_sa_date = 12`）。三张并排的表一起改，
+   这是 §B155/§B159 定的纪律：
+
+   | 表 | 位置 | Date 那一行 |
+   |---|---|---|
+   | 宽度 | `vb6_SaElemSize` | `sizeof(double)` |
+   | 正向档 | `vb6_SaVtFromElemType` | `vb6_vtDate`（7） |
+   | 反向档 | `vb6_SaElemTypeFromVt` | `case VT_DATE` |
+
+2. **发码侧把 Date 发成 Date 档**：`mapSaElemType(Date)` 从 `vb6_sa_double` 改成
+   `vb6_sa_date`。元素在 C 侧仍是 `double`（`mapSaElemCType` 不动）—— 这一刀只动标签。
+
+3. **槽 → Variant 的四个出口补 Date 臂**（元素读、CStr 文本、Find/Filter 命中判定、
+   晚绑定元素读）。它们原本落 `default`：前两者报 13、后两者答错档。真机对 Date 元素
+   一律按日期文本输出，所以这四个出口的第一个消费点就是 `CStr`。
+
+4. **元素的装箱要带标签**（`boxToVariant` 新钩子 `dateElemVariantBox`）：元素表达式在 C 侧
+   是 `VB6_SA_AT(double, q, i)`，`_Generic` 只能答 VT_R8。钩子按声明那张表
+   `arrayElemTypes_`（与第一百九十七刀同一份）认出「Date 数组的一枚元素」，改发
+   `vb6_VariantDate((double)(…))`。蒙在 `wrapVariantValue`/实参站两层之间，所以要有**幂等**
+   护栏（`vb6_VariantDate(` 前缀直接交回空串）—— 少了它就是
+   `vb6_VariantDate(vb6_VARIANT)` 的 C2440，这一刀真踩过。
+   `For Each` 的循环变量是另一站（`cgen_control.cpp`），同一个标签在那里也补上。
+
+5. **COM 那一侧不新开问法**：出站白名单把 Date 并进 double 那一格（同一句
+   `vb6_SaVtFromElemType(et)`），元素写用既有的 `vb6_CDate`（文本按日期解析）。
+   这样 `check_sa_access` 的 A17 两个计数一个字不动 —— 第一版给 Date 单开一行，
+   A17 立刻红（问档表 5 → 6 处）。
+
+### 四、为什么必须补枚举，而不是在装箱口特判
+
+装箱口只拿得到一枚 `void*`。数组**已分配**时问描述符就有答案（`elemType` 就是 Date——
+如果枚举里有这一档）；**未分配**时连描述符都没有，答案只在声明里。所以要么枚举里有一档
+（描述符与声明都能写它），要么每一处装箱都去猜——那就回到「同一类型两条路两种结果」。
+补枚举是一处改动、四条路径同时正确。
+
+### 五、读数与随刀改的针
+
+- 夹具 `tests/b206_date_elem_array`（D1–D13）x64/x86 逐行相同，且与真机 P234 逐行相同。
+- `test_redim_elem` 的 `R17-date` 针从 `8197 tn=Double()` 翻成 `8199 tn=Date()` ——
+  这一针以前钉的是**偏差**，翻的依据是真机 P234 的 C2/C13（同一形状：`Dim q() As Date`
+  + `ReDim q(1)` + `VarType`/`TypeName`）。
+- 回归：`b204`(8) / `b205`(11) / `b201`(6) / `b202`(20) / `b203`(33) 针全绿且读数未动。
+- 闸门：`check_sa_access` PASS（A17 的 `vt-flavor call 5` 与 `pack-of-ptr 2` 不变）、
+  `check_builtin_slot_returns` PASS、`check_com_variant_out_ref` PASS。
+- 刻意不跟的两格（探针都在 `.temp/k198p`，都记进背账，不假装对）：
+  1. **谓词实参那一站**：`VarType(q)` / `TypeName(q)` 遇到未分配或 `Erase` 之后的数组，
+     仍答 8204 / "Variant()"。真机 P236/P237 说得更清楚 —— 未分配**局部**答 8195、
+     未分配**模块级**答 8195、`Erase` 之后答 8195、Date 档答 8199，**全都不报错**
+     （`test_redim_elem` 里旧注释说 VB6 会抛「Array not even dimensioned」，那是 `UBound`
+     那一档的事，`VarType`/`TypeName` 不抛 —— 这条旧结论按 P237 更正）。
+     它与 Date 无关：**任何**元素档的数组在这一站都答 8204，所以另开一刀。
+  2. **String → Date 隐式转换**：`d = "2021-03-04"` 与 `q(0) = "2021-03-04"` 在 C3 都是
+     编译期 `VB3003: 无法将 String 隐式转换为 Date`（P235），真机两条路都答 44259 且
+     err=0。这是赋值站的转换缺口，不是标签问题。
+
+### 六、神谕与清单
+
+- 真机神谕：VB6Mini `/make P234.vbp`（读数见第二节）、`P236.bas`、`P237.bas`、`P235.bas`。
+- manifest 按 CI `45840526601` 的产物装行（`changed=3 added=2 removed=0`，1435 行）；夹具改成 Debug.Print 之后按 `45846822825` 再装 2 行。
+- 首次 GA：`45840526601`（1 红：清单未装 + b206 两处 output mismatch）、`45843161498`（2 红：都是 b206 output mismatch —— 夹具把读数写进文件而 harness 比 stdout）、`45846822825`（1 红：清单未装）。
+- 末次 GA：`45848365875` 23/23 全绿。
+
+### 七、记账
+
+- 探针：`.temp/k198p/P234.bas`（Date 数组十三格）、`P235.bas`（String→Date 两条路）、
+  `P236.bas`（Erase 之后三个谓词分着量）、`P237.bas`（未分配局部/模块级）。
+- 夹具：`tests/b206_date_elem_array`（`B206Main.bas` / `B206Res.vbp`），
+  注册在 `tests/run_tests.ps1`（x64 + x86）。
+- 代码 `77c8349c`。
+- 教训：**「同宽同布局」不等于「同类型」** —— 枚举里少一档，八字节的日期就会一路被当成
+  Double 说话；而修法不是给每个出口加一句特判，是把那一档补进那张唯一的表。
