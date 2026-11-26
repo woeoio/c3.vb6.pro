@@ -383,6 +383,26 @@
                 c_.emitLine(target + " = vb6_DateVal(" + value + ");");
                 return;
             }
+            // §11.188 (第二百零五刀): 同一条 Date 腿、右值是 **Variant** 那一档。
+            // 真机 `.temp/k205p/p245.txt` 六条读数: 装文本日期答 44259 (err=0)、装数字答 45000、
+            // 装 "abc" 抛 13 并保住旧值、装 Date 答 44259、装 Empty 答 0、装 Null 抛 94 并保住旧值。
+            // 改前一律 `vb6_VariantToDouble(v)`（它只认数值档）: 文本 "2021-03-04" 被当数字
+            // 剥前缀答 **2021**、"abc" 与 Null 静默答 0 且 Err=0 —— 三条都是**错读数而不报错**。
+            // `vb6_CDate(vb6_VARIANT)` 正是这一档的既有唯一出口 (BSTR→vb6_DateVal、Null→94、
+            // Empty→0、Date/数值→数值), 不新写转换、也不动 RTL。
+            // 只认**裸标识符且已登记为 Variant** 那一形: 其它表达式答 Variant 时其 C 文本未必真是
+            // vb6_VARIANT (例如返回 Variant 的调用是 vb6_ret_<Proc>), 在这里猜会新造 C2440。
+            bool valueIsVariant188 = false;
+            if (dateTarget183 && node.value
+                && node.value->kind == ASTNodeKind::IdentifierExpr) {
+                std::string vn188 = static_cast<const IdentifierExpr&>(*node.value).name;
+                std::transform(vn188.begin(), vn188.end(), vn188.begin(), ::tolower);
+                valueIsVariant188 = knownVariantVars_.count(vn188) != 0;
+            }
+            if (dateTarget183 && valueIsVariant188) {
+                c_.emitLine(target + " = vb6_CDate(" + value + ");");
+                return;
+            }
         }
         bool valueIsBareComResult = (value.compare(0, 12, "vb6_ComCall(") == 0
             || value.compare(0, 20, "vb6_ComCallByDispid(") == 0

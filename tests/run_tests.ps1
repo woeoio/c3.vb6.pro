@@ -13307,6 +13307,23 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "U8 vt=7 tn=Date")
     Test-Vbp 'b211_udt_date_elem' "$Tests\b211_udt_date_elem\B211Res.vbp" $b211Needles
     Test-Vbp 'b211_udt_date_elem_x86' "$Tests\b211_udt_date_elem\B211Res.vbp" $b211Needles -Arch "x86"
+    # §11.188 第二百零五刀: 右值是 **Variant** 的 Date 赋值站。
+    # 真机 .temp/k205p/p245.txt (VB6Mini /make) 九行: 装文本日期答 44259、装数字答 45000、
+    # 装 "abc" 抛 13 保住旧值 (45000)、装 Date 答 44259 且 vt=7、装 Empty 答 0、
+    # 装 Null 抛 94 保住旧值。改前一律 vb6_VariantToDouble: 文本被当数字答 2021，
+    # "abc" 与 Null 静默答 0 且 Err=0 —— 错读数而不报错。
+    $b212Needles = @(
+    "V1 d=44259 err=0",
+    "V2 d=44259 err=0",
+    "V3 d=45000 err=0",
+    "V4 d=45000 err=0",
+    "V5 d=45000 err=13",
+    "V6 d=45000 err=13",
+    "V7 d=44259 err=0 vt=7",
+    "V8 d=0 err=0",
+    "V9 d=45000 err=94")
+    Test-Vbp 'b212_variant_to_date' "$Tests\b212_variant_to_date\B212Res.vbp" $b212Needles
+    Test-Vbp 'b212_variant_to_date_x86' "$Tests\b212_variant_to_date\B212Res.vbp" $b212Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

@@ -35,6 +35,8 @@
 #   R13 §11.184: b209 夹具两台在跑。
 #   R14 §11.187: 赋值站那条腿认得 UDT 成员数组 (问 inferUdtFieldVb6Type, 且带 isArray 条件)。
 #   R15 §11.187: b211 夹具两台在跑。
+#   R16 §11.188: Variant 右值那一档走 vb6_CDate (vb6_VariantToDouble 不许留在赋值站)。
+#   R17 §11.188: b212 夹具两台在跑。
 # ============================================================
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -148,6 +150,17 @@ if ($r14arr -ne 1) { $fail += ('R14 member leg still asks isArray = ' + $r14arr 
 # R15: b211 夹具两台在跑。
 $r15cells = N '\$Tests\\b211_udt_date_elem\\B211Res\.vbp' $T
 if ($r15cells -ne 2) { $fail += ('R15 b211 run cells = ' + $r15cells + ' (want 2 = x64 + x86)') }
+# R16 (§11.188 第二百零五刀): Variant 右值那一档走 vb6_CDate —— 旧形 vb6_VariantToDouble
+# 对文本日期/"abc"/Null 三条都是错读数 (真机 p245 的 V1/V5/V9)。
+# 只看两件事: 那一腿存在, 且它的出口就是 vb6_CDate。其余站的 vb6_VariantToDouble 是合法的
+# (数值目标的 Variant 解包), 不在这里一刀切。
+$r16gate = N 'if \(dateTarget183 && valueIsVariant188\) \{' $A
+$r16out = N 'emitLine\(target \+ " = vb6_CDate' $A
+if ($r16gate -ne 1) { $fail += ('R16 Variant leg gate = ' + $r16gate + ' (want 1)') }
+if ($r16out -ne 1) { $fail += ('R16 Variant leg CDate outlet = ' + $r16out + ' (want 1)') }
+# R17: b212 夹具两台在跑。
+$r17cells = N '\$Tests\\b212_variant_to_date\\B212Res\.vbp' $T
+if ($r17cells -ne 2) { $fail += ('R17 b212 run cells = ' + $r17cells + ' (want 2 = x64 + x86)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -155,5 +168,5 @@ if ($fail.Count -gt 0) {
 }
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
-    ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells)
+    ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells)
 exit 0
