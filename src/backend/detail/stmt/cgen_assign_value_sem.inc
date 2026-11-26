@@ -341,8 +341,25 @@
                 tgtDt = tgtDt.substr(2, tgtDt.size() - 3);
             }
             std::transform(tgtDt.begin(), tgtDt.end(), tgtDt.begin(), ::tolower);
-            if (knownDateVars_.count(tgtDt)
-                && inferExprType(*node.value) == Vb6Type::String) {
+            bool dateTarget183 = knownDateVars_.count(tgtDt) != 0;
+            // §11.183 (第二百刀): 数组元素形 —— `q(0) = "2021-03-04"` 的左值是
+            // `VB6_SA_AT(double, q, 0)`, 而名字表 knownDateVars_ 里只有裸名/字段,
+            // 于是整条 Date 腿不 firing ⇒ 裸 BSTR 赋给 double ⇒ cl C2440 (无 exe)。
+            // 按声明那张表 arrayElemTypes_ (与 §11.180/§11.181 同一份) 认出「Date
+            // 数组的一枚元素」。只认一维单下标: 多维阶位不在这一问里猜 (认不出就落
+            // 原路, 不新造 C2440)。
+            if (!dateTarget183 && node.target
+                && node.target->kind == ASTNodeKind::IndexOrCallExpr) {
+                const auto& ic183 = static_cast<const IndexOrCallExpr&>(*node.target);
+                if (ic183.callee && ic183.callee->kind == ASTNodeKind::IdentifierExpr
+                    && ic183.positional.size() == 1) {
+                    auto it183 = arrayElemTypes_.find(Symbol::toLower(
+                        static_cast<const IdentifierExpr&>(*ic183.callee).name));
+                    if (it183 != arrayElemTypes_.end() && it183->second == Vb6Type::Date)
+                        dateTarget183 = true;
+                }
+            }
+            if (dateTarget183 && inferExprType(*node.value) == Vb6Type::String) {
                 c_.emitLine(target + " = vb6_DateVal(" + value + ");");
                 return;
             }

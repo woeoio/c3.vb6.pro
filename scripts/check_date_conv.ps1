@@ -34,6 +34,9 @@ $C = Get-Content -Raw (Join-Path $root 'src\rtl\core\vb6rtl\vb6rtl_conv.c')
 $H = Get-Content -Raw (Join-Path $root 'src\rtl\core\vb6rtl\vb6rtl_builtin.h')
 $G = Get-Content -Raw (Join-Path $root 'src\backend\detail\expr\cgen_expr_ident_builtin_table.inc')
 $T = Get-Content -Raw (Join-Path $root 'tests\run_tests.ps1')
+# §11.183 (第二百刀): 赋值站的 String→Date 隐含转换 —— 矩阵那一半与发码那一半各一份形状。
+$S = Get-Content -Raw (Join-Path $root 'src\semantics\type_system.cpp')
+$A = Get-Content -Raw (Join-Path $root 'src\backend\detail\stmt\cgen_assign_value_sem.inc')
 # 整棵 RTL 树的日期解析站点计数 (R2 的面): 递归读每个 .c/.h, 只数 VarDateFromStr
 $rtlFiles = Get-ChildItem -Path (Join-Path $root 'src\rtl') -Recurse -Include *.c,*.h -File
 $r2sites = 0
@@ -92,6 +95,23 @@ $r7cells = N 'b417_date_conv' $T
 $r7sent = N 'check_date_conv\.ps1' $T
 if ($r7cells -ne 2) { $fail += ('R7 b417 run cells = ' + $r7cells + ' (want 2 = x64 + x86)') }
 if ($r7sent -ne 1) { $fail += ('R7 this sentinel is not registered in run_tests.ps1 = ' + $r7sent + ' (want 1)') }
+
+# R8 (§11.183 第二百刀): 隐式转换矩阵里 String→Date 与 数值→Date 各恰好一行。
+# 旧形只有 Date↔Double 那两行 ⇒ 三条 String→Date 形态全报假 VB3003 (真机 P241 八行)。
+$r8str = N 'if \(from == Vb6Type::String && to == Vb6Type::Date\) return true;' $S
+$r8num = N 'if \(isNumeric\(from\) && to == Vb6Type::Date\) return true;' $S
+if ($r8str -ne 1) { $fail += ('R8 matrix String->Date row = ' + $r8str + ' (want 1)') }
+if ($r8num -ne 1) { $fail += ('R8 matrix numeric->Date row = ' + $r8num + ' (want 1)') }
+# R9: 发码侧那条数组元素腿 —— 只能有一枚判据名、一处声明档问句、一处出口。
+$r9decl = N 'bool dateTarget183 = knownDateVars_\.count\(tgtDt\) != 0;' $A
+$r9leg = N 'it183->second == Vb6Type::Date' $A
+$r9emit = N 'if \(dateTarget183 && inferExprType\(\*node\.value\) == Vb6Type::String\) \{' $A
+if ($r9decl -ne 1) { $fail += ('R9 dateTarget183 declaration = ' + $r9decl + ' (want 1)') }
+if ($r9leg -ne 1) { $fail += ('R9 arrayElemTypes_ Date leg = ' + $r9leg + ' (want 1)') }
+if ($r9emit -ne 1) { $fail += ('R9 Date emit outlet = ' + $r9emit + ' (want 1)') }
+# R10: 夹具两台在跑，且台账里登记。
+$r10cells = N '\$Tests\\b208_string_to_date\\B208Res\.vbp' $T
+if ($r10cells -ne 2) { $fail += ('R10 b208 run cells = ' + $r10cells + ' (want 2 = x64 + x86)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }

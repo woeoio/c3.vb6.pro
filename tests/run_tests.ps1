@@ -13214,6 +13214,21 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "N5 vt=8195 tn=Long() isa=True err=0")
     Test-Vbp 'b207_pred_array_tag' "$Tests\b207_pred_array_tag\B207Res.vbp" $b207Needles
     Test-Vbp 'b207_pred_array_tag_x86' "$Tests\b207_pred_array_tag\B207Res.vbp" $b207Needles -Arch "x86"
+    # §11.183 第二百刀: String→Date 的隐式转换 (赋值站)。
+    # 真机 `.temp/k200p/p241.txt` (VB6Mini /make) 八行逐字：字面量 / 数组元素 / String 变量 /
+    # 元素取变量 / CDate 五条都答 44259 err=0；非法文本两条保住旧值 45000 并抛 13。
+    # 修前数组元素那一形发裸 BSTR 进 double 槽 (cl C2440, 无 exe)，三种形态还各报一条假 VB3003。
+    $b208Needles = @(
+    "S1 d=44259 err=0",
+    "S2 d=44259 err=0",
+    "S3 d=44259 err=0",
+    "S4 d=44259 err=0",
+    "S5 d=44259 err=0",
+    "S6 d=45000 err=13",
+    "S7 d=45000 err=13",
+    "S8 vt=7 tn=Date")
+    Test-Vbp 'b208_string_to_date' "$Tests\b208_string_to_date\B208Res.vbp" $b208Needles
+    Test-Vbp 'b208_string_to_date_x86' "$Tests\b208_string_to_date\B208Res.vbp" $b208Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

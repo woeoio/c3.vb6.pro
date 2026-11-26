@@ -249,6 +249,18 @@ bool TypeSystem::canImplicitConvert(Vb6Type from, Vb6Type to) {
     if (from == Vb6Type::Date && to == Vb6Type::Double) return true;
     if (from == Vb6Type::Double && to == Vb6Type::Date) return true;
 
+    // §11.183 (第二百刀): String→Date 也是 VB6 的隐式转换 (CDate 档)。
+    // 真机 P235/P240: `d = "2021-03-04"` / `q(0) = "2021-03-04"` / `d = s`
+    // 三条路都答 44259 且 Err=0 (非法文本才是运行期 13)。发码侧早就按
+    // vb6_DateVal 折算 (cgen_assign_value_sem.inc), 这张表只是没登记 ⇒ 每条都
+    // 报一条假 VB3003。登记在此 = 诊断与发码同源, 不是放宽阈值。
+    if (from == Vb6Type::String && to == Vb6Type::Date) return true;
+    // 同一刀: 数值→Date / Date→数值 在 VB6 里也是隐式转换 (Date 的底层就是 Double)。
+    // 真机 P241 的 `d = 45000` / `q(0) = 45000` 两条都答 45000 err=0; 以前只登记了
+    // Double 那一档 ⇒ Integer/Long/Currency 目标照样报假 VB3003。
+    if (isNumeric(from) && to == Vb6Type::Date) return true;
+    if (from == Vb6Type::Date && isNumeric(to)) return true;
+
     // Object→任何引用类型
     if (from == Vb6Type::Object) return true;
 
