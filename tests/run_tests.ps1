@@ -13214,6 +13214,33 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "N5 vt=8195 tn=Long() isa=True err=0")
     Test-Vbp 'b207_pred_array_tag' "$Tests\b207_pred_array_tag\B207Res.vbp" $b207Needles
     Test-Vbp 'b207_pred_array_tag_x86' "$Tests\b207_pred_array_tag\B207Res.vbp" $b207Needles -Arch "x86"
+    # §11.183 第二百刀: **多维数组的 UBound/LBound** —— 载体与维号同一套错误口径。
+    # 真机 .temp/k200p/p239.txt（VB6Mini /make）：未分配 / Erase 之后的多维数组、维号越界
+    # （3 / 0 / -1）、以及 1D 上的 dim≠1 一律抛 9。改前 C3 这 19 行全部 err=0。
+    # 顺带修掉一处发码错配：同一过程里出现过 UBound(b,2) 时，scanNDArraysInExpr 按名字
+    # 把同名的 1D 数组也发成 ND 版；改后 ND 入口先认 1D 描述符（按自己的秩答）。
+    $b208Needles = @(
+    "N1 ub err=9",
+    "N1 lb err=9",
+    "N1 ub2 err=9",
+    "N2 ub1=2 err=0",
+    "N2 lb1=1 err=0",
+    "N2 ub2=3 err=0",
+    "N2 lb2=1 err=0",
+    "N2 ub0d=2 err=0",
+    "N3 ub3 err=9",
+    "N3 lb3 err=9",
+    "N3 ub0 err=9",
+    "N3 ubm1 err=9",
+    "N4 ub err=9",
+    "N4 lb err=9",
+    "N4 ub2 err=9",
+    "N5 ub=4 err=0",
+    "N5 ub2 err=9",
+    "N5 lb2 err=9",
+    "N5 ub0 err=9")
+    Test-Vbp 'b208_nd_bounds' "$Tests\b208_nd_bounds\B208Res.vbp" $b208Needles
+    Test-Vbp 'b208_nd_bounds_x86' "$Tests\b208_nd_bounds\B208Res.vbp" $b208Needles -Arch "x86"
     # §11.183 第二百刀: String→Date 的隐式转换 (赋值站)。
     # 真机 `.temp/k200p/p241.txt` (VB6Mini /make) 八行逐字：字面量 / 数组元素 / String 变量 /
     # 元素取变量 / CDate 五条都答 44259 err=0；非法文本两条保住旧值 45000 并抛 13。

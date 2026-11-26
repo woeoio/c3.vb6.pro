@@ -563,6 +563,16 @@ void vb6_SafeArrayPutElem(vb6_SafeArray1D* arr, int32_t index, void* value) {
     }
 }
 
+// 账 §11.183（第二百刀）: UBound/LBound 的**维号**与载体同一套口径 —— 真机 P239 读数:
+//   未分配 / `Erase` 之后、维号 <1、维号 > 维数, 一律 9 "Subscript out of range";
+//   1D 数组上 dim≠1 同样 9。改前 ND 那两枚对 NULL 与越界维号**直接返 0**,
+//   1D 那两枚**无视** dimension (`UBound(b,2)` 交回 uBound)。
+// 一处出口: 四处守卫共用（与冷路径 vb6_SaElemFail 同一句文案）。
+static void vb6_ArrDimFail(void) {
+    vb6_ErrRaise(9, vb6_BSTR_FromStr(L"VBA.Information"),
+                 vb6_BSTR_FromStr(L"Subscript out of range"));
+}
+
 int32_t vb6_UBound(vb6_SafeArray1D* safeArray, int32_t dimension) {
     // Fix <vbeclipse> rev4 (2026-09-30): 数组状态追踪, 由 C3_SA_TRACE=1 门控。
     // 崩溃现场 `[edx+ecx*4]` 里 edx(=arr->data)是 NULL 而 uBound>=0 —— 只有把
@@ -601,6 +611,7 @@ int32_t vb6_UBound(vb6_SafeArray1D* safeArray, int32_t dimension) {
     // ND 描述符首 WORD 是 dimCount (2..16)、offset 2 恒 0 —— 两者不会混。
     if (vb6_SaIs1D(safeArray)) {
         // Confirmed 1D array
+        if (dimension != 1) { vb6_ArrDimFail(); return -1; }   /* §11.183: P239 N5 ub2/lb2/ub0 = 9 */
         return safeArray->uBound;
     }
     // Not a 1D array - try ND path
@@ -628,6 +639,7 @@ int32_t vb6_LBound(vb6_SafeArray1D* safeArray, int32_t dimension) {
     }
     // 1D 描述符判定: 与 vb6_UBound 同一口径 (见 vb6rtl_array.h)。
     if (vb6_SaIs1D(safeArray)) {
+        if (dimension != 1) { vb6_ArrDimFail(); return -1; }   /* §11.183: 与 UBound 同 */
         return safeArray->lBound;
     }
     if (dimension > 1) {
@@ -1063,12 +1075,27 @@ vb6_SafeArrayND* vb6_SafeArrayReDimPreserveND_Udt(int32_t elemSize,
 }
 
 int32_t vb6_UBoundND(vb6_SafeArrayND* arr, int32_t dimension) {
-    if (!arr || dimension < 1 || dimension > arr->dimCount) return 0;
+    /* 账 §11.183（第二百刀）: 真机 P239 —— 未分配 / Erase 之后的多维数组 UBound/LBound 是 9,
+       不是 0；维号 <1 或 > 维数 也是 9（N1/N3/N4）。LBN。 */
+    if (!arr) { vb6_ArrDimFail(); return -1; }
+    /* 1D 描述符误入 ND 入口: 发码侧 scanNDArraysInExpr 按**名字**预扫整段过程，
+       同一过程里出现过 `UBound(b,2)` 就连 `UBound(b)` 也发 ND 版（P239 N5 的实物）。
+       这里按它自己的秩答: dim 必须 1，否则与真机同样 9。 */
+    if (vb6_SaIs1D((const void*)arr)) {
+        if (dimension != 1) { vb6_ArrDimFail(); return -1; }
+        return ((const vb6_SafeArray1D*)(const void*)arr)->uBound;
+    }
+    if (dimension < 1 || dimension > arr->dimCount) { vb6_ArrDimFail(); return -1; }
     return arr->bounds[dimension - 1].lBound + arr->bounds[dimension - 1].cElements - 1;
 }
 
 int32_t vb6_LBoundND(vb6_SafeArrayND* arr, int32_t dimension) {
-    if (!arr || dimension < 1 || dimension > arr->dimCount) return 0;
+    if (!arr) { vb6_ArrDimFail(); return -1; }              /* §11.183: 同 UBoundND */
+    if (vb6_SaIs1D((const void*)arr)) {
+        if (dimension != 1) { vb6_ArrDimFail(); return -1; }
+        return ((const vb6_SafeArray1D*)(const void*)arr)->lBound;
+    }
+    if (dimension < 1 || dimension > arr->dimCount) { vb6_ArrDimFail(); return -1; }
     return arr->bounds[dimension - 1].lBound;
 }
 
