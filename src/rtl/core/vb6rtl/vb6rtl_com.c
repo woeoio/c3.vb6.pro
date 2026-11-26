@@ -1598,8 +1598,12 @@ static vb6_VARIANT vb6_VariantElemFromSlotData(void* data, int32_t off, vb6_safe
             result.lVal = (int32_t)(intptr_t)((void**)data)[off];
             break;
         case vb6_sa_currency:
-            result.vt = vb6_vtLong;
-            result.lVal = (int32_t)((int64_t*)data)[off]; /* truncate to Long */
+            /* §11.178 (第一百九十五刀): 元素读回真 Currency 档。改前这里把
+               `值×10000` 的 int64 **截断成 Long** ⇒ `r(0)` 对 Currency() 数组答
+               12346（真机 1.2346, .temp/k195p/P227.bas 的 X4）。写侧本刀要盯回读，
+               所以这一格必须同刀补齐，否则夹具只能整格不钉。 */
+            result.vt = vb6_vtCurrency;
+            result.cyVal = ((int64_t*)data)[off];
             break;
         default:
             result.vt = vb6_vtEmpty;
@@ -1713,8 +1717,45 @@ void vb6_VariantArraySet(vb6_VARIANT* v, int32_t index, vb6_VARIANT val) {
            Clear + **浅拷贝** —— val 若是从别处借来的 Variant (ByRef 实参/数组元素),
            槽就与它共用同一只 BSTR, 宿主一 Clear 槽即悬垂。改走"接管"语义。 */
         vb6_VariantAssign(slot, val);
+        return;
     }
-    /* 对于非Variant数组, 赋值时需要按目标类型转换(简化: 仅Variant数组支持赋值) */
+    /* §11.178 (第一百九十五刀): **有类型**数组元素的写侧。改前这一支整段不存在 ——
+       `r(0) = 99` 对 Variant 里的 Long() 数组什么都没发生 (静默丢弃)。
+       真机读数 (.temp/k195p/P226.bas / P227.bas) 是「按元素档转换后写进去」:
+         Long()   ← 99 / "42" / 1.9(→2)        err 0    源数组不受影响 (槽里是副本)
+         String() ← 77(→"77") / "new"          err 0    ← Null 是 94
+         Boolean()← 2(→True)                    err 0
+         Double() ← 3                           err 0
+         Currency()← 1.23456 (→1.2346)          err 0
+         Byte()   ← 300  ⇒ err 6, 元素不变；Integer() ← 40000 ⇒ err 6
+         Long()   ← Null ⇒ 94 / ← "abc" ⇒ 13，两种都不写目标
+       转换与溢出判定全部复用 CLng/CInt/CByte/CBool/CDbl/CSng/CCur 那一族 (`*V` 内联):
+       Null→94、Empty→0、四舍五入、越界 6 都是它们已有的口径，本刀不写第二遍。
+       转换先于存储 ⇒ 报错时目标元素自然不动（与真机 X1/X3/X5/X7/X8 同形）。 */
+    switch (arr->elemType) {
+        case vb6_sa_long:   ((int32_t*)arr->data)[off] = vb6_CLngV(val); break;
+        case vb6_sa_int:    ((int16_t*)arr->data)[off] = vb6_CIntV(val); break;
+        case vb6_sa_byte:   ((uint8_t*)arr->data)[off] = vb6_CByteV(val); break;
+        case vb6_sa_bool:   ((int16_t*)arr->data)[off] = vb6_CBoolV(val); break;
+        case vb6_sa_double: ((double*)arr->data)[off] = vb6_CDblV(val); break;
+        case vb6_sa_single: ((float*)arr->data)[off] = (float)vb6_CSngV(val); break;
+        case vb6_sa_currency:
+            ((int64_t*)arr->data)[off] = vb6_CurrencyScale(vb6_CCurV(val));
+            break;
+        case vb6_sa_bstr: {
+            /* Null ⇒ 94（真机 X7：元素保持原值、不写空串）—— 走严格站 vb6_CStrStrict，
+               不用宽松的 vb6_CStr（后者是 `&` / Debug.Print 那一路的口径）。 */
+            BSTR nb = vb6_CStrStrict(val);
+            BSTR* p = &((BSTR*)arr->data)[off];
+            BSTR old = *p;
+            *p = nb;
+            if (old) SysFreeString(old);
+            break;
+        }
+        default:
+            /* ptr / udt 两档不在本刀量过的范围内，保持原样不动（见 §11.178 第五节）。 */
+            break;
+    }
 }
 
 // ============================================================

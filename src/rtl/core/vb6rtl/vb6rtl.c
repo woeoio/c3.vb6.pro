@@ -1072,14 +1072,18 @@ void vb6_RaiseError(int32_t errNum, BSTR description) {
     ++vb6_err_serial;
     vb6_err.number = errNum;
     vb6_err.description = description;
-    if (vb6_err_resume_next) {
-        // On Error Resume Next: 忽略错误, 继续执行
-        return;
-    }
+    // 第一百九十五刀 (§11.178): 与 vb6_ErrRaise 同口径 —— **有帧就先 longjmp**。
+    //   以前这里先问 resume_next、答 yes 就就地 return，于是溢出这种走本函数报的错误
+    //   （vb6_OvfChk ⇒ RaiseError(6)）在 Resume Next 下只改 Err、语句照样完成：
+    //   真机 `r(0) = 300`（r 是 Byte() 数组）是 err 6 且**元素不动**，C3 把 44 写了进去
+    //   （.temp/k195p/P227.bas 的 X1/X3）。语句级中止的判据是帧，不是 resume 标志。
     if (vb6_err_jmp_active && vb6_error_jmp_set && vb6_error_jmp_ptr) {
-        // On Error GoTo label: longjmp 跳到 setjmp 点
         vb6_err_in_handler = 1;  // P14.1.2: 标记进入错误处理器
         longjmp(*vb6_error_jmp_ptr, errNum);
+    }
+    if (vb6_err_resume_next) {
+        // On Error Resume Next: 忽略错误, 继续执行 (无帧可跳卜时才会走到这里)
+        return;
     }
     // 未设置错误处理: 只要有**可写的 std 句柄** (控制台 / 管道 / 文件) 就写 stderr, 只有句柄都不可用
     // (从资源管理器双击起的 GUI 程序) 才弹 VB6 风格对话框。

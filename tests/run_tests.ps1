@@ -13084,6 +13084,47 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "V19 hits=1-err=13")
     Test-Vbp 'b202_variant_subscript' "$Tests\b202_variant_subscript\B202Res.vbp" $b202Needles
     Test-Vbp 'b202_variant_subscript_x86' "$Tests\b202_variant_subscript\B202Res.vbp" $b202Needles -Arch "x86"
+    # §11.178 第一百九十五刀: Variant 里**有类型**数组元素的写侧（改前整段静默丢弃）。
+    # 按元素档转换: Long←99 / "42" / 1.9→2；String←77→"77" / "new"；Boolean←2→True；
+    # Double←3；Currency←1.23456→1.2346；Byte←300 ⇒ 6 且元素不动；Integer←40000 ⇒ 6；
+    # Long←Null ⇒ 94；String←Null ⇒ 94；Long←"abc" ⇒ 13；越界仍 9。
+    # 真机: .temp/k195p/p226.txt / p227.txt。不钉「源数组变不变」（本仓这条装箱仍共用）。
+    $b203Needles = @(
+    "T1 long_set99-err=0",
+    "T1 long_after=99-err=0",
+    "T2 variant_set99-err=0",
+    "T2 variant_after=99-err=0",
+    "T3 str_set77-err=0",
+    "T3 str_after=77-err=0",
+    "T4 str_setnew-err=0",
+    "T4 str_after=new-err=0",
+    "T5 bool_set2-err=0",
+    "T5 bool_after=True-err=0",
+    "T6 dbl_set3-err=0",
+    "T6 dbl_after=3-err=0",
+    "T7 long_setnumstr-err=0",
+    "T7 long_after=42-err=0",
+    "T8 long_round-err=0",
+    "T8 long_after=2-err=0",
+    "T9 oob-err=9",
+    "T10 byte300-err=6",
+    "T10 byte_after=1-err=0",
+    "T11 byte200-err=0",
+    "T11 byte_after=200-err=0",
+    "T12 int40000-err=6",
+    "T12 int_after=1-err=0",
+    "T13 cy-err=0",
+    "T13 cy_after=1.2346-err=0",
+    "T14 long_null-err=94",
+    "T14 long_after=5-err=0",
+    "T15 long_empty-err=0",
+    "T15 long_after=0-err=0",
+    "T16 str_null-err=94",
+    "T16 str_after=z-err=0",
+    "T17 long_abc-err=13",
+    "T17 long_after=12-err=0")
+    Test-Vbp 'b203_typed_elem_write' "$Tests\b203_typed_elem_write\B203Res.vbp" $b203Needles
+    Test-Vbp 'b203_typed_elem_write_x86' "$Tests\b203_typed_elem_write\B203Res.vbp" $b203Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

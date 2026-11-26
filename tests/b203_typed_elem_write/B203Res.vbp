@@ -1,0 +1,4 @@
+Type=Exe
+Module=B203Main; B203Main.bas
+Startup="Sub Main"
+ExeName32="B203Res.exe"
