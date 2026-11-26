@@ -235,6 +235,11 @@ vb6_VARIANT vb6_VariantArrayCopy(void* _arr);
 /* 账 §11.180 (第一百九十七刀): 带元素档的装箱口 —— 描述符不在 (ReDim 之前的动态数组 /
    Erase 之后) 时按**声明**那一档写标签。参差与上面那一枚同住 vb6rtl_array.c。 */
 vb6_VARIANT vb6_VariantArrayTyped(void* _arr, int32_t elemEnum);
+/* 账 §11.182 (第一百九十九刀): 同一形, 但**不深拷** —— 描述符在时按借用 (vb6_VariantArray,
+   与上一枚之前每一站的旧行为一字相同), 不在时按声明那一档写标签。给九枚**只读谓词**的
+   实参站 (VarType/TypeName/IsArray/…) 用: 那些形参是按值 vb6_VARIANT, 谁也不会 Clear,
+   深拷出来的副本会漏 (同一理由见 vb6_VariantBorrowFromValue 那段话)。 */
+vb6_VARIANT vb6_VariantArrayBorrowTyped(void* _arr, int32_t elemEnum);
 static inline vb6_VARIANT vb6_VariantArray(void* _arr) {
     vb6_VARIANT v; memset(&v, 0, sizeof(v));
     v.vt = (vb6_vartype)vb6_SaVtOfArrayPtr(_arr); v.parray = (struct vb6_SafeArray1D*)_arr; return v;

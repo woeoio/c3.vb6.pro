@@ -632,8 +632,10 @@ $a18Txt = Strip-LineCmt ([System.IO.File]::ReadAllText((Join-Path $beDir 'detail
 $a18ComTxt = Strip-LineCmt ([System.IO.File]::ReadAllText((Join-Path $beDir 'cgen_util_com.cpp')))
 $a18Decl = @([regex]::Matches($beAll, '(?m)const bool\s+arrArg92y\s*=')).Count
 $a18All  = @([regex]::Matches($beAll, 'arrArg92y')).Count
-# 第五十刀: 那一问本身搬进了唯一出口 isArrayCarrierArgName —— 判据改成「定义 1 / 声明 1 / 两个消费者」,
+# 第五十刀: 那一问本身搬进了唯一出口 isArrayCarrierArgName —— 判据改成「定义 1 / 声明 1 / 四个消费者」,
 #   而「这张表在哪儿被问」(knownArrays_.count(lowerName)) 仍然恰好 1 处, 就住在那条出口里。
+# 第一百九十九刀 (§11.182): 第五位消费者 = 装箱站 boxToVariant 的裸数组名那一臂 (谓词实参站),
+#   同一枚出口、同一张 knownArrays_, 不新开一问 —— 所以预期数从 4 变成 5。
 $a18Known = @([regex]::Matches($beAll, 'knownArrays_\s*\.\s*count\s*\(\s*lowerName')).Count
 $a18AuthDef = @([regex]::Matches($beAll, '(?m)^bool CCodeGen::isArrayCarrierArgName\s*\(')).Count
 $a18AuthAll = @([regex]::Matches($beAll, 'isArrayCarrierArgName\s*\(')).Count
@@ -656,7 +658,7 @@ if ($a18All - $a18Decl -ne 1) {
 }
 if ($a18Known -ne 1) { $bad += ("A18 出口里问数组表 knownArrays_ 的地方 = " + $a18Known + " 处 (恰好 1，且必须住在 isArrayCarrierArgName 里；0 = 判据换成了别的表，2 = 又抄了一份)") }
 if ($a18AuthDef -ne 1) { $bad += ("A18 那条唯一出口的定义 = " + $a18AuthDef + " (恰好 1)") }
-if ($a18AuthAll - $a18AuthDef - $a18AuthDecl -ne 4) { $bad += ("A18 问那条出口的地方 = " + ($a18AuthAll - $a18AuthDef - $a18AuthDecl) + " 处 (恰好 4：ByRef Variant 实参 + COM 实参打包 + 第二百三十九刀的 comByRefArgExpr（数组载体不许取址）；少一处 = 有一个消费者又开始自己答)") }
+if ($a18AuthAll - $a18AuthDef - $a18AuthDecl -ne 5) { $bad += ("A18 问那条出口的地方 = " + ($a18AuthAll - $a18AuthDef - $a18AuthDecl) + " 处 (恰好 5：ByRef Variant 实参 + COM 实参打包 + 第二百三十九刀的 comByRefArgExpr（数组载体不许取址）+ 赋值站 wrapVariantValue + 第一百九十九刀的谓词实参站 boxToVariant；少一处 = 有一个消费者又开始自己答)") }
 if ($a18ComQ -lt 0 -or $a18ComV -lt 0) { $bad += "A18 COM 打包那一格的锚点找不到（数组那一问或 knownVariantVars_ 那条链被改形了）" }
 if ($a18AsnQ -lt 0 -or $a18AsnT -lt 0) {
     $bad += ("A18 赋值站（wrapVariantValue）那两行锚点找不到 (asn=" + $a18AsnQ + " tbl=" + $a18AsnT + ") —— 第五十一刀那一问或那张类型表被改形了")

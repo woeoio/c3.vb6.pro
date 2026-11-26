@@ -385,6 +385,19 @@ vb6_VARIANT vb6_VariantArrayCopy(void* _arr) {
    的装箱口 vb6_VariantArray 拿标签, 再把 parray 清掉 —— 栈上的东西不往外递。 */
 vb6_VARIANT vb6_VariantArrayTyped(void* _arr, int32_t elemEnum) {
     if (_arr) return vb6_VariantArrayCopy(_arr);
+    return vb6_VariantArrayBorrowTyped(NULL, elemEnum);
+}
+
+/* 账 §11.182 (第一百九十九刀): 上面那枚的**借用兄弟** —— 描述符在时不做深拷 (只按描述符标签), 不在时
+   走同一段「空白描述符拿标签」的路。为什么需要它: 九枚只读谓词的实参是按值 `vb6_VARIANT`, 谁也不会
+   VariantClear 那个临时量 (§11.106 第一百二十四刀: 对象档因此漏引用), 于是深拷出来的副本会漏。
+   真机 P238 (局部/模块级 × Long/Date/String/Byte/Variant/一维/多维):
+     未分配 / Erase 之后一律答 8192|元素码 + "<元素>()" + IsArray=True, **Err 恒 0**,
+     UBound 才是 9 —— 与 §11.180 给 `v = q` 的那一档同一张表。
+   ⚠ 标签仍不自己查表、不新增问 vb6_SaVtOfArrayPtr 的地方 (A17 钉死): 非 NULL 交既有
+   vb6_VariantArray, NULL 交栈上空白描述符那一段 (与父函数共用一个落点)。 */
+vb6_VARIANT vb6_VariantArrayBorrowTyped(void* _arr, int32_t elemEnum) {
+    if (_arr) return vb6_VariantArray(_arr);
     vb6_SafeArray1D blank;
     memset(&blank, 0, sizeof(blank));
     vb6_Sa1DInit(&blank);                      /* cDims=1 + 我们的标记 */

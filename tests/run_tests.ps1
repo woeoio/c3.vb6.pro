@@ -13181,6 +13181,36 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "D13 tovar dbl=39606")
     Test-Vbp 'b206_date_elem_array' "$Tests\b206_date_elem_array\B206Res.vbp" $b206Needles
     Test-Vbp 'b206_date_elem_array_x86' "$Tests\b206_date_elem_array\B206Res.vbp" $b206Needles -Arch "x86"
+    # §11.182 第一百九十九刀: **谓词实参站**的数组标签。
+    # 九枚只读谓词 (VarType/TypeName/IsArray/…) 的实参站以前对裸数组名落 _Generic 的 C 指针
+    # 一档, 未分配/Erase 之后一律答 8204/"Variant()"; 模块级 Date 数组更糟 —— 发
+    # vb6_VariantDate(md) (C2440, 编不过)。改法是装箱站接一枚「带档但不深拷」的借用口。
+    # 真机 .temp/k199p/p238.txt (局部/模块级 × Long/Date/String/Byte/Variant, 一维)
+    # 与 p238b.txt (多维) 同批读数, 逐行相同。
+    # 刻意不钉: Erase 之后**多维**的 UBound/LBound (C3 答 0/err=0, 真机抛 9 —— 不经装箱站)。
+    $b207Needles = @(
+    "L1 vt=8195 tn=Long() isa=True err=0",
+    "L2 vt=8199 tn=Date() isa=True err=0",
+    "L3 vt=8200 tn=String() isa=True err=0",
+    "L4 vt=8209 tn=Byte() isa=True err=0",
+    "L5 vt=8204 tn=Variant() isa=True err=0",
+    "M1 vt=8195 tn=Long() isa=True err=0",
+    "M2 vt=8199 tn=Date() isa=True err=0",
+    "M3 vt=8200 tn=String() isa=True err=0",
+    "M4 vt=8195 tn=Long() isa=True err=0",
+    "M5 vt=8204 tn=Variant() isa=True err=0",
+    "E1 vt=8195 tn=Long() isa=True err=0",
+    "E1 ub err=9",
+    "E2 vt=8195 tn=Long() isa=True err=0",
+    "A1 vt=8195 tn=Long() isa=True err=0",
+    "A1 ub=1 err=0",
+    "N1 vt=8195 tn=Long() isa=True err=0",
+    "N2 vt=8199 tn=Date() isa=True err=0",
+    "N3 vt=8200 tn=String() isa=True err=0",
+    "N4 vt=8195 tn=Long() isa=True err=0",
+    "N5 vt=8195 tn=Long() isa=True err=0")
+    Test-Vbp 'b207_pred_array_tag' "$Tests\b207_pred_array_tag\B207Res.vbp" $b207Needles
+    Test-Vbp 'b207_pred_array_tag_x86' "$Tests\b207_pred_array_tag\B207Res.vbp" $b207Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

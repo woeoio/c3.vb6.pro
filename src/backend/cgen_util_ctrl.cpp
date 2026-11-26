@@ -4788,6 +4788,34 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
     // tests/dict_native d121 的 int=3, 真值 2)。判据与口径见 isNarrowIntExpr 那段话。
     if (isNarrowIntExpr(expr))
         return "vb6_VariantInt((int16_t)(" + cExpr + "))";
+    // 账 §11.182 (第一百九十九刀): **裸数组名进装箱站** —— 谓词实参站。
+    // 九枚只读谓词 (VarType/TypeName/IsArray/…) 的实参以前落 default → _Generic 按 **C 指针**
+    // 猜: 未分配 (载体 NULL) 的动态数组因此答 8204 / "Variant()" (真机 P238: 8195/"Long()"、
+    // 8199/"Date()"、8200/"String()"、8209/"Byte()"、多维同一档); 模块级 Date 数组更糟 ——
+    // 下面 Date 那一臂对它发 vb6_VariantDate(md) = 把描述符指针塞进 double 形参 (cl C2440, 编不过)。
+    // 判据与 §B163 / §11.180 同一份名字表 (isArrayCarrierArgName) + 同一份声明元素档
+    // (arrayElemTypes_); 只多一条: 出口用**借用**那一枚 (§11.182 的 vb6_VariantArrayBorrowTyped)
+    // —— 谓词形参是按值 VARIANT、没人 Clear 那个临时量, 深拷副本会漏 (§11.106 同一理由)。
+    // ⚠ 与 §B163 的秩护栅不同: 借用不碰所有权, 多维也安全 (真机 P238B 的 N1..N5: ReDim 之前 /
+    //   Erase 之后的 `Long()` 多维同样 8195), 所以这里**不**按 arrayDimCounts_ 限秩。
+    // ⚠ 卫兵: 已包过的文本 (vb6_ 前缀) 一律不接 —— 本臂接的是**裸**实参文本, 再包一层就成了
+    //   (void*)(vb6_VARIANT)。
+    if (expr->kind == ASTNodeKind::IdentifierExpr) {
+        const std::string lower199 = Symbol::toLower(
+            static_cast<const IdentifierExpr&>(*expr).name);
+        if (cExpr.rfind("vb6_", 0) != 0 && isArrayCarrierArgName(lower199, cExpr)) {
+            Vb6Type e199 = Vb6Type::Variant;
+            auto it199 = arrayElemTypes_.find(lower199);
+            if (it199 != arrayElemTypes_.end()) e199 = it199->second;
+            if (e199 == Vb6Type::Variant) {
+                e199 = static_cast<Vb6Type>(
+                    static_cast<uint16_t>(inferExprType(*expr))
+                    & ~static_cast<uint16_t>(Vb6Type::Array));
+            }
+            return "vb6_VariantArrayBorrowTyped((void*)(" + cExpr + "), "
+                   + mapSaElemType(e199) + ")";
+        }
+    }
     switch (inferExprType(*expr)) {
     case Vb6Type::Boolean:
         // 形参是 int16_t: 显式收窄, 兼容 _Bool/int 两种 C 侧布尔表示.
