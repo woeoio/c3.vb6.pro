@@ -12670,3 +12670,83 @@ static void vb6_ArrDimFail(void) {
 - 教训：**「返回值 0」和「抛 9」在发码层面长得一样**（都是 int32），所以静默的分支只有在真机上
   才现形；而「1D 也可能被发成 ND」说明运行期入口不能假定进来的真是 ND —— 入口多认一档描述符，
   比在发码侧猜秩便宜，也比事后修一个错读数便宜。
+
+---
+
+## §11.187 Date 元素住在 UDT 里：赋值站的 callee 分两档问声明（第二百零四刀）
+
+### 一、问题
+
+§11.184 末尾记的背账：UDT 成员数组的 Date 元素（`u.dt(0) = "2021-03-04"`）。它与数组变量的
+那一形只差一件事 —— **callee 不是裸标识符**：左值发成 `VB6_SA_AT(double, u.dt, 0)`，而
+§11.183/§11.184 那条 Date 腿只接 `IdentifierExpr`，于是整腿不 firing ⇒ 裸 BSTR 进 double 槽 ⇒
+cl **C2440**。真机探针 `P244` 六处赋值全部在此（`.temp/k204p/c3before/c3-error.log`），**无 exe**。
+
+一个反直觉的读数：**装箱站（§11.181）早就是对的** —— 修前同一份程序的 U7/U8 就发
+`vb6_VariantDate(...)`，因为 `boxToVariant` 的 Date 档走 `inferExprType`，而它早就会顺着
+`inferUdtFieldVb6Type` 认出成员数组的元素档。缺的只是赋值站那半。
+
+### 二、真机读数（VB6Mini `/make`，`.temp/k204p`）
+
+`P244.bas`（八格：1D 字面量 / 1D 取 String 变量 / 2D 字面量 / 2D 取变量 / 两条非法文本 /
+两条 `VarType`+`TypeName`）：
+
+```
+U1 d=44259 err=0   U2 d=44259 err=0   U3 d=44687 err=0   U4 d=44259 err=0
+U5 d=45000 err=13  U6 d=0 err=13      U7 vt=7 tn=Date    U8 vt=7 tn=Date
+```
+
+与「普通数组变量」那一组（§11.183/§11.184）逐档一致：成员这一层**不改变任何语义**。
+
+### 三、判据与改法
+
+只改赋值站的一处：callee 分两档问声明，其余条件（至少一个下标、RHS 是 String）不变。
+
+- 裸名（`q(0)`）→ `arrayElemTypes_`（§11.183 原路，不动）。
+- 成员/With（`u.dt(0)`、`.dt(0)`）→ `inferUdtFieldVb6Type(callee, &isArr)`：元素档是 `Date`
+  **且** `isArr` 为真才命中。同一个字段名也可能是标量 `Date`（那种形本来就有 `knownDateVars_`
+  那条腿），所以「是不是数组本体」必须一起问。
+
+命中后仍是同一条出口：`target = vb6_DateVal(value);` —— 秩由 `emitExpr` 决定发 `VB6_SA_AT`
+还是 `VB6_SA_ND_AT2`，与本腿无关（同 §11.184）。
+
+### 四、为什么这样改
+
+- **不新开表**：`inferUdtFieldVb6Type` 是「表达式 → UDT 字段类型」的既有唯一出口
+  （§11.157 的 Boolean 元素、§11.164 的 Currency 元素都问它）。赋值站接上去就同源。
+- **为什么带上 `isArray`**：`inferUdtFieldVb6Type` 的 `mi.type` 存的是**元素**档（见它的头注释），
+  所以「字段是 Date」这句话对标量字段同样成立；少了 `isArray` 就等于把 `u.dt = "..."`
+  （整只数组赋串，非法）也当成元素赋值放过。
+- **为什么不顺手接类实例成员数组**（`obj.arr(i)`，`arr` 是类模块的动态数组）：那一侧的元素档走
+  `resolveMemberArrayDecl`（§56.40），与 UDT 不是同一张表；今天没把它接进这条腿，留债。
+
+### 五、读数与随刀改的针
+
+- 新夹具 `tests/b211_udt_date_elem`（`B211Main.bas`：U1–U8 八行，与真机 P244 逐字相同），
+  x64 与 x86 **逐行相同**；修前基线 = `.temp/k204p/c3before`（C2440 ×6、无 exe）。
+- 改坏即红：把成员那一支的判据整句抹成 `if (false)`，`check_date_conv.ps1` 当场报
+  `R14 UDT-member Date element leg = 0` / `R14 member leg still asks isArray = 0`，还原后 PASS。
+- 闸门（本机全 PASS）：`check_date_conv`（新增 R14/R15）、`check_manifest_coverage` K1..K3
+  （inputs=916 [.vbp=356 .bas=560] / registered=916）、`check_static_sentinel_registration`（149 道）、
+  `check_sa_access`。
+- 形状清单：只新增本夹具 **2 行**，存量行未动（本刀只改「原先编不过」的那一形 ——
+  语料里没有别的 UDT Date 成员数组，`tests` 全树按 `(...)` + `As Date` 只命中本夹具与 b209）。
+
+### 六、神谕与清单
+
+- 真机神谕：`.temp/k204p/P244.bas` / `p244.txt`（八行）。
+- 修前取证：`.temp/k204p/c3before`（C2440 ×6 + 发码原文）。
+- 门：run `45888903479`（`dev`、head `d0ba20ed`）**23/23 全绿**。
+- 刻意不跟的格（背账）：类实例成员数组 `obj.arr(i)`（元素档在 `resolveMemberArrayDecl` 那一侧）；
+  With 块（`.dt(0) = ...`）与 UDT 成员同一问句已覆盖，但**未单列真机读数**。
+
+### 七、记账
+
+- 探针：`.temp/k204p/P244.bas`（八格）、`c3before`（修前 C2440 ×6）、`rows211.ps1`（清单两行复算）。
+- 夹具：`tests/b211_udt_date_elem`（`B211Main.bas` / `B211Res.vbp`），注册在
+  `tests/run_tests.ps1`（x64 + x86）。
+- 代码：`d0ba20ed`（callee 两档 + 夹具 + 哨兵 R14/R15 + 清单两行）。
+- **号**：本节 = 第二百零四刀 / §11.187；同时段的 §11.186（纯时间形日期字面量）是另一条线的刀。
+- 教训：**「同一个语义，换了个 callee 形状」是最容易漏的一类** —— 上一刀的判据按「裸名 + 下标」写，
+  成员数组就整类挡在外面，而它在 C 侧与普通数组**长得一模一样**（都是 `VB6_SA_AT(double, …)`）；
+  发码站要问的是「这格声明是什么」，而不是「callee 长什么样」。
