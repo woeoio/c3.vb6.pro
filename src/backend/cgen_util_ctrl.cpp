@@ -4436,7 +4436,26 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
     // 于是 vb6_VariantLong(载体指针) → C 侧只是警告, 指针被截断成 int32, 运行期才炸。
     if (valueNode->kind == ASTNodeKind::IndexOrCallExpr
         && isWholeArrayRef(static_cast<const Expr*>(valueNode))) {
-        return "vb6_VariantArray((void*)" + cExpr + ")";
+        // 账 §11.180 (第一百九十七刀): 落带元素档的装箱口 —— 未分配/已 Erase 的数组
+        // 装进 Variant 时真机仍答声明的元素档 (P233: `Long()` 是 8195，不是 8204)。
+        // 元素档问**声明那张表** arrayElemTypes_（声明站与 ReDim 站共用的唯一一份）；
+        // 查不到再回落 inferExprType 掩掉 Array 位那一档，认不出的档回落 vb6_sa_variant
+        // = 8204，即改前的答案。
+        Vb6Type e197w = Vb6Type::Variant;
+        if (valueNode->kind == ASTNodeKind::IndexOrCallExpr) {
+            const auto& ic197 = static_cast<const IndexOrCallExpr&>(*valueNode);
+            if (ic197.callee && ic197.callee->kind == ASTNodeKind::IdentifierExpr) {
+                const std::string nm197 = Symbol::toLower(
+                    static_cast<const IdentifierExpr&>(*ic197.callee).name);
+                auto it197 = arrayElemTypes_.find(nm197);
+                if (it197 != arrayElemTypes_.end()) e197w = it197->second;
+            }
+        }
+        if (e197w == Vb6Type::Variant) {
+            e197w = static_cast<Vb6Type>(static_cast<uint16_t>(inferExprType(static_cast<Expr&>(*valueNode)))
+                                         & ~static_cast<uint16_t>(Vb6Type::Array));
+        }
+        return "vb6_VariantArrayTyped((void*)" + cExpr + ", " + mapSaElemType(e197w) + ")";
     }
     
     // 账 #305 §B163 (第五十一刀): **裸数组名当右值**（`Dim v As Variant: v = mL`，无括号那一形）。
@@ -4458,8 +4477,17 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
         std::string lowerB163 = Symbol::toLower(idB163.name);
         if (isArrayCarrierArgName(lowerB163, cExpr)) {
             auto itB163 = arrayDimCounts_.find(lowerB163);
-            if (itB163 != arrayDimCounts_.end() && itB163->second <= 1)
-                return "vb6_VariantFromValue(" + cExpr + ")";
+            if (itB163 != arrayDimCounts_.end() && itB163->second <= 1) {
+                // 账 §11.180 (第一百九十七刀): 同上 —— 裸数组名装箱带元素档。
+                Vb6Type e197n = Vb6Type::Variant;
+                auto it197 = arrayElemTypes_.find(lowerB163);
+                if (it197 != arrayElemTypes_.end()) e197n = it197->second;
+                if (e197n == Vb6Type::Variant) {
+                    e197n = static_cast<Vb6Type>(static_cast<uint16_t>(inferExprType(static_cast<Expr&>(*valueNode)))
+                                                 & ~static_cast<uint16_t>(Vb6Type::Array));
+                }
+                return "vb6_VariantArrayTyped((void*)" + cExpr + ", " + mapSaElemType(e197n) + ")";
+            }
         }
     }
 

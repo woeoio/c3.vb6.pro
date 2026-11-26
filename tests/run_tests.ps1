@@ -13140,6 +13140,26 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "T8 isarr=True vt=8195 lb=0 ub=2")
     Test-Vbp 'b204_variant_array_copy' "$Tests\b204_variant_array_copy\B204Res.vbp" $b204Needles
     Test-Vbp 'b204_variant_array_copy_x86' "$Tests\b204_variant_array_copy\B204Res.vbp" $b204Needles -Arch "x86"
+    # §11.180 第一百九十七刀: **未分配**数组（`Dim x()` 未 ReDim / Erase 之后）装进 Variant。
+    # 真机 .temp/k197p/p233.txt: 标签按**声明**那一档（Long 8195 / String 8200 / Double 8197 /
+    # Currency 8198 / Boolean 8203 / Byte 8209 / Variant 8204 / Object 8201），UBound/LBound 抛 9；
+    # Erase 之后同形；装箱后 ReDim 源，槽的标签与界不变。
+    # 刻意不钉: Date()（真机 8199/"Date()"，本仓 8197/"Double()"，§B159）与 Object() 的 UBound
+    # （真机 -1 且不报错，本仓 9）。
+    $b205Needles = @(
+    "T1 long vt=8195 isarr=True tn=Long() ub=9 lb=9",
+    "T2 str vt=8200 tn=String() ub=9",
+    "T3 dbl vt=8197 tn=Double() ub=9",
+    "T4 cur vt=8198 tn=Currency() ub=9",
+    "T5 bool vt=8203 tn=Boolean() ub=9",
+    "T6 byte vt=8209 tn=Byte() ub=9",
+    "T7 variant vt=8204 tn=Variant() ub=9",
+    "T8 object vt=8201 tn=Object()",
+    "T9 erased vt=8195 tn=Long() ub=9",
+    "T10 srcredim vt=8195 isarr=True ub=9",
+    "T11 overwrite vt=2 val=5")
+    Test-Vbp 'b205_unalloc_array_box' "$Tests\b205_unalloc_array_box\B205Res.vbp" $b205Needles
+    Test-Vbp 'b205_unalloc_array_box_x86' "$Tests\b205_unalloc_array_box\B205Res.vbp" $b205Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

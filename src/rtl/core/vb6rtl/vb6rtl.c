@@ -526,6 +526,11 @@ struct vb6_SafeArray1D* vb6_VariantToSafeArray1D(vb6_VARIANT v) {
 //   只在 UBound/LBound 的变体实参站用: 不是数组 (含 Null / Empty / 标量) ⇒ 抛 13。
 //   注意**真数组但未分配**不走这里: 那条路首参是数组本体, 不进变体站, 仍旧 9 (口径未动)。
 struct vb6_SafeArray1D* vb6_VariantToSafeArray1DStrict(vb6_VARIANT v) {
+    /* 账 §11.180 (第一百九十七刀): vt 说「数组」而载体 NULL = **真数组但未分配**
+       （装箱口 vb6_VariantArrayTyped 给的就是这一形，P233 A1..A8）。真机对它报 **9**
+       而不是 13（`UBound(Empty)` 那一族才是 13，见上一段）。所以交回 NULL，让
+       vb6_UBound/LBound 自己走 `!safeArray` 那一支抛 9。 */
+    if ((v.vt & vb6_vtArray) && !v.parray) return NULL;
     if ((v.vt & vb6_vtArray) && v.parray) {
         return v.parray;
     }

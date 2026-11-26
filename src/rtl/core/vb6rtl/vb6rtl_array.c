@@ -369,6 +369,31 @@ vb6_VARIANT vb6_VariantArrayCopy(void* _arr) {
     return vb6_VariantArray(_arr);
 }
 
+/* 账 §11.180 (第一百九十七刀): **带类型的装箱口**。参差只在**描述符不在**那一支:
+   `Dim dl() As Long` 在 ReDim 之前载体是 NULL, 而真机 (P233) 装进 Variant 后照样答
+   `VarType=8195 / IsArray=True / TypeName="Long()"` —— 元素档是**声明**给的, 不是描述符给的。
+   此时只写标签 (vt = VT_ARRAY | 元素码), parray 仍 NULL:
+     · UBound/LBound 走既有的 `!safeArray` 那一支 ⇒ 抛 9 (真机 A1..A8 全部 /9);
+     · VariantArrayGet/Set 的「未分配 ⇒ 9」同理 (§11.177);
+     · 不造空描述符: 造了反而得再回答「谁 free 它」「UBound 为什么回 -1 而不报错」。
+   有描述符时走 vb6_VariantArrayCopy (深拷副本, §11.179), 此时不看 elemEnum —— 标签问描述符自己。
+   ⚠ 标签**不自己查元素档那张表**, 也不新增问 vb6_SaVtOfArrayPtr 的地方 (check_sa_access 的
+   A17 把这两枚的调用点数量都钉死了): 先搭一枚只有类型、没有数据的**栈上**描述符, 交给既有
+   的装箱口 vb6_VariantArray 拿标签, 再把 parray 清掉 —— 栈上的东西不往外递。 */
+vb6_VARIANT vb6_VariantArrayTyped(void* _arr, int32_t elemEnum) {
+    if (_arr) return vb6_VariantArrayCopy(_arr);
+    vb6_SafeArray1D blank;
+    memset(&blank, 0, sizeof(blank));
+    vb6_Sa1DInit(&blank);                      /* cDims=1 + 我们的标记 */
+    blank.elemType = elemEnum;
+    blank.elemSize = vb6_SaElemSize((vb6_safearray_elemtype)elemEnum);
+    blank.lBound = 0;
+    blank.uBound = -1;                          /* 未分配: count 0、data NULL */
+    vb6_VARIANT v = vb6_VariantArray(&blank);
+    v.parray = NULL;                            /* 那个描述符在栈上, 不能拿出去 */
+    return v;
+}
+
 // 账 #305 §B218 (甲) 腿⑤ 数组档 (第一百四十刀): 见 vb6rtl_array.h 的注释。
 // 逐元素放手时先把槽清空: 被放手那枚的 Class_Terminate 若回头写这一格
 // (`Set holder.mKids(i) = Nothing`), 清过的槽不会被退第二遍。

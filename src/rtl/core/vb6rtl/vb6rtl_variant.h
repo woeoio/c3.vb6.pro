@@ -232,6 +232,9 @@ int32_t vb6_SaVtOfArrayPtr(const void* arr);
 /* 账 §11.179 (第一百九十六刀): 装箱口。1D → 深拷一份副本 (带 OWNED 标记, 随 Variant 销毁);
    ND / 真 SAFEARRAY → 照旧借用。声明在本文件、定义在 vb6rtl_array.c, 与上面那枚同一个理由。 */
 vb6_VARIANT vb6_VariantArrayCopy(void* _arr);
+/* 账 §11.180 (第一百九十七刀): 带元素档的装箱口 —— 描述符不在 (ReDim 之前的动态数组 /
+   Erase 之后) 时按**声明**那一档写标签。参差与上面那一枚同住 vb6rtl_array.c。 */
+vb6_VARIANT vb6_VariantArrayTyped(void* _arr, int32_t elemEnum);
 static inline vb6_VARIANT vb6_VariantArray(void* _arr) {
     vb6_VARIANT v; memset(&v, 0, sizeof(v));
     v.vt = (vb6_vartype)vb6_SaVtOfArrayPtr(_arr); v.parray = (struct vb6_SafeArray1D*)_arr; return v;
