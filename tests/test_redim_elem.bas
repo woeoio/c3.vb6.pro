@@ -262,9 +262,11 @@ Public Sub Main()
     v(0) = 99
     Debug.Print "R17-boxw="; CStr(v(0))
 
-    ' R17-undim: never dimensioned (descriptor is NULL) - vb6_SaVtOfArrayPtr refuses
-    ' to guess and hands back the pre-knife answer. VB6 raises "Array not even
-    ' dimensioned" here; that difference is booked in B159, not fixed by this knife.
+    ' R17-undim: never dimensioned (descriptor is NULL). 账 §11.182 read this
+    ' straight off the real machine: VarType/TypeName do NOT raise here - VB6
+    ' answers the DECLARED element tag (8200 / "String()", .temp/k199p/p238.txt
+    ' L3). It is UBound/LBound that raises 9, and that is a separate station
+    ' (B159 booked the old belief that VarType itself raised - it did not).
     Debug.Print "R17-undim-vt="; VarType(q0n); " tn="; TypeName(q0n)
 
     Debug.Print "RE-DONE"

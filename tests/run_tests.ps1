@@ -6469,15 +6469,18 @@ if ($Category -in @("all", "run", "bas")) {
         "R16-keep=a11/a12/a13", "R16-keep2=b21/b22/b23", "R16-new=| ub2=6",
         # 第四十六刀（§B155 格①②）把上面三枚 *-label-* 从 8204/"Variant" 翻成声明那一档
         # （读数 .build/k46run_both.txt，两台 42 行逐行相同）。R17 一族是新针：一张表每一档
-        # 都要有人读，没人读的那一档下次改表时没人拦。R17-date 交 8197/"Double()"（枚举里
-        # 压根没有 Date 档）、R17-udt 与 R17-undim 回落 8204/"Variant()" —— 这三格刻意不
-        # 假装对，记在 §B159。R17-boxed 是「标签与描述符必须同一张表」的那枚证人。
+        # 都要有人读，没人读的那一档下次改表时没人拦。R17-date 交 8199/"Date()"（§11.181
+        # 第一百九十八刀 补了 vb6_sa_date 那一档）、R17-udt 回落 8204/"Variant()" —— 这一格
+        # 刻意不假装对，记在 §B159。R17-boxed 是「标签与描述符必须同一张表」的那枚证人。
+        # R17-undim（§11.182 第一百九十九刀）：未分配的 String 数组以前走谓词实参站，答
+        # 8204/"Variant()"；现在按声明档答 8200/"String()"（真机 P238 的 L3 与 P237 的 L1/L2，
+        # 两架构逐行相同）。
         "R17-bool-vt=8203 tn=Boolean()", "R17-byte-vt=8209 tn=Byte()",
         "R17-int-vt=8194 tn=Integer()", "R17-long-vt=8195 tn=Long()",
         "R17-sing-vt=8196 tn=Single()", "R17-dbl-vt=8197 tn=Double()",
         "R17-cur-vt=8198 tn=Currency()", "R17-date-vt=8199 tn=Date()",
         "R17-obj-vt=8201 tn=Object()", "R17-udt-vt=8204 tn=Variant()",
-        "R17-boxed-vt=8195 tn=Long() cell=4242", "R17-boxw=99", "R17-undim-vt=8204 tn=Variant()",
+        "R17-boxed-vt=8195 tn=Long() cell=4242", "R17-boxw=99", "R17-undim-vt=8200 tn=String()",
         "RE-DONE")
     Add-BasTest "test_redim_elem" "$Tests\test_redim_elem.bas" $reNeedles
     Add-BasTest "test_redim_elem_x86" "$Tests\test_redim_elem.bas" $reNeedles -Arch "x86"
