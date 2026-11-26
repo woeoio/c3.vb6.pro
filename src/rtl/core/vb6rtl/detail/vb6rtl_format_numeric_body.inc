@@ -48,14 +48,16 @@
             swprintf(numBuf, 128, L"%s%s", mantStr, expStr);
         } else {
             // Fixed-point notation
-            // Round to decimalPlaces
-            double roundedVal = scaleVal;
+            // §11.171: 真机 `Format` 格式串的进位与 FormatNumber 同口径 —— **十进制**半值远离零。
+            // 旧写法 `round(scaleVal * factor) / factor` 是在 double 上进位（二进制），于是
+            //   Format(1.005, "0.00") = 1.00（真机 1.01）、Format(9.995, "0.00") = 9.99（真机 10.00）、
+            //   Format(0.4999999999999999, "0") = 0（真机 1，15 位十进制文本已是 0.5）。
+            // 反证：Format(1.0049999, "0.00") 必须仍是 1.00 —— 所以不能拿二进制完整展开进位。
             if (decimalPlaces >= 0) {
-                double factor = pow(10.0, (double)decimalPlaces);
-                roundedVal = round(scaleVal * factor) / factor;
+                vb6_fmtFixedText(scaleVal, decimalPlaces, numBuf, 128);
+            } else {
+                swprintf(numBuf, 128, L"%.*f", decimalPlaces, scaleVal);
             }
-
-            swprintf(numBuf, 128, L"%.*f", decimalPlaces, roundedVal);
         }
 
         // Now reformat according to 0/# placeholders

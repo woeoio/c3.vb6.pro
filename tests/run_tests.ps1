@@ -12870,6 +12870,18 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "B195-DONE")
     Test-Vbp 'b195_format_round_decimal' "$Tests\b195_format_round_decimal\B195Res.vbp" $b195Needles
     Test-Vbp 'b195_format_round_decimal_x86' "$Tests\b195_format_round_decimal\B195Res.vbp" $b195Needles -Arch "x86"
+
+    # 账 #305 §11.171 (第一百八十八刀): `Format` 数值格式串的定点进位 —— 与三家 FormatNumber 同一条十进制口径。
+    # 改前 4 格错：F1/F2/F6 是二进制进位在下半值一侧，F9 是「15 位十进制先归再判半」；
+    # F8/F10 是反向证人（不得被十进制进位误伤），F11 是「改前撞对」的那一格，
+    # F14/F18 钉 `#` 占位符与百分比区不能因换成型链而变形。
+    $b196Needles = @(
+    "F1=[1.01]", "F2=[10.00]", "F3=[1]", "F4=[3]", "F5=[2]", "F6=[-1.01]", "F7=[-1]",
+    "F8=[1.00]", "F9=[1]", "F10=[0.1]", "F11=[2.68]", "F12=[1234.57]", "F13=[1.001]",
+    "F14=[.5]", "F15=[2.5]", "F16=[0.001]", "F17=[1000.00]", "F18=[50%]",
+    "B196-DONE")
+    Test-Vbp 'b196_format_string_round' "$Tests\b196_format_string_round\B196Res.vbp" $b196Needles
+    Test-Vbp 'b196_format_string_round_x86' "$Tests\b196_format_string_round\B196Res.vbp" $b196Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

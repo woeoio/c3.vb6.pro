@@ -338,6 +338,43 @@ if (Test-Path -LiteralPath $runSrcFmt) {
     }
 }
 
+# ---- R17: `Format` 数值格式串的定点进位也走同一条十进制链 (§11.171) ----
+# 判据 (真机 P212 18 格): 定点分支不得回到 `round(scaleVal * factor) / factor` 或裸 `%.*f`,
+# 必须调 §11.170 的 vb6_fmtFixedText; 且该函数是**跨编译单元**的权威, 必须在 vb6rtl_builtin.h 里声明。
+$fmtBody = Join-Path $Root 'src/rtl/core/vb6rtl/detail/vb6rtl_format_numeric_body.inc'
+if (-not (Test-Path -LiteralPath $fmtBody)) { $viol += 'R17 找不到 vb6rtl_format_numeric_body.inc' }
+else {
+    $fbTxt = Get-Content -LiteralPath $fmtBody -Raw -Encoding UTF8
+    if ($fbTxt -notmatch '§11\.171') { $viol += 'R17 定点进位没有登记 (§11.171 段标缺)' }
+    # 反向判据只能看**代码**: 段内的注释本身就会写到旧写法 round(scaleVal*factor)，
+    # 不剥行注释会把自己钉死 (§B145 同一条课)。
+    $fbCode = [regex]::Replace($fbTxt, '(?m)//.*$', ' ')
+    if ($fbCode -notmatch 'vb6_fmtFixedText\s*\(\s*scaleVal') { $viol += 'R17 定点分支没走 vb6_fmtFixedText' }
+    if ($fbCode -match 'round\s*\(\s*scaleVal\s*\*\s*factor') { $viol += 'R17 定点分支又回到 double 进位 round(scaleVal*factor)' }
+    if ($fbCode -match 'roundedVal\s*=\s*round') { $viol += 'R17 旧 roundedVal 路径又回来' }
+}
+$biHdr = Join-Path $Root 'src/rtl/core/vb6rtl/vb6rtl_builtin.h'
+if (-not (Test-Path -LiteralPath $biHdr)) { $viol += 'R17 找不到 vb6rtl_builtin.h' }
+else {
+    $bhTxt = Get-Content -LiteralPath $biHdr -Raw -Encoding UTF8
+    if ($bhTxt -notmatch 'void\s+vb6_fmtFixedText\s*\(') { $viol += 'R17 定型出口没在 vb6rtl_builtin.h 里声明' }
+}
+if ($cmpSrc -and ($cmpSrc -match 'static\s+void\s+vb6_fmtFixedText')) {
+    $viol += 'R17 vb6_fmtFixedText 又改回 static (Format 那边就调不到)'
+}
+if (Test-Path -LiteralPath $runSrcFmt) {
+    $fsCells = ([regex]::Matches($runTxt, "Test-Vbp 'b196_format_string_round")).Count
+    if ($fsCells -ne 2) { $viol += ('R17 b196 夹具格数 = ' + $fsCells + ', 要 2 (x64 + x86)') }
+    $fsMain = Join-Path $Root 'tests/b196_format_string_round/B196Main.bas'
+    if (-not (Test-Path -LiteralPath $fsMain)) { $viol += 'R17 夹具 B196Main.bas 不在' }
+    else {
+        $fsTxt = Get-Content -LiteralPath $fsMain -Raw -Encoding UTF8
+        foreach ($w in @('F1', 'F8', 'F9', 'F11')) {
+            if ($fsTxt -notmatch ('"' + $w + '"')) { $viol += ('R17 夹具缺证人 ' + $w) }
+        }
+    }
+}
+
 Write-Host ('census: table=' + $tableNames.Count + ' rtlSlot=' + $rtlSlot.Keys.Count +
             ' rtlPtr=' + $rtlPtr.Keys.Count + ' rtlMacro=' + $rtlMacro.Keys.Count +
             ' emittedNames=' + $emitted.Keys.Count +
@@ -349,6 +386,6 @@ if ($viol.Count -gt 0) {
     Write-Host ('FAIL builtin_slot_returns: ' + $viol.Count + ' 条违规 —— 修法是把表与 RTL 对账 (补名/撤名), 不是往白名单里加名字; 真要走例外请连带写清理由并重跑 §B146 那把 400 份 A/B')
     exit 1
 }
-Write-Host 'PASS builtin_slot_returns (R1..R16)'
+Write-Host 'PASS builtin_slot_returns (R1..R17)'
 exit 0
 

@@ -787,7 +787,8 @@ static void vb6_fmtRoundDecimalText(wchar_t* s, int digits) {
 }
 
 // 定型到 digits 位小数; 十万以上 / 超 15 位有效数字那一档回 %.*f (与真机同形)。
-static void vb6_fmtFixedText(double v, int digits, wchar_t* out, int cap) {
+// §11.171: 非 static —— `Format` 数值格式串的定点进位也走这一枚 (同一个十进制口径)。
+void vb6_fmtFixedText(double v, int digits, wchar_t* out, int cap) {
     wchar_t t[128];
     swprintf(t, 128, L"%.15g", v);
     int sci = 0;

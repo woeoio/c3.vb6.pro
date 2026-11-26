@@ -647,6 +647,9 @@ BSTR   vb6_MonthName(int32_t month, int32_t abbreviate);
 BSTR   vb6_FormatCurrency(double value, int32_t numDigits, int32_t incLeading, int32_t useParens, int32_t groupDigits);
 BSTR   vb6_FormatNumber(double value, int32_t numDigits, int32_t incLeading, int32_t useParens, int32_t groupDigits);
 BSTR   vb6_FormatPercent(double value, int32_t numDigits, int32_t incLeading, int32_t useParens, int32_t groupDigits);
+// 账 #305 §11.170/§11.171: 三家 Format*Number/Percent/Currency 与 `Format` 的数值格式串**共用**这一枚
+// 十进制定型出口 (15 位有效数字的十进制文本 → 半值远离零进位)。不得再散回 `%.*f` / `round()`。
+void   vb6_fmtFixedText(double v, int digits, wchar_t* out, int cap);
 
 // P18-E: 兼容性填平 — 金融函数+文件锁定+Partition
 double vb6_SLN(double cost, double salvage, double life);
