@@ -12282,3 +12282,116 @@ C14 tovar   dbl=39606
 - 代码 `77c8349c`。
 - 教训：**「同宽同布局」不等于「同类型」** —— 枚举里少一档，八字节的日期就会一路被当成
   Double 说话；而修法不是给每个出口加一句特判，是把那一档补进那张唯一的表。
+
+---
+
+## §11.182 谓词实参站：未分配 / Erase 之后的数组按声明档答标签（第一百九十九刀）
+
+### 一、问题
+
+九枚只读谓词（`TypeName`/`VarType`/`IsObject`/`IsNull`/`IsEmpty`/`IsArray`/`IsDate`/
+`IsError`/`IsNumeric`）的实参站对**裸数组名**没有数组臂。那一站最后落到 `boxToVariant` 的
+分档表，而分档表对数组答的是**元素档**：
+
+- 局部数组在 `inferExprType` 里答不出具体档 ⇒ `default` ⇒ `vb6_VariantFromValue(载体指针)`
+  ⇒ `_Generic` 的 `vb6_SafeArray1D*` 那一档（`vb6_VariantArray`，标签问描述符）。
+  **已分配**的数组因此一直是对的；但未分配（ReDim 之前）或 `Erase` 之后载体是 NULL，
+  `vb6_SaVtOfArrayPtr(NULL)` 走兜底答 `vtArray|vtVariant` = **8204 / "Variant()"**。
+- 模块级 Date 数组更糟：`inferExprType` 答 Date ⇒ `case Vb6Type::Date` ⇒ 发
+  `vb6_VariantDate(md)`，把描述符指针塞进 `double` 形参，cl **C2440，编不过**。
+
+§11.181 第五节把它记成背账（真机 P236/P237 已经量到，但那一刀不开口）。
+
+### 二、真机读数（VB6Mini `/make`，`.temp/k199p`）
+
+`P238.bas`（局部 / 模块级 × Long/Date/String/Byte/Variant，一维）：
+
+```
+L1 vt=8195 tn=Long()    isa=True err=0      L2 vt=8199 tn=Date()   isa=True err=0
+L3 vt=8200 tn=String()  isa=True err=0      L4 vt=8209 tn=Byte()   isa=True err=0
+L5 vt=8204 tn=Variant() isa=True err=0      M1..M5 与 L1..L5 逐字相同
+E1 vt=8195 tn=Long() isa=True err=0         E1 ub err=9        （Erase 之后）
+E2 vt=8195 tn=Long() isa=True err=0         （把 Erase 过的数组装进 Variant）
+A1 vt=8195 tn=Long() isa=True err=0         A1 ub=1            （已分配，对照）
+```
+
+`P238B.bas`（真多维动态数组）：`N1..N3` 未分配 = 8195/8199/8200，`N4` ReDim 之后 8195，
+`N5` Erase 之后 8195，`N5 ub err=9`。
+
+一句话：**未分配与 Erase 之后的数组，标签是「数组位 + 声明元素档」，名字是
+`"<元素>()"`，`IsArray` 为 True，`Err` 恒 0；抛 9 的是 `UBound`/`LBound`。**
+
+顺带更正一条旧结论：`test_redim_elem` 的 `R17-undim` 注释写着「VB6 在 VarType 上抛
+Array not even dimensioned」。P238/P238B 证明 `VarType`/`TypeName` 不抛 —— 那是
+`UBound` 那一档的事。
+
+### 三、判据与改法
+
+1. **RTL 多一枚「带档但不深拷」的装箱口** —— `vb6_VariantArrayBorrowTyped(void*, int32_t)`：
+   非 NULL 交既有 `vb6_VariantArray`（借用，标签问描述符）；NULL 交栈上空白描述符那一段
+   （只写标签，`parray` 清空）。它与 §11.180 的 `vb6_VariantArrayTyped` **共用同一个落点**：
+   父函数的 NULL 支改成转调它，空白描述符只剩一处。
+2. **`boxToVariant` 在分档 `switch` 之前接一条裸数组名臂**（`cgen_util_ctrl.cpp`）：
+   判据 `isArrayCarrierArgName`（§B160/§B161 的唯一出口）+ 声明元素档 `arrayElemTypes_`
+   （§11.180 那一份），出口用上面那枚**借用**档。
+3. **不按秩限**：§B163 / §11.180 的数组臂都加了 `arrayDimCounts_ <= 1` 护栏，理由是那些出口
+   **会深拷 / 会持有**，而 ND 的拥有权还没定（§B85/§B151）。借用档不碰所有权，多维也安全,
+   所以这一臂不限秩 —— 真机 P238B 的多维未分配同样答 8195。
+4. **卫兵**：`cExpr` 以 `vb6_` 开头一律不接。本臂吃的是**裸**实参文本；再包一层就成了
+   `(void*)(vb6_VARIANT)`。
+5. **闸门计数随刀改**：`check_sa_access` 的 A18 把「问 `isArrayCarrierArgName` 的地方」
+   钉成 4 处（ByRef Variant 实参 / COM 实参打包 / `comByRefArgExpr` / 赋值站），本刀多出
+   第五位消费者（谓词实参站），预期数改为 **5**，并在闸门注释里写清第五位是谁。
+
+### 四、为什么这样改
+
+- **为什么必须借用、不能复用 `Typed`**：九枚谓词的形参是**按值** `vb6_VARIANT`，没有任何人
+  `VariantClear` 那个临时量 —— 这正是 §11.106（第一百二十四刀）给谓词实参换用
+  `vb6_VariantBorrowFromValue` 的理由（对象档曾因此每读一次漏一枚引用）。深拷出来的副本
+  同样会漏，所以这一站只能用「借用 + 标签」。
+- **为什么改在 `boxToVariant` 而不是那九枚谓词的名单里**：名单那一站做的是**文本替换**
+  （`vb6_VariantFromValue(` → `vb6_VariantBorrowFromValue(`），它拿不到「这枚名字的声明元素档」
+  之外的任何证据；而裸数组名这一问的判据（名字表 + 声明档）本来就在装箱站。改一处，
+  谓词站、Variant 形参、ByRef Variant 临时量三条路同时正确。
+- **为什么不会动 §11.179 的副本语义**：`v = q` 那一族走 `wrapVariantValue` 的数组臂
+  → `vb6_VariantArrayTyped`（深拷），那条臂排在 `boxToVariant` 之前。实测证据：
+  `b205`/`b206` 的 Typed 行在清单里一字未变。
+- **为什么 A17 不用动**：借用档的 NULL 支仍然借既有 `vb6_VariantArray` 拿标签，没有新增
+  「问 `vb6_SaVtOfArrayPtr`」或「问档表」的调用点。
+
+### 五、读数与随刀改的针
+
+- 新夹具 `tests/b207_pred_array_tag`（`B207Main.bas`：L1–L5 / M1–M5 / E1,E2 / A1 / N1–N5，
+  共 20 行），x64 与 x86 逐行相同，且与真机 P238 + P238B 逐行相同。
+- `test_redim_elem` 的 `R17-undim` 针从 `8204 tn=Variant()` 翻成 **`8200 tn=String()`**
+  （`Dim q0n() As String` 未 ReDim；真机 P238 的 L3）。同一条注释里那条旧结论一并更正。
+- 形状清单按 CI `45853700091` 的 artifact 装行：`changed=11 added=2 removed=0`。
+  11 份逐份用 `--emit-c` 复核过：全部含 `vb6_VariantArrayBorrowTyped`，且只落在两类位置 ——
+  九枚只读谓词的实参，与「ND Variant 固定数组 / COM 字节数组」这类**本来就借用**的
+  Variant 实参位（改前走 `_Generic` 的 `vb6_VariantArray`，同样是借用、同一条标签来源）。
+- 闸门（本机）：`check_sa_access` PASS（A17 的 `vt-flavor call 5`、`pack-of-ptr 2` 未动；
+  A18 的出口消费者 5）、`check_builtin_slot_returns` PASS（派生表重跑后 66 条）、
+  `check_com_variant_out_ref` PASS、`check_rtl_naked_names` PASS。
+- GA：`45853700091` 三红（清单未装 2 行 + 存量 11 行哈希变、`manifest_coverage`、
+  `test_redim_elem` 两架构 output mismatch —— 后两条都是同一件事的不同落点，不是发码回归）；
+  装行 + 针翻转之后 `45857307743` **23/23 全绿**。
+
+### 六、神谕与清单
+
+- 真机神谕：`.temp/k199p/P238.bas` / `p238.txt`（局部 + 模块级 + Erase + 装箱，16 行）、
+  `P238B.bas` / `p238b.txt`（多维，N1–N5）。
+- CI 形状清单：`changed=11 added=2 removed=0`（2 行新增 = `b207` 的 `.bas` 与 `.vbp`）。
+- 刻意不跟的一格（背账，不假装对）：`Erase` 之后**多维**的 `UBound`/`LBound` —— C3 答
+  `0 / err=0`，真机抛 9。那一问不经装箱站（`vb6_UBoundND` 对 NULL 直接返 0），是另一条缺口。
+  神谕侧注意：`P238B.bas` 的 `N6 lb` 那行在真机读数文件里没有落下来 —— `LBound` 抛 9 时
+  `On Error Resume Next` 跳到 `Close`，`Print` 的实参求值没完成；这本身就证明它抛 9。
+
+### 七、记账
+
+- 探针：`.temp/k199p/P238.bas`、`P238B.bas`（另有真机 oracle `p238.txt` / `p238b.txt`）。
+- 夹具：`tests/b207_pred_array_tag`（`B207Main.bas` / `B207Res.vbp`），注册在
+  `tests/run_tests.ps1`（x64 + x86）。
+- 代码：`ab22c109`（RTL + cgen + 闸门计数 + 夹具）、`2c7d5825`（清单装行 + 针翻转）。
+- 教训：**「描述符在哪」与「声明说什么」是两件事** —— 已分配时前者够用，未分配时只剩后者；
+  谓词这一站的错误正是「只问了前者、而前者是 NULL」。修法不是给谓词加特判，而是让装箱站
+  在拿到 NULL 时有第二条证据链（声明档），并且**分清谁需要深拷、谁只能借用**。
