@@ -1210,10 +1210,11 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
         (withOwnedCarrier133 || withFnRetCarrier136 || withComProp145
          || !withClassCarrier135.empty())) {
         int ptTail140 = resumePointCounter_++;
-        c_.emitLine("vb6_err_resume_point = " + std::to_string(ptTail140) + ";");
-        c_.emitLine("vb6_err_resume_next_point = " + std::to_string(ptTail140 + 1) + ";");
+        // 与 cgen_stmt.cpp 同口径: 标签在前, 推进在后 —— 跳进来时不能跳过推进。
         c_.emitLine("vb6_resume_" + std::to_string(ptTail140) +
                     ":;  /* §11.119 八.3: 块尾补点 (Resume Next 从体内末句回来时先跑完放手) */");
+        c_.emitLine("vb6_err_resume_point = " + std::to_string(ptTail140) + ";");
+        c_.emitLine("vb6_err_resume_next_point = " + std::to_string(ptTail140 + 1) + ";");
         dispatchPoints_.push_back(ptTail140);
     }
     // 块尾放手 (VB6 的 With 临时量活到 End With)。`vb6_ReleaseObject` 自己把槽置空,

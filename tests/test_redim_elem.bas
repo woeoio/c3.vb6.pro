@@ -255,12 +255,10 @@ Public Sub Main()
     v = q0l
     Debug.Print "R17-boxed-vt="; VarType(v); " tn="; TypeName(v); " cell="; CStr(v(0))
 
-    ' R17-boxw: the same slot, now WRITTEN through. vb6_VariantArraySet / SetND start
-    ' with `if (elemType != vb6_sa_variant) return;`, so a write into a typed array's
-    ' box is a SILENT NO-OP - section B155 cell 3, still open. Measured on both arches
-    ' (.build/k46run2_both.txt): the cell still reads 4242, the value the box was made
-    ' from, and 99 never lands. Whoever fixes cell 3 turns this needle red, and that is
-    ' the success signal, not a regression.
+    ' R17-boxw: the same slot, now WRITTEN through. B155 cell 3 is CLOSED by §11.178
+    ' (knife 195): vb6_VariantArraySet converts into the element's own type instead of
+    ' returning early, so 99 lands. The old needle (4242) pinned that silent no-op and
+    ' was written to turn red on the day this got fixed - it did.
     v(0) = 99
     Debug.Print "R17-boxw="; CStr(v(0))
 

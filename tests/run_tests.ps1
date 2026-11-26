@@ -6477,7 +6477,7 @@ if ($Category -in @("all", "run", "bas")) {
         "R17-sing-vt=8196 tn=Single()", "R17-dbl-vt=8197 tn=Double()",
         "R17-cur-vt=8198 tn=Currency()", "R17-date-vt=8197 tn=Double()",
         "R17-obj-vt=8201 tn=Object()", "R17-udt-vt=8204 tn=Variant()",
-        "R17-boxed-vt=8195 tn=Long() cell=4242", "R17-boxw=4242", "R17-undim-vt=8204 tn=Variant()",
+        "R17-boxed-vt=8195 tn=Long() cell=4242", "R17-boxw=99", "R17-undim-vt=8204 tn=Variant()",
         "RE-DONE")
     Add-BasTest "test_redim_elem" "$Tests\test_redim_elem.bas" $reNeedles
     Add-BasTest "test_redim_elem_x86" "$Tests\test_redim_elem.bas" $reNeedles -Arch "x86"

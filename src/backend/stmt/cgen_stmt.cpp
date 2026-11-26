@@ -29,9 +29,15 @@ void CCodeGen::emitStmtList(StmtList& stmts, bool emitResumePoints) {
             stmt->kind != ASTNodeKind::OnErrorStmt &&
             stmt->kind != ASTNodeKind::LabelStmt) {
             int pt = resumePointCounter_++;
+            // 第一百九十五刀 (§11.178): 标签必须在「推进 next 点」的**前面**。
+            //   反过来的写法（先赋值、后落标签）在跳进来时会**跳过赋值** —— 于是
+            //   `vb6_err_resume_next_point` 还停在「进这一句之前」的号上，这一句自己
+            //   再报错就又回同一标签：`test_overflow` 的 `Select Case`（Case 体内的
+            //   `b = -1` 报 6）就是这样死循环的。跳到标签就等于「开始执行这一句」，
+            //   所以推进也必须跟着走。
+            c_.emitLine("vb6_resume_" + std::to_string(pt) + ":;");
             c_.emitLine("vb6_err_resume_point = " + std::to_string(pt) + ";");
             c_.emitLine("vb6_err_resume_next_point = " + std::to_string(pt + 1) + ";");
-            c_.emitLine("vb6_resume_" + std::to_string(pt) + ":;");
             dispatchPoints_.push_back(pt);
         }
 
