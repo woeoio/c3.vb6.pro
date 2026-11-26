@@ -725,10 +725,84 @@ static void vb6_fmtGroupThousands(wchar_t* buf, int32_t groupDigits) {
 // 注: FormatCurrency 的 `¥`(U+00A5) 前缀**本来就没坏** —— 曾经看到的 "гд" 是终端
 // 误解码: 936 下 vb6_ConWriteHandle 正确写出 GBK 双字节 A3A4(即全角"￥"),
 // 65001 下写出 UTF-8 C2A5; 码点探针实测 BSTR 内首字符恒为 U+00A5。别当 bug 修。
+// §11.170 (第一百八十七刀): FormatNumber / FormatCurrency / FormatPercent 的进位是**十进制**
+// 半值远离零, 不是 C 运行库 %.*f 的二进制「五成双」。真机读数 (.temp/k187p/P207/P208):
+//   FormatNumber(1.005, 2) = "1.01"   (二进制展开是 1.00499… ⇒ %.*f 给 1.00)
+//   FormatNumber(2.675, 2) = "2.68"   FormatNumber(0.145, 2) = "0.15"
+//   FormatNumber(9.995, 2) = "10.00"  (要连进位)   -9.995 ⇒ "-10.00"
+//   FormatNumber(0.5, 0) = "1"        FormatNumber(2.5, 0) = "3"      (远离零, 不是成双)
+//   FormatNumber(1.0049999, 2) = "1.00"  (不减成 1.01 ⇒ 先归到 15 位有效数字的十进制文本)
+//   FormatNumber(0.4999999999999999, 0) = "1"  (15 位十进制 = 0.5 ⇒ 半值进)
+//   FormatNumber(1E+15, 2) = "1,000,000,000,000,000.00" (不走科学记数)
+// 所以先拿 %.15g 的十进制文本 (科学形/超 15 位有效数字回到 %.*f, 真机那两档也是全位展开),
+// 再在文本上做十进制进位。
+static void vb6_fmtRoundDecimalText(wchar_t* s, int digits) {
+    wchar_t buf[192];
+    int neg = 0;
+    const wchar_t* p = s;
+    if (*p == L'-') { neg = 1; p++; }
+    wchar_t intd[64]; int il = 0;
+    while (*p >= L'0' && *p <= L'9' && il < 60) intd[il++] = *p++;
+    intd[il] = L'\0';
+    wchar_t frd[96]; int fl = 0;
+    if (*p == L'.') {
+        p++;
+        while (*p >= L'0' && *p <= L'9' && fl < 90) frd[fl++] = *p++;
+    }
+    frd[fl] = L'\0';
+    int up = 0;
+    if (digits >= 0 && digits < fl) {
+        wchar_t d = frd[digits];
+        if (d > L'5') up = 1;
+        else if (d == L'5') up = 1;   // 半值也进 (away from zero); 1.0049… 那格由 15 位文本区分
+    }
+    wchar_t comb[192]; int cl = 0;
+    if (il == 0) comb[cl++] = L'0';
+    else for (int i = 0; i < il; i++) comb[cl++] = intd[i];
+    int cut = cl;
+    for (int i = 0; i < digits; i++) comb[cl++] = (i < fl) ? frd[i] : L'0';
+    comb[cl] = L'\0';
+    if (up) {
+        int i = cl - 1;
+        for (;;) {
+            if (comb[i] == L'9') { comb[i] = L'0'; }
+            else { comb[i] = (wchar_t)(comb[i] + 1); break; }
+            if (i == 0) {
+                memmove(comb + 1, comb, (wcslen(comb) + 1) * sizeof(wchar_t));
+                comb[0] = L'1'; cl++; cut++;
+                break;
+            }
+            i--;
+        }
+    }
+    int o = 0;
+    if (neg) buf[o++] = L'-';
+    for (int i = 0; i < cut; i++) buf[o++] = comb[i];
+    if (digits > 0) {
+        buf[o++] = L'.';
+        for (int i = cut; i < cl; i++) buf[o++] = comb[i];
+    }
+    buf[o] = L'\0';
+    wcscpy(s, buf);
+}
+
+// 定型到 digits 位小数; 十万以上 / 超 15 位有效数字那一档回 %.*f (与真机同形)。
+static void vb6_fmtFixedText(double v, int digits, wchar_t* out, int cap) {
+    wchar_t t[128];
+    swprintf(t, 128, L"%.15g", v);
+    int sci = 0;
+    for (const wchar_t* p = t; *p; p++) if (*p == L'E' || *p == L'e') { sci = 1; break; }
+    if (!sci) {
+        vb6_fmtRoundDecimalText(t, digits);
+        if ((int)wcslen(t) < cap) { wcscpy(out, t); return; }
+    }
+    swprintf(out, (size_t)cap, L"%.*f", digits, v);
+}
+
 BSTR vb6_FormatCurrency(double value, int32_t numDigits, int32_t incLeading, int32_t useParens, int32_t groupDigits) {
     if (numDigits < 0) numDigits = 2;
     wchar_t numBuf[96];
-    swprintf(numBuf, 96, L"%.*f", (int)numDigits, value);
+    vb6_fmtFixedText(value, (int)numDigits, numBuf, 96);   // §11.170
     // §B213: 这一位改前是 `(void)incLeading; (void)groupDigits` **两个一起丢掉**。
     //   两枚都在括号/符号**之前**定形 —— 千分位必须先插好，否则 `(`/`¥` 会被当成一位数字数错。
     vb6_fmtDropLeadingZero(numBuf, incLeading);      // §B213
@@ -762,7 +836,7 @@ BSTR vb6_FormatCurrency(double value, int32_t numDigits, int32_t incLeading, int
 BSTR vb6_FormatNumber(double value, int32_t numDigits, int32_t incLeading, int32_t useParens, int32_t groupDigits) {
     if (numDigits < 0) numDigits = 2;
     wchar_t numBuf[96];
-    swprintf(numBuf, 96, L"%.*f", (int)numDigits, value);
+    vb6_fmtFixedText(value, (int)numDigits, numBuf, 96);   // §11.170
     // §B213: 这一位改前是 `(void)incLeading` 直接丢掉 ⇒ `FormatNumber(0.5,2,False)` 交 `0.50`，
     //   运行期是 `.50`。千分位那一枚改前是**手写的一遍**（含负号回填那套 memmove），现在也一并
     //   走同一位主人：负号交给 `vb6_fmtDropLeadingZero` / `vb6_fmtGroupThousands` 各自处理。
@@ -774,8 +848,9 @@ BSTR vb6_FormatNumber(double value, int32_t numDigits, int32_t incLeading, int32
 BSTR vb6_FormatPercent(double value, int32_t numDigits, int32_t incLeading, int32_t useParens, int32_t groupDigits) {
     if (numDigits < 0) numDigits = 2;
     wchar_t buf[96];
-    /* 百分比: 值 ×100 再加 '%' —— 用 %.*f 直接成型, 不套用二次格式串 */
-    swprintf(buf, 96, L"%.*f%%", (int)numDigits, value * 100.0);
+    /* 百分比: 值 ×100 再加 '%' —— 先按十进制定型 (§11.170), 再手接 '%' */
+    vb6_fmtFixedText(value * 100.0, (int)numDigits, buf, 92);
+    wcscat(buf, L"%");
     // §B213: 改前 `(void)incLeading` 且 groupDigits 压根没接（运行期 `1,234.50%` / `.50%` 两格
     //   都交不出来）。⚠ buf 里带着 '%'，所以两位主人必须都按「数字跑」而不是「到 '.' 为止」来看。
     vb6_fmtDropLeadingZero(buf, incLeading);          // §B213

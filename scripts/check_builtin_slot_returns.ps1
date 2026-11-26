@@ -308,6 +308,36 @@ if (Test-Path -LiteralPath $runSrcFmt) {
     }
 }
 
+# ---- R16: FormatNumber / FormatCurrency / FormatPercent 的十进制半值进位 (§11.170) ----
+# 判据 (真机 P207/P208): 不能回到 C 运行库的 %.*f (二进制五成双), 必须走十进制文本进位。
+$cmpPath = Join-Path $Root 'src/rtl/core/vb6rtl/vb6rtl_compat.c'
+$cmpSrc = $null
+if (Test-Path -LiteralPath $cmpPath) { $cmpSrc = Get-Content -LiteralPath $cmpPath -Raw -Encoding UTF8 }
+if ($null -eq $cmpSrc) { $viol += 'R16 找不到 vb6rtl_compat.c' }
+else {
+    if ($cmpSrc -notmatch '§11\.170') { $viol += 'R16 十进制定型没有登记 (§11.170 段标缺)' }
+    foreach ($t in @('vb6_fmtRoundDecimalText', 'vb6_fmtFixedText', '%.15g')) {
+        if ($cmpSrc -notmatch [regex]::Escape($t)) { $viol += ('R16 定型链缺 ' + $t) }
+    }
+    foreach ($fn in @('vb6_FormatCurrency', 'vb6_FormatNumber', 'vb6_FormatPercent')) {
+        $body = [regex]::Match($cmpSrc, ('BSTR ' + $fn + '\([\s\S]{0,1500}')).Value
+        if ($body -eq '') { $viol += ('R16 找不到 ' + $fn) }
+        elseif ($body -notmatch 'vb6_fmtFixedText') { $viol += ($fn + ' 没走十进制定型') }
+    }
+}
+if (Test-Path -LiteralPath $runSrcFmt) {
+    $rndCells = ([regex]::Matches($runTxt, "Test-Vbp 'b195_format_round_decimal")).Count
+    if ($rndCells -ne 2) { $viol += ('R16 b195 夹具格数 = ' + $rndCells + ', 要 2 (x64 + x86)') }
+    $rndMain = Join-Path $Root 'tests/b195_format_round_decimal/B195Main.bas'
+    if (-not (Test-Path -LiteralPath $rndMain)) { $viol += 'R16 夹具 B195Main.bas 不在' }
+    else {
+        $rndTxt = Get-Content -LiteralPath $rndMain -Raw -Encoding UTF8
+        foreach ($w in @('R1', 'R4', 'R10', 'B9')) {
+            if ($rndTxt -notmatch ('"' + $w + '"')) { $viol += ('R16 夹具缺证人 ' + $w) }
+        }
+    }
+}
+
 Write-Host ('census: table=' + $tableNames.Count + ' rtlSlot=' + $rtlSlot.Keys.Count +
             ' rtlPtr=' + $rtlPtr.Keys.Count + ' rtlMacro=' + $rtlMacro.Keys.Count +
             ' emittedNames=' + $emitted.Keys.Count +
@@ -319,6 +349,6 @@ if ($viol.Count -gt 0) {
     Write-Host ('FAIL builtin_slot_returns: ' + $viol.Count + ' 条违规 —— 修法是把表与 RTL 对账 (补名/撤名), 不是往白名单里加名字; 真要走例外请连带写清理由并重跑 §B146 那把 400 份 A/B')
     exit 1
 }
-Write-Host 'PASS builtin_slot_returns (R1..R15)'
+Write-Host 'PASS builtin_slot_returns (R1..R16)'
 exit 0
 
