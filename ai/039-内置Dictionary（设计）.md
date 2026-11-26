@@ -12048,3 +12048,128 @@ if ((v->vt & vb6_vtArray) && v->parray && vb6_SaIs1DOwned(v->parray)) { ... }
 - 教训：**「共用 vs 副本」这种所有权题，只有「写一边看另一边」才验得出**；
   而所有权一旦落到「谁 free」，C 的联合体就会在另一种类型上把它变成野指针 ——
   判据得挂在 `vt` 的阵列位上，不能挂在指针非空上。
+
+## §11.180 未分配数组装进 Variant：标签按声明档，载体仍为 NULL（第一百九十七刀）
+
+### 一、问题
+
+§11.179 背账第 2 条：未分配的数组装进 Variant 之后 `VarType` 答 8204（Variant()），
+而真机答的是**声明的那一档**。装箱口只有一枚指针可以问，指针是 NULL 时它什么也问不出来
+—— 元素档其实在**声明**里，不在描述符里。
+
+改前 C3 的两条数组装箱臂（裸数组名、整数组引用 `A()`）都发 `vb6_VariantFromValue(ptr)`，
+落 `_Generic` 的 `vb6_VariantArray` 档 ⇒ `vb6_SaVtOfArrayPtr(NULL)` 兜底答
+`VT_ARRAY|VT_VARIANT` = 8204。第二个后果藏在 UBound：`vb6_VariantToSafeArray1DStrict`
+把「vt 说数组、载体 NULL」也当成**非数组**，于是抛 13（Type mismatch），而真机抛 9。
+
+### 二、真机读数（VB6Mini `/make`，`.temp/k197p/P233.bas`）
+
+```
+A1-Long      vt=8195 isarr=True tn=Long()     ub=9  lb=9
+A2-String    vt=8200 isarr=True tn=String()   ub=9  lb=9
+A3-Double    vt=8197 isarr=True tn=Double()   ub=9  lb=9
+A4-Currency  vt=8198 isarr=True tn=Currency() ub=9  lb=9
+A5-Boolean   vt=8203 isarr=True tn=Boolean()  ub=9  lb=9
+A6-Byte      vt=8209 isarr=True tn=Byte()     ub=9  lb=9
+A7-Date      vt=8199 isarr=True tn=Date()     ub=9  lb=9
+A8-Variant   vt=8204 isarr=True tn=Variant()  ub=9  lb=9
+A9-Object    vt=8201 isarr=True tn=Object()   ub=-1/0  lb=0/0
+A11-Erased   vt=8195 isarr=True tn=Long()     ub=9
+A12-SrcReDim vt=8195 isarr=True              ub=9
+A13-Overwrite vt=2 val=5
+```
+
+三条要读出来的东西：
+
+1. 元素档是**声明**给的 —— `Dim x()` 与 `Erase x` 之后都还答得出，说明它不来自数据块。
+2. `UBound`/`LBound` 对「未分配」抛 **9**（A1..A8 全部），不是 13、也不是 -1。
+3. `A13` 说明这份标签是可被覆盖的普通 Variant，`r = 5` 之后就是 2。
+
+`A7-Date` 答 8199/"Date()"、`A9-Object` 的 `UBound` 答 -1 且不报错 —— 这两格本刀刻意不跟，
+理由见第五节。
+
+### 三、判据与改法
+
+**发码侧**（`wrapVariantValue` 的两条数组臂）：把元素档一并交给装箱口。
+
+```c
+Vb6Type e197 = Vb6Type::Variant;
+auto it197 = arrayElemTypes_.find(<数组名>);      /* 声明站登记的那张表, 与 ReDim 站共用 */
+if (it197 != arrayElemTypes_.end()) e197 = it197->second;
+if (e197 == Vb6Type::Variant)                    /* 查不到再回落, 与改前同一个答案 */
+    e197 = inferExprType(expr) 掩掉 Array 位;
+return "vb6_VariantArrayTyped((void*)" + cExpr + ", " + mapSaElemType(e197) + ")";
+```
+
+`mapSaElemType` 是既有的唯一映射（`Vb6Type → vb6_sa_*`），认不出的档回落
+`vb6_sa_variant`，也就是 8204 —— 改前的答案，所以**认不出的档行为一字不动**。
+
+**RTL 侧**：
+
+```c
+vb6_VARIANT vb6_VariantArrayTyped(void* _arr, int32_t elemEnum) {
+    if (_arr) return vb6_VariantArrayCopy(_arr);   /* 有描述符: 走 §11.179 的深拷副本 */
+    vb6_SafeArray1D blank; ...;                    /* 只有类型、没有数据 */
+    vb6_VARIANT v = vb6_VariantArray(&blank);      /* 标签经既有装箱口问 */
+    v.parray = NULL;                               /* 那个描述符在栈上, 不能拿出去 */
+    return v;
+}
+```
+
+```c
+if ((v.vt & vb6_vtArray) && !v.parray) return NULL;   /* 真数组但未分配 ⇒ 让 UBound 抛 9 */
+```
+
+第二条是**判据搬家**：13 那一条的口径是「不是数组」（Null / Empty / 标量），而
+「是数组、只是还没分配」在真机上是 9 —— 两档以前被同一句 `!(vt & array) || !parray` 合并了。
+
+### 四、为什么不造一枚空描述符
+
+第一想法是「没有载体就造一枚只有类型的描述符」，这样标签自然就有了。否决它的理由有两条，
+都是这台机器上能验出来的：
+
+1. **UBound 会答 -1 而不是抛 9**。`vb6_UBound` 的 1D 分支直接 `return safeArray->uBound`，
+   只有 `!safeArray` 才走 9 那一支 —— 造了空描述符就等于把真机的 9 换成 -1，与
+   A1..A8 全部对不上。要修就得再给 UBound 加一条「data==NULL ⇒ 9」的判断，而那会连带
+   影响所有「有描述符、还没分配」的存量路径。
+2. **所有权没有着落**。空描述符得有人 free（`vb6_VariantClear` 只认 OWNED 标记的副本），
+   而它本来就不该存在 —— 真机那边这个 Variant 的 `parray` 就是 NULL。
+
+只写标签还顺手保住了一条已有语义：`vb6_VariantArrayGet/Set` 对「未分配」抛 9
+（§11.177 判据的第 2 档）走的就是 `parray == NULL`，一个字不用改。
+
+### 五、读数与随刀改的针
+
+- 夹具 `tests/b205_unalloc_array_box`（T1–T11）x64/x86 逐字相同，11 行与真机 P233 全对上
+  （`T1 long vt=8195 isarr=True tn=Long() ub=9 lb=9` 一直到 `T11 overwrite vt=2 val=5`）。
+- 回归：`b204`（8 行）、`test_redim_elem`（R3/R5/R17 一族）、`b201`(6)/`b202`(20)/`b203`(33)
+  针全绿且读数逐字未动 —— 已分配数组那条路仍走 §11.179 的深拷副本（`vb6_VariantArrayTyped`
+  对非 NULL 载体直接转调），所以「副本语义」这一刀没有被偷换。
+- 闸门：`check_sa_access` PASS（A17 那两个计数**没动**）、`check_builtin_slot_returns` PASS
+  （新出口 `vb6_VariantArrayTyped` 已重派生进 `cgen_variant_slot_prefixes.inc`）、
+  `check_com_variant_out_ref` PASS。
+  A17 的教训：这一刀的标签**不许自己再查一次**元素档表，也不许新开一处问
+  `vb6_SaVtOfArrayPtr` —— 两处都被钉了数量。最终写法是借既有装箱口 + 栈上空白描述符，
+  两个计数都不动。
+- 刻意不跟的两格（都记在背账里，不假装对）：
+  1. `Date()`：真机 8199/"Date()"，本仓 8197/"Double()" —— `vb6_safearray_elemtype`
+     里根本没有 Date 档（§B159 同一个成因），要修得先给元素档加一档。
+  2. `Object()` 的 `UBound`：真机答 -1 且不报错，本仓抛 9。这一格是 VB6 自己的怪口径
+     （同一份探针里只有它不抛 9），影响面是「未分配 Object() 数组的 UBound」，判为不值得
+     为它单开一条判据。
+
+### 六、神谕与清单
+
+- 真机神谕：VB6Mini `/make P233.vbp`（读数见第二节），C3 的 x64/x86 两份输出逐行相同。
+- manifest 按 CI `45832240619` 的产物装行：`changed=23 added=2 removed=0`（1433 行）。
+- 首次 GA：`45832240619`（两红：`manifest_coverage` + `shape-oracle`，都只是新夹具没登记哈希，属预期）。
+- 末次 GA：`45834048213` 23/23 全绿。
+
+### 七、记账
+
+- 探针：`.temp/k197p/P233.bas`（未分配十档 + Erase + 源 ReDim + 覆盖）。
+- 夹具：`tests/b205_unalloc_array_box`（`B205Main.bas` / `B205Res.vbp`），
+  注册在 `tests/run_tests.ps1`（x64 + x86）。
+- 代码 `1dc75291`。
+- 教训：**「未分配」不是一种缺失，是一种状态** —— 它有自己的标签（声明档）、自己的错误号
+  （9，而不是「不是数组」那个 13），而且这些都能在没有一个字节数据的情况下答出来。
