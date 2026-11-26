@@ -2526,8 +2526,9 @@ int32_t vb6_IfaceSupports(void* ifacePtr, const void* iid) {
  * 修法 (上游同口径): 命中判据 = cDims == 1 且 fFeatures 不是我们的两枚标记。
  *   · 真 SAFEARRAY 一维: cDims=1, fFeatures 是 FADF 位集 ⇒ 命中 ⇒ 归一化。
  *   · C3 1D 描述符: cDims=1, fFeatures=0xA1D1 (借用) / 0xA1D2 (私有副本) ⇒ 不命中 ⇒ 原样。
- *     (第一百九十六刀加了第二枚标记, 所以这里必须问 vb6_SaFfIsOurs, 不能跟某一个值比 ——
- *      否则数组装进 Variant 的副本会被当成外来 SAFEARRAY 去归一化, 副本当场被换掉。)
+ *     (第一百九十六刀加了第二枚标记, 所以下面两问都得到 —— 只跟 0xA1D1 比, 数组装进 Variant
+ *      的私有副本会被当成外来 SAFEARRAY 去归一化, 副本当场被换掉。仍**不许**写成
+ *      `!vb6_SaIs1D(parray)`: 那把 ND 描述符也判成真 SAFEARRAY ⇒ 堆损坏, 见 R6。)
  *   · C3 ND 描述符: cDims = dimCount (2..16) != 1 ⇒ 不命中 ⇒ 原样。
  *   · 真 SAFEARRAY 多维: cDims >= 2 ⇒ 不命中 ⇒ 原样 (ND 档本轮不覆盖)。
  */
@@ -2538,7 +2539,8 @@ int vb6_SlotHasRealSafeArray(void* pVar) {
     if (!(pv->vt & VT_ARRAY) || !pv->parray) return 0;
     a = (const vb6_SafeArray1D*)pv->parray;
     if (a->cDims != 1) return 0;                       /* ND 描述符 / 多维真数组 */
-    return !vb6_SaFfIsOurs(a->fFeatures);
+    return a->fFeatures != (uint16_t)VB6_SA1D_FFEATURES
+        && a->fFeatures != (uint16_t)VB6_SA1D_FFEATURES_OWNED;
 }
 
 /* 就地把槽里的真 SAFEARRAY 换成 C3 描述符 (非数组档与 Windows VARIANT 同布局, 原样)。
