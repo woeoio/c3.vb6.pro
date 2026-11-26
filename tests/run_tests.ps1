@@ -14995,8 +14995,8 @@ if ($Category -in @("all", "syntax")) {
     # 正面钉「直接调用 + §42 UC 实参站」, 反面钉旧坏形状。
     Test-CodegenNote "pd_me_own_proc" @(
         "$Tests\pd_meform\MeForm.frm", "$Tests\pd_meform\pdFxPreviewCtl.ctl") @(
-        "vb6_MeForm_ApplySepiaEffect(vb6_MeForm_GetLocalParamString(), (-1), &vb6_argtmp_vb6_cls_pdFxPreviewCtl_0, 1, 1);",
-        "vb6_argtmp_vb6_cls_pdFxPreviewCtl_0 = (vb6_cls_pdFxPreviewCtl*)vb6_UC_InstanceOf(vb6_hwnd_pdFxPreview);") @(
+        "vb6_MeForm_ApplySepiaEffect(_ag1, (-1), &vb6_argtmp_vb6_cls_pdFxPreviewCtl_2, 1, 1);",
+        "vb6_argtmp_vb6_cls_pdFxPreviewCtl_2 = (vb6_cls_pdFxPreviewCtl*)vb6_UC_InstanceOf(vb6_hwnd_pdFxPreview);") @(
         "vb6_ComPackObject(pdFxPreview)", 'L"ApplySepiaEffect"), NULL')
     # C2197 主族 (整编 68 条, Compression.bas:348 `Plugin_libdeflate.GetDefaultCompressionLevel()`):
     # `Mod.Proc(...)` 的形参表**不许借本模块的同名过程** —— 限定符不是本模块时按裸名
@@ -15054,8 +15054,8 @@ if ($Category -in @("all", "syntax")) {
     Test-CodegenNote "udt_ret_byref_class_method" @(
         "$Tests\udtret_byref\URetMod.bas", "$Tests\udtret_byref\UBrush.cls",
         "$Tests\udtret_byref\UPath.cls") @(
-        "vb6_type_URect _vb6_anytmp0 = vb6_UPath_GetRect(p);",
-        "vb6_UBrush_SetRect(b, (void*)&_vb6_anytmp0);") @(
+        "vb6_type_URect _vb6_anytmp1 = vb6_UPath_GetRect(p);",
+        "vb6_UBrush_SetRect(b, (void*)&_vb6_anytmp1);") @(
         "intptr_t _vb6_anytmp0 = (intptr_t)(vb6_UPath_GetRect(p))")
     # C2440/C2172/C2083 §56.31 (整编 pdGIF/pdPNG/pdRecentFiles/pdImageStrip 共 110 条):
     # `Set m_allFrames(i).frameDIB = …` 的目标是 `VB6_SA_AT(<UDT>, …).<类字段>`。
@@ -15807,7 +15807,7 @@ if ($Category -in @("all", "syntax")) {
         "vb6_Like(vb6_VariantToString(",
         "vb6_Num_Mod(vb6_VariantToLong(",
         "vb6_Pow(vb6_VariantToDouble(",
-        "vb6_PA_SetLong(_pa_0, 0, vb6_VariantToLong(") @(
+        "vb6_PA_SetLong(_pa_1, 0, vb6_VariantToLong(") @(
         "vb6_BSTR_Assign(&s, VB6_SA_AT(",
         "vb6_Num_Mod((int32_t)(",
         "vb6_Like(vb6_VbVariantOps_GetS(")
