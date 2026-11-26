@@ -772,6 +772,19 @@
             && argNestDepth_ == 1
             && !simpleByRefLvalue
             && !(argVal.size() > 1 && argVal[0] == '&')) {
+            // 第一百九十一刀 (§11.174): 值已经被转成指针/句柄的实参（`ByVal … As Any` /
+            // `LongPtr` / 接口视图）不许再套 Variant 聚合提升 —— 那会写出
+            // `vb6_VARIANT _asX = (void*)…` = C2440（VBFlexGrid MainForm 的
+            // `OleCreatePropertyFrame … Pages.pElems` 实测，x86 编译红）。
+            const bool argIsPointerish =
+                   (argVal.size() >= 6 && argVal.compare(0, 6, "(void*") == 0)
+                || (argVal.size() >= 10 && argVal.compare(0, 10, "(intptr_t)") == 0)
+                || (argVal.size() >= 9 && argVal.compare(0, 9, "(vb6_ivr") == 0);
+            // 已经是地址的实参（`&x` 的括号形 `(&(float){…})`）不能提进**值**临时量：
+            // `float _ag = (&(float){…})` 是 C2440（Charts 2020 Form2 实测）。
+            // Variant 聚合那一臂不在此列 —— 它提的是 `vb6_VariantCopy(&_agN, …)`。
+            const bool argIsAddrLiteral =
+                   (argVal.size() >= 2 && argVal.compare(0, 2, "(&") == 0);
             std::string gtyp102 = "int32_t";
             if (i < calleeParams.size()) {
                 gtyp102 = mapType(calleeParams[i].type);
@@ -779,7 +792,7 @@
                 gtyp102 = mapType(inferExprType(*node.positional[i]));
             }
             // 落不到标量/串/对象类型的（Variant / UDT）不提升，留着当登记缺口。
-            if (gtyp102 != "vb6_VARIANT") {
+            if (gtyp102 != "vb6_VARIANT" && !argIsAddrLiteral) {
                 if (!stmtCallArgEmitted_) {
                     c_.emitLine("const int32_t " + stmtCallArgSerial_ + " = vb6_ErrSerial();");
                     stmtCallArgEmitted_ = true;
@@ -796,7 +809,8 @@
                        // 接口视图那种实参 (`vb6_argtmp_vb6_ivref_*`，C 类型是指针)
                        // 就会被写成 `vb6_VARIANT _asX = <指针>` —— C2440，
                        // 被调方收的也不是 Variant (b448 实测就是这个)。
-                       && exprHasLateBoundComRead(node.positional[i].get())) {
+                       && exprHasLateBoundComRead(node.positional[i].get())
+                       && !argIsPointerish) {
                 // 判据用**实参自身**的 C 类型，不是形参声明的类型：内建调用的形参表会答
                 // Variant（如 `ObjPtr(CurrControl)` 那一槽），而实参本身是 `void*` /
                 // `vb6_cls_X*` —— 拿它初始化 vb6_VARIANT 就是 C2440，被调方要的也不是
