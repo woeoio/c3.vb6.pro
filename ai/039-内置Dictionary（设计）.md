@@ -12750,3 +12750,97 @@ U5 d=45000 err=13  U6 d=0 err=13      U7 vt=7 tn=Date    U8 vt=7 tn=Date
 - 教训：**「同一个语义，换了个 callee 形状」是最容易漏的一类** —— 上一刀的判据按「裸名 + 下标」写，
   成员数组就整类挡在外面，而它在 C 侧与普通数组**长得一模一样**（都是 `VB6_SA_AT(double, …)`）；
   发码站要问的是「这格声明是什么」，而不是「callee 长什么样」。
+
+---
+
+## §11.188 Date 赋值站的右值是 Variant：走 CDate 那一档，不走数值解包（第二百零五刀）
+
+### 一、问题
+
+前四刀都只问「左值是不是 Date」，右值只认 `String`（§11.183）与裸 BSTR 字面量。真机探针里
+把右值换成 **Variant**（`v = "2021-03-04": d = v`）就露出另一张脸：改前一律发
+`vb6_VariantToDouble(v)`，它只认数值档 ——
+
+| 右值 | 真机 | 改前 C3 | 性质 |
+| --- | --- | --- | --- |
+| `v` 装 `"2021-03-04"` | 44259 | **2021** | 静默错值（当数字剥前缀） |
+| `v` 装 `45000` | 45000 | 45000 | 对 |
+| `v` 装 `"abc"` | 抛 13、保旧值 | **0、Err=0** | 静默错值且**该报不报** |
+| `v` 装 `CDate(...)`（VT_DATE） | 44259 | 44259 | 对（`VariantToDouble` 认 vtDate） |
+| `v` 装 `Empty` | 0 | 0 | 对 |
+| `v` 装 `Null` | 抛 94、保旧值 | **0、Err=0** | 静默错值且**该报不报** |
+
+九条里三条错、两条是「错而不报」—— 比前几刀的 C2440 更难发现：**编得过、跑得动、不报错。**
+
+### 二、真机读数（VB6Mini `/make`，`.temp/k205p`）
+
+`P245.bas`（九格，标量 `d` 与元素 `q(0)`/`q(1)` 各一半）：
+
+```
+V1 d=44259 err=0   V2 d=44259 err=0   V3 d=45000 err=0   V4 d=45000 err=0
+V5 d=45000 err=13  V6 d=45000 err=13  V7 d=44259 err=0 vt=7
+V8 d=0 err=0       V9 d=45000 err=94
+```
+
+两条读值得单记：
+
+- **V5/V6/V9 是「赋值根本没发生」** —— 报错之后旧值（45000）原封不动。所以 C 侧必须是
+  「先算、再写」：转换抛错时不能碰左值（`vb6_ErrRaise` 走 longjmp，天然满足）。
+- **V8（Empty）不报错、答 0** —— `Empty` 与 `Null` 在这里分道，不能合并成一句「空值。
+
+### 三、判据与改法
+
+在 §11.183 那条 Date 腿里再加一档（仍是同一个 `dateTarget183`，左值判据一字未变）：
+
+```cpp
+// 右值是**裸标识符且已登记为 Variant** 时
+c_.emitLine(target + " = vb6_CDate(" + value + ");");
+return;
+```
+
+`Variant` 的识别只用 `knownVariantVars_`（局部、参数、模块级 Variant 都在这张表里，
+与 `wrapVariantValue` / `boxToVariant` 同一份口径），没有新开第二张类型表。
+
+### 四、为什么这样改
+
+- **不新写转换**：`vb6_CDate(vb6_VARIANT)` 已经是这一档的唯一权威 —— `vtBSTR → vb6_DateVal`
+  （账 #417 的日期解析）、`vtNull → 94`、`Empty → 0`、`vtDate`/数值 → `vb6_VariantToDouble`。
+  本文只做一件事：把赋值站接到它上面。改的是**选择哪个出口**，不是出口的内容。
+- **不接「表达式答 Variant」的其它形**：返回 Variant 的调用在 C 侧是 `vb6_ret_<Proc>`（不是
+  `vb6_VARIANT` 值），在这里猜会新造一类 C2440。只认裸标识符是**保守的少做**，不是遗漏。
+- **不改 RTL**：两条错读数都不是 RTL 的错 —— `vb6_VariantToDouble` 对「数值解包」这件事
+  仍然是对的，错的是在 Date 槽上用了它。
+
+### 五、读数与随刀改的针
+
+- 新夹具 `tests/b212_variant_to_date`（`B212Main.bas`：V1–V9 九行，与真机 P245 逐字相同），
+  x64 与 x86 **逐行相同**；两个架构都跑过。
+- 新哨兵：R16（那一腿存在 + 它的出口就是 `vb6_CDate`）、R17（b212 两台在跑）。
+- 改坏即红：把出口换回 `vb6_VariantToDouble(`，
+  `check_date_conv.ps1` 当场报 `R16 Variant leg CDate outlet = 0`，还原后 PASS。
+- 闸门（本机全 PASS）：`check_date_conv`（`var-cells=2`）、`check_manifest_coverage` K1..K3
+  （inputs=918 `[.vbp=357 .bas=561]` / registered=918）、`check_static_sentinel_registration`（149 道）、
+  `check_sa_access`。
+- 形状清单：只新增本夹具 **2 行**，存量行未动。
+
+### 六、神谕与清单
+
+- 真机神谕：`.temp/k205p/P245.bas` / `p245.txt`（九行）。
+- 修前取证：`.temp/k205p/c3a`（改前的 `p245.txt`：V1=2021、V5/V9=0 err=0）与 `--emit-c` 的
+  `d = vb6_VariantToDouble(v);`。
+- 门：run `45893813069`（`dev`、head `0d3a5d7d`）**23/23 全绿**（前两次跑到形状神谕上红：b206 的
+  `q(1) = v` 正是本刀要改的那一形，形状真变了，按 CI 交回的 `sha256/ascii256/bytes` 整行重登记后才绿）。
+- 刻意不跟的格（背账）：返回 Variant 的调用当右值（`d = GetVariant()`）、Variant 右值进
+  **其它 Date 消费站**（`CDate`/`CStr` 等已各自成腿）。
+
+### 七、记账
+
+- 探针：`.temp/k205p/P245.bas`（九格）、`c3a`（改前读数）、`rows212.ps1`（清单两行复算）。
+- 夹具：`tests/b212_variant_to_date`（`B212Main.bas` / `B212Res.vbp`），注册在
+  `tests/run_tests.ps1`（x64 + x86）。
+- 代码：`46c8fad5`（Variant 腿 + 夹具 + 哨兵 R16/R17 + 清单两行）；`fe37d6ab`、`0d3a5d7d`（b206 两行
+  形状重登记：先只换了 sha256，ascii256/bytes 还是旧值 —— 此类重登记必须整行换）。
+- **号**：本节 = 第二百零五刀 / §11.188。
+- 教训：**最贵的错不是编不过，是编得过还答得理直气壮。** 这一刀的四个错读数（2021 / 0 / 0 / 0）
+  在 C 侧都长得像好代码 —— 因为 `vb6_VariantToDouble` 确实是个真函数、确实没崩。要发现它们，
+  只能靠真机逐格对读；要防它们回来，只能靠哨兵钉住「哪个槽用哪个出口」。
