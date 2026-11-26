@@ -11358,3 +11358,112 @@ X3 那一格最说明问题：位域截得太松，一个非法参数被**静默
 
 代码 `cf65aced`，manifest 登记 `38211999`（888 行，added=2 changed=0，两行取自 CI 的
 `ci/emit-manifest`），GA `45754472749` 23/23 全绿。本节即 `38211999` 之后的文档提交。
+
+
+## §11.174 语句中止（On Error Resume Next 的作用面）：真机读数与分期收口
+
+### 一、为什么要重新量
+
+§B227（第七十九刀）把「语句中止」实现成**序号比较**：赋值站先存一份
+`vb6_ErrSerial()`，右值求值完再比一次，变了就不写目标。这条判据隐含一个假设 ——
+「序号变了 == 本条语句 raise 过 == 本条语句该中止」。第一百九十刀（§11.173）
+的 `StrConv` 探针把这个假设的破口露了出来：`Dump "X1", StrConv(Null, vbUpperCase)`
+在 C3 里照常打印了一行空值，而真机整句不见。
+
+### 二、真机读数（VB6Mini，`.temp/k191p/P217.bas` → `p217.txt`）
+
+| 格 | 形状 | 真机读数 |
+|---|---|---|
+| A1 | `x = FEscape()`（被调方无处理器，错误上抛） | `x=-1 err=11`（赋值没发生） |
+| A2 | `x = FSwallow()`（被调方 `Resume Next` 且 `Err.Clear`） | `x=7 err=0` |
+| **A3** | `x = FNest()`（被调方吃掉错误但**不清 Err**） | **`x=5 err=11`**（赋值发生了） |
+| A4 | `x = FHandled()`（被调方自带 `On Error GoTo`） | `x=3 err=0` |
+| A5 | `Call PEscape` | `hits=0 err=11`（被调方体内后续语句全不执行） |
+| A6 | `Call PSwallow` | `hits=1 err=0` |
+| A7 | `Take2 FEscape(), LogTag(2)` | `hits=0`：坏实参之后不求值，被调方不进入 |
+| A8 | `Take2 LogTag(1), FEscape()` | `hits=1`：坏实参之前恰好求值一次 |
+| A9 | `x = FEscape() + 1` | `x=-1`（整句丢弃） |
+| A10 | `Print #1, "A10=[" & Left("abc",-1) & "]"` | 该行**整行没输出**，下一句 `err=5` |
+| A11 | `x = FEscape(): x = x + 1` | `x=0`：只中止第一条语句 |
+| A12 | 调用方 `On Error GoTo H1` | 跳到 `H1`，`x=-1 err=11` |
+
+**A3 是这一刀的关键**：被调方把错误吃在自己体内、交回一个值，调用方的赋值
+**照常发生**，即便此刻 `Err.Number` 还是 11。所以「序号变了」既不是充分条件也不是
+必要条件 —— 真机的判据是**「这次 raise 有没有逃出它所在的那一帧」**。
+
+### 三、第一百九十一刀：实参中止面（已收口）
+
+C3 的实参守卫（第一百零二刀 §11.80）机制本来是对的：0..首个可 raise 的实参逐枚提升
+成临时量、每次求值前比一次序号，调用本身再包在同一个守卫里。问题只在**开闸条件** ——
+只给「实参含晚绑定 COM 读」开闸。改前三格读数：
+
+| 格 | 真机 | 改前 C3 | 改后 C3 |
+|---|---|---|---|
+| A7 | `hits=0 err=11` | `hits=1002`，`Take2` 跑了 | `hits=0 err=11` |
+| A8 | `hits=1 err=11` | `hits=1001`，`Take2` 跑了 | `hits=1 err=11` |
+
+三处改动：
+
+1. 新增 `exprCanRaiseStmt`（`cgen_util_scan.cpp`，判据在 `cgen_helpers.inc`）：树里
+   只要有一枚调用（用户过程 / 内建 / 方法 / 数组下标）或一枚可能除零的算符
+   （`/` `\` `Mod` `^`）或 `New`，就当可能 raise。开闸条件改为
+   「晚绑定读 ‖ 可能 raise」。
+2. 开闸记录的位置从**首枚**改成**末枚**可 raise 的实参（`stmtCallArgLastRaise_`）。
+   这是这一刀的真因：只提到首枚时，第二枚仍以裸调用形式留在守卫内的实参表里，而守卫
+   那一次比较在它求值**之前**就做了 —— 于是 raise 之后调用照进（A8 改前 1001 的来源）。
+3. `ByRef` 的**裸变量**实参不提升（`&x` 本来就是地址，提进值临时量会把被调方的写回丢在
+   `_agN` 上）。但这条只认 `IdentifierExpr`：`o.NoSuchProperty` 这种晚绑定读**也是**
+   `MemberAccessExpr`，它会 raise —— 当左值跳过提升就等于把它挪进守卫内的调用里，
+   raise 之后照进，正好是 §11.80 当初修掉的那个病形（`b250` 神谕当场变红，实测确认）。
+
+#### 3.1 两个 C2440：提升只对「同类型的值」成立
+
+开闸面一宽，提升就碰到了两类**不该套模板**的实参，都是 CI 编译红、本机复现后修掉的：
+
+| 现场 | 病形 | 判据 |
+|---|---|---|
+| VBFlexGrid MainForm `OleCreatePropertyFrame … Pages.pElems` | `vb6_VARIANT _as55 = (void*)(intptr_t)…` ⇒ C2440 + C2172(参数 8) | 值已是指针/句柄（`(void*)` / `(intptr_t)` / `(vb6_ivref…`）⇒ **不进 Variant 聚合臂** |
+| Charts 2020 Form2 `X = Random(10, 30)` 那一族 ByRef 实参 | `float _ag = (&(float){…})` ⇒ C2440 | 已经是地址（`(&…`）⇒ **不进标量值临时量臂** |
+
+并且 `b448_iface_ret` 的接口视图实参（`vb6_argtmp_vb6_ivref_*`，C 类型是指针）也被
+Variant 臂抓过 —— 那一臂现在再加一条 `exprHasLateBoundComRead`：**聚合体提升只留给
+晚绑定读**（它的所有权协议本来就是 Variant 自己的 `VariantCopy`/`VariantClear`）。
+
+夹具 `tests/b199_stmt_arg_abort`（四格 + DONE，`run_tests.ps1` 登记 x64/x86 两条）：
+
+| 格 | 形状 | 读数（VB6 与 C3 x64/x86 逐格一致） |
+|---|---|---|
+| B1 | `Take2 FEscape(), LogTag(2)` | `B1=[0,11]` |
+| B2 | `Take2 LogTag(1), FEscape()` | `B2=[1,11]` |
+| B3 | `Bump x, LogTag(3)`（无 raise） | `B3=[8,3,0]` —— ByRef 写回照旧 |
+| B4 | `Bump x, FEscape()` | `B4=[5,0,11]` —— 整句中止，目标不动 |
+
+### 四、尚未闭合（后续两刀）
+
+- **赋值站开闸**（A1/A9/A11）：`mayRaise79` 只认晚绑定读与 `raiseInRhs85`，普通调用
+  不在其中；且目标类型只认 Int/Double/String，Variant 目标没有守卫支。
+- **`Print` 语句快照**（A10）：整条语句没有序号快照。
+- **被调方体内中止**（A5）：`vb6_ErrRaise` 在 `vb6_err_resume_next` 置位时直接
+  `return`，而这个标志是**全局**的 —— 调用方的 `Resume Next` 会被被调方继承，于是
+  没有处理器的被调方一路跑到底。VB6 里 `Resume Next` 的作用域是**过程**。
+- **A12**：`On Error GoTo` 处理器入口处局部 Variant 变 Empty，独立缺陷，另案。
+
+### 五、随刀修的神谕与清单
+
+开闸面变宽会让临时量编号整体后移，13 条形状神谕 + 3 条 `CODEGEN-NOTE` 的针脚因此要
+跟到新编号（形状语义没变，`b250` / `b253` / `k174` 三条**一字未动**即通过）。另有一处
+`k3100_ivref_arg_lesion` 是**真误中**：病形针脚钉在 `_4` 上，而 `_4` 现在是「借来的实参
+要 AddRef」这个**合法**站位 —— 四条针脚一并跟到 `_2/_4/_6`，语义不变。
+
+manifest 按 CI 的 `ci/emit-manifest` 产物装行（890 行，`added=0 removed=0`，
+`changed=21`，复检 `diffEntries=0`），没有 `-Bless`。
+
+### 六、记账
+
+- 探针：`.temp/k191p/P217.bas`（12 格，真机 `p217.txt`）。
+- 夹具：`tests/b199_stmt_arg_abort`（B1–B4，输出走 `Debug.Print`；`Test-Vbp` 比对的是
+  stdout，改前用 `Print #1` 在 CI 上是空读数）。
+- 代码 `3360057b` → 收口 `66b78cc6`；manifest `4fefc7b7`；GA `45775710067` 23/23 全绿。
+- 构建坑：`src\backend\detail\util\*.inc` 属 PCH 内容，Ninja 不跟踪，改类成员后必须先顶
+  `.build\CMakeFiles\vb6c3-cgen.dir\cmake_pch.hxx` 的时间戳再 `build.bat`，否则报
+  `C2039: 不是 CCodeGen 的成员`。
