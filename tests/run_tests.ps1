@@ -10797,10 +10797,10 @@ if ($Category -in @("all", "run", "vbp")) {
     )
     Test-EmitcAbsent "k3100_ivref_arg_lesion" @("$Tests\k3100_ivref_arg\K3100.vbp") @(
         '(vb6_ivref_IK3100*)&((&vb6_argtmp_',
-        'vb6_ivref_IK3100* vb6_argtmp_vb6_ivref_IK3100_1 = c;',
-        'vb6_ivref_IK3100* vb6_argtmp_vb6_ivref_IK3100_3 = n;',
-        'vb6_ivref_IK3100* vb6_argtmp_vb6_ivref_IK3100_4 = (vb6_cls_H3100_New());',
-        'if (vb6_argtmp_vb6_ivref_IK3100_4) vb6_argtmp_vb6_ivref_IK3100_4->vt->AddRef'
+        'vb6_ivref_IK3100* vb6_argtmp_vb6_ivref_IK3100_2 = c;',
+        'vb6_ivref_IK3100* vb6_argtmp_vb6_ivref_IK3100_4 = n;',
+        'vb6_ivref_IK3100* vb6_argtmp_vb6_ivref_IK3100_6 = (vb6_cls_H3100_New());',
+        'if (vb6_argtmp_vb6_ivref_IK3100_6) vb6_argtmp_vb6_ivref_IK3100_6->vt->AddRef'
     )
 
     # 账 #305 第二百零三刀: 槽的**声明档**是新式接口视图 (vb6_ivref_<I>*) 时, Set 那两站
