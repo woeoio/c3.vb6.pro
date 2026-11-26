@@ -1,4 +1,4 @@
-﻿# 039 - 内置 Dictionary（设计）
+# 039 - 内置 Dictionary（设计）
 
 > 状态：**S1/S2/S3 已完成**（设计 + 基准 + 实现 + 对照全绿）。S4（三条入口的 New 那一半）已在实现里做了，剩 S5 门禁登记与 S6 收口。
 > 当前读数：`PASS dict_native 用例=54 行`（1 行 VB6-SEM 手工期望，5 行已知 C3 缺口剔除，明细见 §9）。
@@ -11467,3 +11467,94 @@ manifest 按 CI 的 `ci/emit-manifest` 产物装行（890 行，`added=0 removed
 - 构建坑：`src\backend\detail\util\*.inc` 属 PCH 内容，Ninja 不跟踪，改类成员后必须先顶
   `.build\CMakeFiles\vb6c3-cgen.dir\cmake_pch.hxx` 的时间戳再 `build.bat`，否则报
   `C2039: 不是 CCodeGen 的成员`。
+
+## §11.175 赋值站的语句级中止：判据落在「被调方有没有处理器」（第一百九十二刀）
+
+### 一、问题
+
+`On Error Resume Next` 下，一条赋值语句里的 raise 会不会让**目标那一步不写**，此前只看
+`vb6_ErrSerial()` 变没变（第七十九/八十四/八十五刀）。那一套对「raise 在本语句自己的求值里」
+成立，对「raise 在被调方里」却分不开两族：
+
+```
+x = FEscape()      ' 被调方没有 On Error  ⇒ raise 爬出去  ⇒ 目标不动
+x = FNest()        ' 被调方 Resume Next 吞掉 ⇒ 语句照常完成 ⇒ 目标该写
+```
+
+两族的 `Err` 序号**都会变**，所以老判据只能二选一：不开闸则第一族写错，开闸则第二族写错
+（旧注释里 `fdrawstate_x86` 那次翻红就是后者）。
+
+### 二、真机读数（VB6Mini `/make` 实跑，`.temp/k192p/P218.bas` / `P219.bas`）
+
+| 格 | 形状 | 真机 |
+|---|---|---|
+| D1 / F1 | 整型目标 `n = FEscape()` | **目标不动**，`err=11` |
+| D3 | Variant 目标 `v = FEscape()` | 目标不动，`err=11` |
+| D5 / F3 | `n = FEscape() + 1` | 目标不动 |
+| D6 / F10 | 同一行两条语句 | 第一条中止、第二条照跑（`n=0`） |
+| D7 | 数组元素 `arr(0) = FEscape()` | 目标不动 |
+| D8 / F4 | 模块级 `mPub = FEscape()` | 目标不动 |
+| D9 | `x = CLng("abc")`（Variant 目标） | 目标不动，`err=13` |
+| D11 / F6 | `n = Abs(FEscape())` | 目标不动 |
+| D13 / F8 | 两跳（外层也无处理器） | 目标不动 |
+| F9 | Double 目标 | 目标不动 |
+| **D2 / F2** | **被调方 `On Error Resume Next`，不清 Err** | **`n=5`，语句照常完成** |
+| **D10 / F7** | **被调方自带 `On Error GoTo`** | **`n=3`，`err=0`** |
+
+### 三、判据与改法
+
+判据是**静态**的：右值树里存在一枚直接调用，被调名在**本模块**过程表里、且那个过程体内
+没有 `OnErrorStmt`/`ResumeStmt` ⇒ 这次 raise 必然爬出被调方。
+
+- `procHasErrHandler_`（过程名 → 是否自带处理器）在 `generate` 的 `state_scan` 段由
+  `scanProcErrHandlers` 一次建好；`hasOnErrorInStmts` 此前只有定义、没有调用点。
+- `exprCallsUnprotectedProc` 递归扫右值树（调用/成员读/二元/一元）。
+- 赋值站据此开闸，目标档只开到**整型 / Double / String**；整型与 Double 另发临时量：
+
+```c
+const int32_t _e0 = vb6_ErrSerial();
+int32_t _av1 = (_e0 == vb6_ErrSerial()) ? ((n * vb6_Factorial(n - 1))) : (int32_t)0;
+if (_e0 == vb6_ErrSerial()) n = _av1;
+```
+
+没有临时量时守卫在右值**求值之前**求值，raise 之后照样会把被调方交回的值写进目标。
+
+查不到名字的（内建 / 跨模块 / 晚绑定 / 下标）一律不开闸 —— 宽一点就是把 F2/F7 写错。
+
+### 四、读数（`tests/b200_assign_abort`，x64 与 x86 逐字相同，且与真机一致）
+
+```
+F1 n=-1 err=11      F2 n=5 err=11       F3 n=-1 err=11     F4 mPub=-1 err=11
+F6 n=-1 err=11      F7 n=3 err=0        F8 n=-1 err=11     F9 d=-1 err=11
+F10 n=0 err=11
+```
+
+改前 F1/F3/F4/F6/F8/F9/F10 七格全错。
+
+### 五、本刀明示不开口的三处（读数已留）
+
+- **数组元素目标** `arr(0) = FEscape()`：真机 `-1`，本仓仍写 `9` —— 走的是
+  `vb6_PA_Set<kind>` 的另一条出口，临时量要按元素档另造。
+- **Variant 目标** `v = FEscape()`：真机 `-1`，本仓仍写 `9` —— `(VARIANT)0` 不是合法
+  初始化，临时量形要单独设计。
+- **String↔String**：`s = FSEscape()`（String 函数 raise → String 目标）在 VB6Mini 上
+  **不可判** —— 一次静默终止整个 Sub、一次把目标读成 `"V4 s"`（`.temp/k192p/P218b/P218c`），
+  属判具缺陷，口径待另立。
+
+### 六、随刀修的神谕与清单
+
+- `strleak_emitc_move` 的一条针原本钉 `AssignMove(&(*o), vb6_MakeTag(...))` 一行；同一处
+  现在是「先算临时量、序号没变才移动」，针改成钉守卫与移动两步，不钉 `_avN` 编号。
+- manifest 按 CI `45791318007` 的产物装行：`changed=59 added=2 removed=0`，复检
+  892/892 相同（`diffEntries=0`），没有 `-Bless`。59 份存量变化的归因抽了
+  `test_str_alias` / `m6_math` 两枚当场发码，新增行只有守卫 + 临时量这一形。
+
+### 七、记账与一个新的构建坑
+
+- 探针：`.temp/k192p/P218.bas`（Variant 目标族）、`P219.bas`（有类型目标族）。
+- 夹具：`tests/b200_assign_abort`（F1–F10，`Debug.Print` 走 stdout）。
+- 代码 `df25812e`；清单 `35f0b5ce`；GA `45793452617` 23/23 全绿。
+- **构建坑（新）**：`cgen_state.inc` 属 PCH 内容，而工程有**两个** PCH ——
+  `vb6c3-cgen.dir` 与 `c3.dir`。只顶前者时 driver 那几个 TU 不重编，仍按旧 `CCodeGen`
+  布局跑新库，表现为 `--emit-c` 直接 0xC0000005（本机实测，改前同一份文件能编过）。
+  加类成员后要一并顶掉 `c3.dir\cmake_pch.hxx` 或把 `src\driver\*.cpp` 全部摸一遍。
