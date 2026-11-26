@@ -33,6 +33,8 @@
 #       改成非空即认)。
 #   R12 §11.184: 装箱站 (dateElemVariantBox) 同口径 —— `size() != 1` 不许回来。
 #   R13 §11.184: b209 夹具两台在跑。
+#   R14 §11.187: 赋值站那条腿认得 UDT 成员数组 (问 inferUdtFieldVb6Type, 且带 isArray 条件)。
+#   R15 §11.187: b211 夹具两台在跑。
 # ============================================================
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -136,6 +138,16 @@ if ($r12new -ne 1) { $fail += ('R12 boxing leg rank-free gate = ' + $r12new + ' 
 # R13: b209 夹具两台在跑。
 $r13cells = N '\$Tests\\b209_nd_date_elem\\B209Res\.vbp' $T
 if ($r13cells -ne 2) { $fail += ('R13 b209 run cells = ' + $r13cells + ' (want 2 = x64 + x86)') }
+# R14 (§11.187 第二百零四刀): 赋值站那条腿要认得 **UDT 成员数组** 那一形 ——
+# 判据只问 inferUdtFieldVb6Type (与 Boolean/Currency 元素两问同一份), 不新开表;
+# 且仍然要求 outIsArray (同一字段名也可能是标量 Date)。
+$r14member = N 'inferUdtFieldVb6Type\(ic183\.callee\.get\(\), &isArr187\) == Vb6Type::Date' $A
+$r14arr = N '&& isArr187\)' $A
+if ($r14member -ne 1) { $fail += ('R14 UDT-member Date element leg = ' + $r14member + ' (want 1)') }
+if ($r14arr -ne 1) { $fail += ('R14 member leg still asks isArray = ' + $r14arr + ' (want 1)') }
+# R15: b211 夹具两台在跑。
+$r15cells = N '\$Tests\\b211_udt_date_elem\\B211Res\.vbp' $T
+if ($r15cells -ne 2) { $fail += ('R15 b211 run cells = ' + $r15cells + ' (want 2 = x64 + x86)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -143,5 +155,5 @@ if ($fail.Count -gt 0) {
 }
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
-    ' nd-cells=' + $r13cells)
+    ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells)
 exit 0

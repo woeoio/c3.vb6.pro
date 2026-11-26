@@ -358,12 +358,25 @@
             if (!dateTarget183 && node.target
                 && node.target->kind == ASTNodeKind::IndexOrCallExpr) {
                 const auto& ic183 = static_cast<const IndexOrCallExpr&>(*node.target);
-                if (ic183.callee && ic183.callee->kind == ASTNodeKind::IdentifierExpr
-                    && !ic183.positional.empty()) {
-                    auto it183 = arrayElemTypes_.find(Symbol::toLower(
-                        static_cast<const IdentifierExpr&>(*ic183.callee).name));
-                    if (it183 != arrayElemTypes_.end() && it183->second == Vb6Type::Date)
-                        dateTarget183 = true;
+                if (ic183.callee && !ic183.positional.empty()) {
+                    if (ic183.callee->kind == ASTNodeKind::IdentifierExpr) {
+                        auto it183 = arrayElemTypes_.find(Symbol::toLower(
+                            static_cast<const IdentifierExpr&>(*ic183.callee).name));
+                        if (it183 != arrayElemTypes_.end() && it183->second == Vb6Type::Date)
+                            dateTarget183 = true;
+                    } else if (ic183.callee->kind == ASTNodeKind::MemberAccessExpr
+                               || ic183.callee->kind == ASTNodeKind::WithMemberExpr) {
+                        // §11.187 (第二百零四刀): UDT 成员数组那一形 —— `u.dt(0) = "2021-03-04"`
+                        // 的左值是 VB6_SA_AT(double, u.dt, 0), 但 callee 是成员访问而非裸名,
+                        // 上一刀只认 IdentifierExpr ⇒ 仍然裸 BSTR 进 double ⇒ C2440 (真机
+                        // `.temp/k204p/p244.txt` 八条里 U1..U6 六处)。元素档不新开表: 问
+                        // inferUdtFieldVb6Type (与数组元素 Boolean=Boolean / Currency=Currency
+                        // 那两问同一份), 它同时告诉这格是不是数组本体。秩不参与判据 (同 §11.184)。
+                        bool isArr187 = false;
+                        if (inferUdtFieldVb6Type(ic183.callee.get(), &isArr187) == Vb6Type::Date
+                            && isArr187)
+                            dateTarget183 = true;
+                    }
                 }
             }
             if (dateTarget183 && inferExprType(*node.value) == Vb6Type::String) {

@@ -13292,6 +13292,21 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "T4 2d-sta vt=7 tn=Date")
     Test-Vbp 'b209_nd_date_elem' "$Tests\b209_nd_date_elem\B209Res.vbp" $b209Needles
     Test-Vbp 'b209_nd_date_elem_x86' "$Tests\b209_nd_date_elem\B209Res.vbp" $b209Needles -Arch "x86"
+    # §11.187 第二百零四刀: Date 数组住在 UDT 里那一形 (`u.dt(0) = "2021-03-04"`)。
+    # 真机 .temp/k204p/p244.txt (VB6Mini /make) 八行: 1D/2D 成员元素都按日期折算
+    # (44259/44259/44687/44259 err=0)、非法文本抛 13 保住旧值 (45000 / 0)、
+    # VarType 两档全答 7/Date。修前六个赋值点全是裸 BSTR 进 double 槽 (cl C2440, 无 exe)。
+    $b211Needles = @(
+    "U1 d=44259 err=0",
+    "U2 d=44259 err=0",
+    "U3 d=44687 err=0",
+    "U4 d=44259 err=0",
+    "U5 d=45000 err=13",
+    "U6 d=0 err=13",
+    "U7 vt=7 tn=Date",
+    "U8 vt=7 tn=Date")
+    Test-Vbp 'b211_udt_date_elem' "$Tests\b211_udt_date_elem\B211Res.vbp" $b211Needles
+    Test-Vbp 'b211_udt_date_elem_x86' "$Tests\b211_udt_date_elem\B211Res.vbp" $b211Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
