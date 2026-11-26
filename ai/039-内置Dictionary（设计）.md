@@ -11162,3 +11162,134 @@ x64 与 x86 两台读数逐字相同（19 行）。
 2. **科学记数分支的尾数进位**（`round(mantissa * factor)`）未动，见上；
 3. **`Format` 多组带小数点的整数区**、**通篇无占位符的格式串**、**Decimal × Currency**
    三条（§11.169 / §11.168 / §11.166 在册）原样保留。
+
+## §11.172 `IsNumeric` 认 Empty 为数值（第一百八十九刀）
+
+§11.171 收口后，按语料里剩下的调用次数排下一个候选（`StrComp` 89 / `FormatDateTime` 63 /
+`InStrRev` 62 / `FormatNumber` 36 / `IsNumeric` 33 / `FormatPercent` 19 / `FormatCurrency` 17 /
+`StrConv` 14），先量了字符串两家与 `Chr`（结果都不能做刀，见末尾在册），再量判定族
+`IsNumeric` / `IsDate`。判定族 66 格里只有 2 格错，且是同一个根因。
+
+### 现象
+
+| 格 | 写法 | 改前 C3 | 真 VB6 |
+|---|---|---|---|
+| E1 | `IsNumeric(Empty)` | `False` | `True` |
+| V1 | `v = Empty` 后 `IsNumeric(v)` | `False` | `True` |
+
+### 真机读数（`.temp/k189p` P214 42 格 + P215 24 格）
+
+文本档 30 格（N1..N30）里已经全对，值得记下来的是几条**边界**：
+
+| 写法 | 真 VB6 | 读法 |
+|---|---|---|
+| `" 1 "` / `"1 "` / `" 1"` | True | 两侧空白容 |
+| `"1 2"` | False | 中间空白不容 |
+| `"1e3"` / `"1E+3"` / `"1d3"` | True | D 指数也认 |
+| `"1e"` | False | 指数没数字不算 |
+| `"&H10"` / `"&O17"` | True | 进制前缀认 |
+| `"0x10"` | False | C 风格不认 |
+| `"1,000"` / `"1,5"` | True | 千分位 / 小数逗号都认 |
+| `"$1"` / `"1%"` | False | 货币符号与百分号**不认** |
+| `"(1)"` | True | 括号负数是数 |
+| `"1.2.3"` / `"--1"` | False | |
+| `""` / `" "` | False | 空串不是数（与 Empty 不同，见下） |
+
+日期档 12 格（D1..D12）全对：`"2026-13-01"` / `"2026-02-30"` 都是 False（月日越界），
+`"13:00"` 是 True（纯时间也是日期），`IsDate(0)` 是 False（数值不当日期）。
+
+变体槽 24 格（E1..E16 / V1..V8）里，除 E1/V1 外全对，含 `IsNumeric(CCur(1.5))`、
+`IsNumeric(CDec(1.5))`、`IsNumeric(CByte(7))`、`IsNumeric(CSng(1.5))` 四档子类型都是 True，
+`IsNumeric(Null)` / `IsDate(Null)` / `IsDate(Empty)` 都是 False。
+
+### 口径
+
+**Empty 是数，Null 不是。** Empty 的缺省值就是 0（数值语境里与 0 同用），所以
+`IsNumeric(Empty)` 真；Null 是"没有值"，`IsNumeric(Null)` 与 `IsDate(Null)` 都假。
+同一个 Empty 在日期那一问上是假（`IsDate(Empty)` = False）——
+**这一族问的是"里面这枚值折不折得出来"，不是"Empty 折算成什么"**。
+
+### 改法（一行，加一档）
+
+`src/rtl/core/vb6rtl/vb6rtl_conv.c` 的 `vb6_IsNumeric` switch 补：
+
+```c
+case vb6_vtEmpty:
+    return -1;
+```
+
+旁边的 `Decimal` / `VT_I8` / `VT_I1` 几档各自都带着"问的是里面是不是数"的注释，
+这一档只是把 Empty 归进同一句；判定的整个面（文本出口 `vb6_IsNumericText`、
+`vb6_DateCanParse` 两条权威）一个字没动。
+
+### 夹具 `tests/b197_ispred_variant`
+
+65 格：29 格文本数值档 + 12 格日期档 + 16 格字面量/子类型档 + 8 格整只变体槽档。
+**改前只有 E1/V1 两格红，另外 64 格逐字相同** —— 这 64 格就是"没有误伤"的证据，
+也是这一刀能只改一行却仍然放心推的基础。x64 与 x86 两台读数逐字相同（67 行）。
+
+### 门
+
+`check_ispred_text.ps1`（账 #418 的判定族哨兵）加 **R6**：VT_EMPTY 那两行仍在、
+`b197_ispred_variant` 在 `run_tests.ps1` 里登记两台。本机 21 门 rc=0：
+`ispred_text`(R1..R6)、`manifest_coverage`(886)、`rtl_embedded`（exe sha `a3b0784827bc`）、
+`rtl_naked_names`、`rtl_proto_arity`（1798 对）、`conv_strict_parse`、`builtin_slot_returns`(R1..R17)、
+`currency_round_station`(R1..R19)、`format_ampm`、`format_date_tokens`、`b437`、`b439`、
+`formatdatetime_args`、`format_date_arg_arm`、`test_helper_integrity`、`vbp_fixture_census`、
+`fixture_timer_close`、`no_locale_needles`、`ps51_joinpath`、`static_sentinel_registration`、
+`emit_c_artifact_caliber`。
+
+⚠ 顺带记一条门的坑：R6 头一版用裸名 `b197_ispred_variant` 计数，得 4 而不是 2 ——
+因为每个 `Test-Vbp` 行里名字出现两次（名字实参 + 路径）。判据要连 `Test-Vbp '` 一起匹配。
+
+### 回归
+
+上一刀六个夹具（`b192`/`b193`/`b194`/`b195`/`b196`/`b437`/`b439`）读数未动；
+清单 886 行（+2 = 新夹具两份输入），本机复算 `onlyNew = 2` / `changed = 0`，六行已知机器差未动。
+
+### 在册（本刀量出、都不在本刀范围）
+
+1. **`StrConv` 的字节重解释两档不能拿 VB6Mini 当判据**。`P213` 的读数自相矛盾：
+   `StrConv("ABC", vbFromUnicode)` 交出一个 `?`（len 1、码 63），
+   而 `StrConv(StrConv("ABC", vbFromUnicode), vbUnicode)` 又还原成 `ABC`（len 3）。
+   根因是 **C3 的 `String` 是 Unicode**，`vbUnicode` / `vbFromUnicode` 这两档的真实口径
+   与 VB 的 ANSI 语义本来就不同 —— 这两档的判据以 **TwinBASIC** 为准（TB 兼容 VB6 代码，
+   差别正在字符串类型上）。探针已备：`.temp/k189p/TB_StrConv.bas`（VB6 语法，可直接在 TB 里跑，
+   逐格打 `Len` 与 `AscW` 码点）。等 TB 读数回来再开工；
+2. **C3 的日期字面量解析不收纯时间形**：`IsDate(#12:00:00 PM#)` 报 VB2004/VB2001 整份编不过。
+   与判定面无关，是解析层的缺口（本刀夹具改用 `CDate("12:00:00")` 绕开）；
+3. **`Chr` 越界不可当判据**（§11.171 在册第一条同一条）：`Chr(-1)`→`ÿ`、`Chr(300)`→1、
+   `Chr(-257)`→63 三枚互不相容，是代码页有损转换的痕迹；
+4. **语句中止**（§11.171 在册第一条）本刀又推进一步：§11.80 的闸门（`stmtCallArgSerial_`
+   逐实参提升 + 序号比较）**机制已经存在**，缺的只是触发条件 —— 现在只有"实参含晚绑定 COM 读"
+   才 fire；通用实参路径（`cgen_expr_call_arg_emit.inc`）里根本没有提升机制，要覆盖得把
+   §11.80 那套逻辑复刻到四处实参发放置，还要处理 `Variant` 形参的装箱与所有权。
+   另外 §83 的注释已经写明这类放宽的真实拦路虎：`vb6_ErrSerial()` 分不清
+   "错误往外爬"与"被调方内部 `On Error Resume Next` 吃掉"，**得先给 RTL 一枚
+   「错误是否还在往外爬」的信号**。下一刀从这里起；
+5. **`StrComp(Null, …)`** 仍答 `False` + Err 94（真机 `Null`）—— 需要"Variant 槽 + Null 直通"
+   的出口形状（同 §11.171 在册第二条）。
+
+### 收口过程中的两处修正（第一百八十九刀第二版）
+
+第一版推上去 GA 红了三个 job（Tests (compile #2) / Tests (vbp #3) / Tests (vbp #4)），
+都不是判定逻辑错，而是**两处口径**：
+
+1. **A17 的计数窗口太宽**（check_sa_access.ps1）。那一条的本意是「TypeName 的标量名单只许一份」，
+   做法却是全文件数 case vb6_vtEmpty: —— 只因当时全文件只有 TypeName 一处写它。
+   本刀让 tEmpty 进 b6_IsNumeric 的数值族（**合法的第二处**：同一个值被两个不相干的
+   问题各问一次），全文件计数就把那处算成「名单被抄了两份」。窗口收进 b6_TypeNameScalar
+   的函数体（连函数体都找不到时本身也判红），本地 c=0，收口行里 TypeName list 1 scalar 2
+   一位没动。这是**门的口径修，不是放宽**：名单仍只许一份，只是不再把别的函数对同一个值的
+   合法提问算进这张名单。
+
+2. **N14 是 locale 依赖格，不该进跨机夹具**。IsNumeric("$1") 的真值跟机器的货币符号走：
+   本机 zh-CN（¥）真机答 False，CI 那台 en-US（$）答 True —— 两台机器各自都是对的，
+   差的是 locale 不是实现。把它钉进夹具就是把环境当回归信号（正是 check_no_locale_needles
+   要拦的形状；它能过，是因为这一格"看起来"只是布尔读数）。处理：N14 撤出夹具
+   （66 格 -> 65 格），两个真机读数记在这里 —— **zh-CN ¥ 下 False，en-US $ 下 True**。
+   其余 63 格改前就已逐字相同，仍然是「没有误伤」的证人。
+
+撤格之后两台（x64/x86）各 66 行、逐条对针全中且无多余行；
+check_sa_access / check_no_locale_needles / check_vbp_fixture_census /
+check_test_helper_integrity 四条闸本地全 c=0。
