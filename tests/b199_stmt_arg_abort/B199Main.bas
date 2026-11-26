@@ -38,7 +38,7 @@ End Function
 ' 两个 ByVal 形参: 被调方一旦进入就留痕
 Private Sub Take2(ByVal a As Long, ByVal b As Long)
     hits = hits + 1000
-    Print #1, "    NOTE take2-ran"
+    Debug.Print "    NOTE take2-ran"
 End Sub
 
 ' ByRef 形参: 写回必须落到调用方的变量上
@@ -47,7 +47,6 @@ Private Sub Bump(ByRef n As Long, ByVal t As Long)
 End Sub
 
 Public Sub Main()
-    Open App.Path & "\b199.txt" For Output As #1
     dv = 0
     Dim x As Long
     Dim e As Long
@@ -58,26 +57,25 @@ Public Sub Main()
     hits = 0: Err.Clear
     Take2 FEscape(), LogTag(2)
     e = Err.Number: Err.Clear
-    Print #1, "B1=[" & hits & "," & e & "]"
+    Debug.Print "B1=[" & hits & "," & e & "]"
 
     ' B2: 坏实参在后 ⇒ 之前的实参照常求值恰好一次
     hits = 0: Err.Clear
     Take2 LogTag(1), FEscape()
     e = Err.Number: Err.Clear
-    Print #1, "B2=[" & hits & "," & e & "]"
+    Debug.Print "B2=[" & hits & "," & e & "]"
 
     ' B3: 无 raise ⇒ ByRef 写回照旧 (提升临时量不许吃掉写回)
     x = 5: hits = 0: Err.Clear
     Bump x, LogTag(3)
     e = Err.Number: Err.Clear
-    Print #1, "B3=[" & x & "," & hits & "," & e & "]"
+    Debug.Print "B3=[" & x & "," & hits & "," & e & "]"
 
     ' B4: ByRef 在前、坏实参在后 ⇒ 整句中止, 目标不动
     x = 5: hits = 0: Err.Clear
     Bump x, FEscape()
     e = Err.Number: Err.Clear
-    Print #1, "B4=[" & x & "," & hits & "," & e & "]"
+    Debug.Print "B4=[" & x & "," & hits & "," & e & "]"
 
-    Print #1, "B199-DONE"
-    Close #1
+    Debug.Print "B199-DONE"
 End Sub
