@@ -5556,7 +5556,7 @@ if ($Category -in @("all", "run", "bas")) {
     Test-EmitcShape "b164_slot_store_shape" @("$Tests\test_fe_slot_leak.bas") @(
         'vb6_VariantClear(&e);',
         'e = vb6_VariantFromStackVARIANT(&_fe_var_',   # §11.103: 下标是临时量计数器, 全局 Set 站点占号后会移 (实测 _fe_var_0 -> _fe_var_2)
-        'vb6_VariantAssign(&e, vb6_VariantFromValue(VB6_SA_AT(BSTR, gArr, _fe_i5)));',
+        'vb6_VariantAssign(&e, vb6_VariantFromValue(VB6_SA_AT(BSTR, gArr, _fe_i6)));',
         'vb6_VariantAssign(&keep, vb6_VariantFromValue(e));'
     )
     # 账 #305 §B164 形⑤ 站③ (第一百八十四刀): 显式 `Let <变体> = …`。目标是不是 Variant 槽
@@ -5901,7 +5901,7 @@ if ($Category -in @("all", "run", "bas")) {
         'vb6_SaveSetting(NB_APP, vb6_BSTR_FromStr(L"Sec"), sKey, vb6_CStrLong(nSet))',
         'vb6_SaveSetting(NB_APP, vb6_CStrLong(nSec), sKey, vb6_CStrLong(nLen))',
         'vb6_GetAllSettings(NB_APP, vb6_CStrLong(nSec))',
-        'vb6_DeleteSetting(NB_APP, vb6_CStrLong(nSec), sKey)',
+        'vb6_DeleteSetting(_ag1, _ag2, sKey)',
         'vb6_Format(vb6_VariantDouble(1234.567), vb6_CStrLong(nForm)',
         # 第 9/10 枚 = 同一句问句的**反面**: 省略掉的标题位不许折 (真语料 ppProgressCircular.pag:351
         # `InputBox("...", , 100)` —— 占位 0 折成 "0" 就把「没写标题」变成了标题 "0")。
@@ -8425,18 +8425,18 @@ if ($Category -in @("all", "run", "vbp")) {
         # 账 #465 §B164: MsgBox 那一格现造的带权临时量现在**提了名**（BSTR _own_N = ...; 实参换成
         # _own_N; 语句末按档收回）—— 转换本身（vb6_CStrLong / vb6_CStrDbl / vb6_CStrBool）没变，
         # 只是落进了临时量的声明里 ⇒ 钉的形状改成「声明 + 引用」两枚。
-        'BSTR _own_2 = vb6_CStrLong(vb6_Len(_own_1));',   # Len 整数值 (int32_t)
+        'if (_eg0 == vb6_ErrSerial()) { _ag1 = vb6_CStrLong(vb6_Len(_own_1)); }',   # Len 整数值: 实参可 raise ⇒ 先提 _ag1
+        'vb6_MsgBox1(_ag1)',
+        'BSTR _own_2 = vb6_CStrLong(n);',         # 整值变量
         'vb6_MsgBox1(_own_2)',
-        'BSTR _own_3 = vb6_CStrLong(n);',         # 整值变量
+        'BSTR _own_3 = vb6_CStrLong(123);',       # 整值字面量
         'vb6_MsgBox1(_own_3)',
-        'BSTR _own_4 = vb6_CStrLong(123);',       # 整值字面量
+        'BSTR _own_4 = vb6_CStrLong((n + 1));',   # 整值表达式
         'vb6_MsgBox1(_own_4)',
-        'BSTR _own_5 = vb6_CStrLong((n + 1));',   # 整值表达式
+        'BSTR _own_5 = vb6_CStrDbl(d);',          # 浮点
         'vb6_MsgBox1(_own_5)',
-        'BSTR _own_6 = vb6_CStrDbl(d);',          # 浮点
+        'BSTR _own_6 = vb6_CStrBool(b);',         # 布尔
         'vb6_MsgBox1(_own_6)',
-        'BSTR _own_7 = vb6_CStrBool(b);',         # 布尔
-        'vb6_MsgBox1(_own_7)',
         'vb6_MsgBox1(s)'                        # 标识符: 保持原样, 不多包装
     )
     Test-EmitcAbsent "mb_emitc_no_bare_num" @("$Tests\msgbox_num.bas") @(
@@ -8456,7 +8456,7 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_MsgBox(s, sty, ttl, NULL, 0)',       # 三参 → 补到五参
         'vb6_MsgBox(s, sty, ttl, hlp, 0)',        # 四参 → 补到五参
         'vb6_MsgBox(s, sty, ttl, hlp, ctx)',      # 五参 → 原样
-        'BSTR _own_8 = vb6_VariantToString(v);'   # helpfile 位是 Variant ⇒ 走转换, 不裸进 BSTR 槽
+        'BSTR _own_7 = vb6_VariantToString(v);'   # helpfile 位是 Variant ⇒ 走转换, 不裸进 BSTR 槽
     )
     Test-EmitcAbsent "mb_emitc_no_overpass" @("$Tests\msgbox_num.bas") @(
         'vb6_MsgBox(s, sty, NULL)',        # 改前: 两参只补到三参
@@ -8874,11 +8874,11 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-EmitcShape "b252_varslot2_shape" @("$Tests\test_late_varslot2.bas") @(
         'vb6_VARIANT _vs0 = vb6_VariantEmpty();',
         'if (_e0 == vb6_ErrSerial()) { _vs0 = vb6_VariantFromValue((1 + vb6_ComGetIntProp(o, L"NoSuchProperty"))); }',
-        'if (_e2 == vb6_ErrSerial()) { vb6_VariantAssign(&VB6_SA_AT(vb6_VARIANT, va, 0), _vs2); }',
-        'vb6_VariantClear(&_vs2);',
-        'if (_e3 == vb6_ErrSerial()) { vb6_VariantAssign(&uv.f, _vs3); }',
-        'vb6_VariantClear(&_vs3);',
-        'if (_e4 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _vs4; }'
+        'if (_e2 == vb6_ErrSerial()) { vb6_VariantAssign(&VB6_SA_AT(vb6_VARIANT, va, 0), _vs10); }',
+        'vb6_VariantClear(&_vs10);',
+        'if (_e3 == vb6_ErrSerial()) { vb6_VariantAssign(&uv.f, _vs15); }',
+        'vb6_VariantClear(&_vs15);',
+        'if (_e4 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _vs20; }'
     )
     # 反面针: 修复前那一形 (表达式内部/数组元素目标都直接写目标)。
     Test-EmitcAbsent "b252_varslot2_lesion" @("$Tests\test_late_varslot2.bas") @(
@@ -8893,8 +8893,8 @@ if ($Category -in @("all", "run", "vbp")) {
         'if (_e0 == vb6_ErrSerial()) { _vs0 = vb6_VariantFromComResult(vb6_ComCall(o, L"NoSuchProperty", NULL, 0)); }',
         'if (_e0 == vb6_ErrSerial()) { vb6_VariantAssign(&(*w), _vs0); }',
         'vb6_VariantClear(&_vs0);',
-        'if (_e1 == vb6_ErrSerial()) { _vs1 = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty")); }',
-        'if (_e1 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _vs1; }'
+        'if (_e1 == vb6_ErrSerial()) { _vs5 = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty")); }',
+        'if (_e1 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _vs5; }'
     )
     # 反面针: 修复前那两形（Set 直接写目标 / ByRef 形参目标被清后裸赋）。
     Test-EmitcAbsent "b253_setvar_lesion" @("$Tests\test_late_setvar.bas") @(
@@ -8999,8 +8999,8 @@ if ($Category -in @("all", "run", "vbp")) {
         'if (_eg0 == vb6_ErrSerial()) { _ag1 = vb6_VariantToLong(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))); }',
         'vb6_GTouch(_ag1);',
         'if (_eg2 == vb6_ErrSerial()) { _ag3 = vb6_VariantToLong(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))); }',
-        'if (_eg4 == vb6_ErrSerial()) { _ag5 = vb6_GFn(); }',
-        'vb6_GTouch2(_ag5, _ag6);'
+        'if (_eg2 == vb6_ErrSerial()) { _ag4 = vb6_GFn(); }',
+        'vb6_GTouch2(_ag3, _ag4);'
     )
     # 反面针: 修复前那三行原样（实参直接内联、报错后照旧把 0 喂给被调）
     Test-EmitcAbsent "b102_late_arg_lesion" @("$Tests\test_late_arg.bas") @(
@@ -10674,9 +10674,9 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_ivref_IK174* vb6_ivref_IK174_from_class(void* instance, const char* className);',
         'if (_stricmp(className, "K174Alpha") == 0) return (vb6_ivref_IK174*)vb6_iv_thin_of_K174Alpha(instance);',
         'if (_stricmp(className, "K174Beta") == 0) return (vb6_ivref_IK174*)vb6_iv_thin_of_K174Beta(instance);',
-        'void* _vb6_fe_box_0 = vb6_ComUnpackObject(&_fe_var_0);',
-        'const char* _vb6_fe_name_0 = vb6_ComObject_ClassNameA(_vb6_fe_box_0);',
-        'o = vb6_ivref_IK174_from_class(_vb6_fe_name_0 ? vb6_ComObject_GetInstance(_vb6_fe_box_0) : (void*)0, _vb6_fe_name_0);',
+        'void* _vb6_fe_box_3 = vb6_ComUnpackObject(&_fe_var_3);',
+        'const char* _vb6_fe_name_3 = vb6_ComObject_ClassNameA(_vb6_fe_box_3);',
+        'o = vb6_ivref_IK174_from_class(_vb6_fe_name_3 ? vb6_ComObject_GetInstance(_vb6_fe_box_3) : (void*)0, _vb6_fe_name_3);',
         'if (o) o->vt->AddRef(o);')
     Test-EmitcAbsent "k174_vieweach_variant_store_gone" @("$Tests\k174_vieweach\K174.vbp") @(
         'o = vb6_VariantFromStackVARIANT(&_fe_var_0);',
@@ -10790,10 +10790,10 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-EmitcShape "k3100_ivref_arg_shape" @("$Tests\k3100_ivref_arg\K3100.vbp") @(
         'vb6_mdl3100_Take(&vb6_argtmp_vb6_ivref_IK3100_',
         'vb6_mdl3100_TakeVal((vb6_ivref_IK3100*)&((c)->__iv_IK3100));',
-        'vb6_argtmp_vb6_ivref_IK3100_1 = ((c) ? &(c)->__iv_IK3100 : NULL);',
-        'vb6_argtmp_vb6_ivref_IK3100_3 = ((n) ? &(n)->__iv_IK3100 : NULL);',
+        'vb6_argtmp_vb6_ivref_IK3100_2 = ((c) ? &(c)->__iv_IK3100 : NULL);',
+        'vb6_argtmp_vb6_ivref_IK3100_4 = ((n) ? &(n)->__iv_IK3100 : NULL);',
         'if (vb6_argtmp_vb6_ivref_IK3100_2) vb6_argtmp_vb6_ivref_IK3100_2->vt->AddRef(vb6_argtmp_vb6_ivref_IK3100_2);',
-        'vb6_argtmp_vb6_ivref_IK3100_4 = &((vb6_cls_H3100_New()))->__iv_IK3100;'
+        'vb6_argtmp_vb6_ivref_IK3100_6 = &((vb6_cls_H3100_New()))->__iv_IK3100;'
     )
     Test-EmitcAbsent "k3100_ivref_arg_lesion" @("$Tests\k3100_ivref_arg\K3100.vbp") @(
         '(vb6_ivref_IK3100*)&((&vb6_argtmp_',
@@ -13119,7 +13119,7 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     Test-EmitcShape 'b448_iface_view_consumers' @("$Tests\b448_iface_ret\B448.vbp") @(
         'vb6_iv_iid_IB448',
         '->vt->twice(',
-        'vb6_Main_TakeByVal(vb6_argtmp_vb6_ivref_IB448_4);',
+        'vb6_Main_TakeByVal(vb6_argtmp_vb6_ivref_IB448_9);',
         # 账 #305 §B218 (甲) 第一百四十四刀 (形A): W24 那一格的实参 c24 是本过程的局部工程类变量 =
         #   **持有自己那一枚引用**的槽 ⇒ 地址原样交出，被调方那发 Set 当场落回调用者这一格并退旧。
         #   编号从 5 移到 4 = 这一站从此不铸临时量 (tempCounter_ 少切一刀)，站点顺序一字未动。
@@ -13149,8 +13149,8 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     #   W24 = 同一枚借来的实例分别走 ByVal 与 ByRef: hits=2 / term=1 两台修前后一字相同 = 反面证人;
     #   W25 = 视图那一档 (与 P3 同形) 四枚移交视图 term=0 → 4。两台 (x64 / x86) 读数一字相同。
     Test-EmitcShape 'b448_arg_station_returns_transferred_ref' @("$Tests\b448_iface_ret\B448.vbp") @(
-        'if (vb6_argtmp_vb6_cls_CB448_0) vb6_cls_CB448_Release(vb6_argtmp_vb6_cls_CB448_0);  /* 账 #305 (甲) 腿⑤: 实参那一站交回 */',
-        'if (vb6_argtmp_vb6_ivref_IB448_4) vb6_argtmp_vb6_ivref_IB448_4->vt->Release(vb6_argtmp_vb6_ivref_IB448_4);  /* 账 #305 (甲) 腿⑤: 实参那一站交回 */')
+        'if (vb6_argtmp_vb6_cls_CB448_1) vb6_cls_CB448_Release(vb6_argtmp_vb6_cls_CB448_1);  /* 账 #305 (甲) 腿⑤: 实参那一站交回 */',
+        'if (vb6_argtmp_vb6_ivref_IB448_9) vb6_argtmp_vb6_ivref_IB448_9->vt->Release(vb6_argtmp_vb6_ivref_IB448_9);  /* 账 #305 (甲) 腿⑤: 实参那一站交回 */')
     Test-EmitcAbsent 'b448_arg_station_never_returns_a_borrowed_instance' @(
         "$Tests\b448_iface_ret\B448.vbp") @(
         'if (c24) vb6_cls_CB448_Release(c24);  /* 账 #305 (甲) 腿⑤',

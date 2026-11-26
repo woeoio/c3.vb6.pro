@@ -757,11 +757,20 @@
         // 每枚求值前比一次序号 —— 真机 I1（gN=0）/ I2（gN=1）量的就是这个顺序。
         // 地址实参 (&x) 求值无副作用也不会报错，直接留在调用里。
         // 第一百九十一刀 (§11.174): 上界改取**最后一枚可 raise** 的实参 (stmtCallArgLastRaise_),
-        // 并且 ByRef 实参一律不提升 —— 它本来就是地址表达式 (`&x`), 求值无副作用、不会 raise,
-        // 提升成临时量反而会把被调方的写回弄丢 (写进了 `_agN` 而不是 `x`)。
+        // 并且**简单左值**的 ByRef 实参不提升 —— 它本来就是地址 (`&x`), 提升成临时量会把
+        // 被调方的写回丢到 `_agN` 上。但 ByRef 里那些**复合表达式**(晚绑定读 / 调用 /
+        // 复合字面量)仍要提升: 不提升就等于把它们挪到守卫**内**的调用里, raise 之后
+        // 调用照进 (b250 那格就是这个形状 —— 跳过提升会把神谕里"已修"的那行打回"病形").
+        bool simpleByRefLvalue = false;
+        if (isByRef && i < node.positional.size() && node.positional[i]) {
+            // 只认**裸变量**。成员访问不在此列: `o.NoSuchProperty` 晚绑定读也是
+            // MemberAccessExpr, 它**会 raise** —— 当成左值跳过提升, 就会把守卫里的
+            // "raise 即不进入" 打回病形 (b250 那格正是如此)。
+            simpleByRefLvalue = (node.positional[i]->kind == ASTNodeKind::IdentifierExpr);
+        }
         if (!stmtCallArgSerial_.empty() && (int)i <= stmtCallArgLastRaise_
             && argNestDepth_ == 1
-            && !isByRef
+            && !simpleByRefLvalue
             && !(argVal.size() > 1 && argVal[0] == '&')) {
             std::string gtyp102 = "int32_t";
             if (i < calleeParams.size()) {
@@ -781,7 +790,13 @@
                             + gtmp102 + " = " + argVal + "; }");
                 argVal = gtmp102;
             } else if (i < node.positional.size() && node.positional[i]
-                       && mapType(inferExprType(*node.positional[i])) == "vb6_VARIANT") {
+                       && mapType(inferExprType(*node.positional[i])) == "vb6_VARIANT"
+                       // 第一百九十一刀 (§11.174): 聚合体提升**只留给晚绑定读**。
+                       // 只是"会 raise"的实参（调用 / New / 算术）如果也走这一臂，
+                       // 接口视图那种实参 (`vb6_argtmp_vb6_ivref_*`，C 类型是指针)
+                       // 就会被写成 `vb6_VARIANT _asX = <指针>` —— C2440，
+                       // 被调方收的也不是 Variant (b448 实测就是这个)。
+                       && exprHasLateBoundComRead(node.positional[i].get())) {
                 // 判据用**实参自身**的 C 类型，不是形参声明的类型：内建调用的形参表会答
                 // Variant（如 `ObjPtr(CurrControl)` 那一槽），而实参本身是 `void*` /
                 // `vb6_cls_X*` —— 拿它初始化 vb6_VARIANT 就是 C2440，被调方要的也不是
