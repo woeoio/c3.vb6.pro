@@ -12395,3 +12395,88 @@ Array not even dimensioned」。P238/P238B 证明 `VarType`/`TypeName` 不抛 �
 - 教训：**「描述符在哪」与「声明说什么」是两件事** —— 已分配时前者够用，未分配时只剩后者；
   谓词这一站的错误正是「只问了前者、而前者是 NULL」。修法不是给谓词加特判，而是让装箱站
   在拿到 NULL 时有第二条证据链（声明档），并且**分清谁需要深拷、谁只能借用**。
+
+---
+
+## §11.183 String → Date 的隐式转换：数组元素那一形补上折算，隐式矩阵补三行（第二百刀）
+
+### 一、问题
+
+两个独立缺陷，都在**赋值站**，都被 §11.181 记在背账里（`.temp/k198p/P235.bas`）：
+
+1. **数组元素形编不过**：`q(0) = "2021-03-04"` 发成
+   `VB6_SA_AT(double, q, 0) = vb6_BSTR_FromStr(L"2021-03-04");` —— 裸 BSTR 赋给 `double`，
+   cl **C2440**，**没有 exe**。纯量形（`d = "2021-03-04"`）早在账 #417 那一刀就有
+   `vb6_DateVal(...)` 折算，缺的只是「目标是数组元素」这一格：`knownDateVars_` 是一张
+   **裸名/字段名**表，`VB6_SA_AT(double, q, 0)` 这种表达式目标根本进不去。
+2. **三种形态各报一条假 VB3003**：`无法将 String 隐式转换为 Date`。发码是对的（纯量与
+   String 变量两条都跑出 44259），诊断说错了 —— `TypeSystem::canImplicitConvert` 只登记了
+   `Date↔Double`，没登记 `String→Date` 与 `数值→Date`（`d = 45000` 同样报假警告）。
+
+### 二、真机读数（VB6Mini `/make`，`.temp/k200p`）
+
+`P241.bas`（八格：字面量 / 数组元素 / String 变量 / 元素取变量 / 显式 CDate /
+非法文本两条 / VarType+TypeName）：
+
+```
+S1 d=44259 err=0      S2 d=44259 err=0      S3 d=44259 err=0      S4 d=44259 err=0
+S5 d=44259 err=0      S6 d=45000 err=13     S7 d=45000 err=13     S8 vt=7 tn=Date
+```
+
+一句话：**String→Date 是隐式转换**（CDate 档），失败时**保住旧值**并抛 13；`VarType` 答 7、
+`TypeName` 答 `Date`。数值→Date 同样是隐式（S6/S7 先写 45000 再赋非法文本，读数说明
+`d = 45000` 本身合法）。
+
+### 三、判据与改法
+
+1. **隐式矩阵补三行**（`src/semantics/type_system.cpp` 的 `canImplicitConvert`）：
+   `String→Date`、`isNumeric→Date`、`Date→isNumeric`。诊断与发码从此同源 —— 不是放宽阈值，
+   是**登记 VB6 本来就有的转换**。
+2. **发码侧那条 Date 腿接数组元素**（`src/backend/detail/stmt/cgen_assign_value_sem.inc`）：
+   原判据 `knownDateVars_.count(tgtDt)` 之外，再问一次「目标是不是 Date 数组的一枚元素」——
+   问的是 `arrayElemTypes_`（§11.180/§11.181 之后「元素声明档」的唯一一份表），条件是
+   `IndexOrCallExpr` + 裸标识符 callee + **恰好一个下标**。只认一维：多维阶位不在这一问里猜
+   （认不出就落原路，不新造 C2440）。命中后跟纯量同一条出口：`target = vb6_DateVal(value);`。
+3. **不新增第二套解析**：`vb6_DateVal` 是 CDate 那一档的既有唯一出口（账 #417 收口），
+   本刀一个字都没动 RTL。
+
+### 四、为什么这样改
+
+- **为什么问 `arrayElemTypes_` 而不是改 `knownDateVars_`**：后者是**按名**的表，键是裸名；
+  把 `q` 登记成 Date 只能回答「`q` 是 Date」，回答不了「`q(0)` 这个左值是 Date 元素」——
+  而 §11.181 已经把「元素声明档」收在 `arrayElemTypes_` 一处（`dateElemVariantBox` 用的就是它）。
+- **为什么矩阵那三行必须一起改**：只改发码时 `d = 45000` 照样报假警告；只改矩阵时数组元素
+  仍然编不过。两条腿各治一半，缺一条就不是「String→Date 通了」。
+- **为什么不顺手接多维**：`VB6_SA_ND_AT2(double, ...)` 的声明档问法要连维数一起问，
+  今天没有现成口径；先按「认不出就不猜」留原路，记在背账。
+
+### 五、读数与随刀改的针
+
+- 新夹具 `tests/b208_string_to_date`（`B208Main.bas`：S1–S8 八行，与真机 P241 逐字相同），
+  x64 与 x86 **逐行相同**；修前基线 = `isoB`（`.temp/k200p/isoB`）真编译 **C2440、无 exe**。
+- 改坏即红：`check_date_conv.ps1` 的 R8 在「把 `String→Date` 那行改成 `return false;`」时
+  当场红（`R8 matrix String->Date row = 0`），还原后 PASS。
+- 闸门（本机）：`check_date_conv`（R8/R9/R10 新增）、`check_manifest_coverage` K1..K3
+  （inputs=908 / registered=908）、`check_static_sentinel_registration`（149 道）、
+  `check_sa_access`、`check_builtin_slot_returns`、`check_rtl_naked_names`、
+  `check_test_helper_integrity` 全 PASS。
+- 形状清单：只新增本夹具 **2 行**（`.bas` + `.vbp`，按 `emit_manifest.ps1` 的归一化口径
+  本机算出，CRLF/LF 两种源行尾哈希相同 ⇒ 与 CI 侧同值），存量行一行未动；文件 BOM 保持。
+
+### 六、神谕与清单
+
+- 真机神谕：`.temp/k200p/P241.bas` / `p241.txt`（八行）；`P235.bas` / `p235.txt`（§11.181 那批）。
+- 修前取证：`.temp/k200p/isoA..isoD`（四形分离：纯量 / 数组元素 / String 变量 / 非法文本）。
+- 门：run `45867930923`（`gate/string-date-200`、head `f4711fc0`）**23/23 全绿**。
+- 刻意不跟的一格（背账）：`q2(0, 1) = "2021-03-04"`（**多维** Date 数组元素）仍走原路 ——
+  今天没有「ND 元素声明档」的现成问句，按「认不出就不猜」留证。
+
+### 七、记账
+
+- 探针：`.temp/k200p/P240.bas`（四形一起，首轮 C2440 取证）、`P241.bas`（真机八格）、
+  `isoA..isoD`（分离读数）。
+- 夹具：`tests/b208_string_to_date`（`B208Main.bas` / `B208Res.vbp`），注册在
+  `tests/run_tests.ps1`（x64 + x86）。
+- 代码：`f4711fc0`（矩阵三行 + 数组元素腿 + 夹具 + 哨兵 R8–R10 + 清单两行）。
+- 教训：**「名字表」回答不了「表达式目标」** —— `knownDateVars_` 是按名的，数组元素是
+  表达式；同一问在声明那一侧早有唯一主人（`arrayElemTypes_`），接上去就同源。
