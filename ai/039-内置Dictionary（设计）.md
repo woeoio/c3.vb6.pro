@@ -1,4 +1,4 @@
-# 039 - 内置 Dictionary（设计）
+﻿# 039 - 内置 Dictionary（设计）
 
 > 状态：**S1/S2/S3 已完成**（设计 + 基准 + 实现 + 对照全绿）。S4（三条入口的 New 那一半）已在实现里做了，剩 S5 门禁登记与 S6 收口。
 > 当前读数：`PASS dict_native 用例=54 行`（1 行 VB6-SEM 手工期望，5 行已知 C3 缺口剔除，明细见 §9）。
@@ -12480,3 +12480,193 @@ S5 d=44259 err=0      S6 d=45000 err=13     S7 d=45000 err=13     S8 vt=7 tn=Dat
 - 代码：`f4711fc0`（矩阵三行 + 数组元素腿 + 夹具 + 哨兵 R8–R10 + 清单两行）。
 - 教训：**「名字表」回答不了「表达式目标」** —— `knownDateVars_` 是按名的，数组元素是
   表达式；同一问在声明那一侧早有唯一主人（`arrayElemTypes_`），接上去就同源。
+
+---
+
+## §11.184 Date 元素的身份与秩无关：多维赋值站与装箱站同时收口（第二百零一刀）
+
+### 一、问题
+
+上一节末尾记的那笔背账（`q2(0, 1) = "2021-03-04"` 仍走原路）拆开后是**两站**，而两站都用
+「恰好一个下标」当判据 —— 秩与「这枚元素是不是 Date」本来无关：
+
+1. **赋值站**（`src/backend/detail/stmt/cgen_assign_value_sem.inc`）：发成
+   `VB6_SA_ND_AT2(double, (vb6_SafeArrayND*)d2, 0, 1) = vb6_BSTR_FromStr(L"2021-03-04");`
+   —— 裸 BSTR 进 double 槽，cl **C2440**。探针 `P242` 六条赋值一共 6 处
+   （`.temp/k201p/c3out/c3-error.log`），**没有 exe**。
+2. **装箱站**（`src/backend/cgen_util_ctrl.cpp` 的 `dateElemVariantBox`）：多维元素认不出
+   ⇒ 交空串 ⇒ 落 `_Generic` 的 double 档 ⇒ `VarType` 答 5、`TypeName` 答 `Double`
+   （`.temp/k201p/c3p243` 的 T4），而同一份程序里的标量与一维元素都答 7/Date。
+
+### 二、真机读数（VB6Mini `/make`，`.temp/k201p`）
+
+`P242.bas`（赋值站七格：2D 静态元素 / 2D 静态元素取 String 变量 / ReDim 出来的 2D 元素 /
+3D 静态元素 / 2D 元素非法文本 / 2D 动态元素非法文本 / VarType+TypeName）：
+
+```
+S1 d=44259 err=0     S2 d=44259 err=0     S3 d=44687 err=0     S4 d=45115 err=0
+S5 d=45000 err=13    S6 d=0 err=13        S7 vt=7 tn=Date
+```
+
+`P243.bas`（装箱四档：标量 / 一维动态 / 一维静态 / 二维静态，四种都装着同一天）：
+
+```
+T1 scalar vt=7 tn=Date   T2 1d-dyn vt=7 tn=Date
+T3 1d-sta vt=7 tn=Date   T4 2d-sta vt=7 tn=Date
+```
+
+一句话：**秩不改变任何读数**。折算结果与一维元素、纯量完全一致；失败时同样保住旧值
+（45000 / 0）并抛 13；`VarType`/`TypeName` 四档全同。
+
+### 三、判据与改法
+
+两站各只改**一句判据**：把「恰好一个下标」换成「至少一个下标」。其余条件（裸标识符 callee +
+`arrayElemTypes_` 说是 `Date` + RHS 是 String）一个字没动。
+
+- 赋值站：`&& ic183.positional.size() == 1` → `&& !ic183.positional.empty()`。
+- 装箱站：`if (ic198.positional.size() != 1) return std::string();` →
+  `if (ic198.positional.empty()) return std::string();`。
+
+C 侧左值本来就是 double 槽 —— `VB6_SA_AT`、`VB6_SA_ND_AT2/AT3/ATN` 的第一实参都是 `double`；
+秩只决定 `emitExpr` 发哪个宏，与本腿无关。
+
+### 四、为什么这样改
+
+- **秩不是身份**：两站问的是同一张表（`arrayElemTypes_`），那张表本身不按秩分家；按秩设闸
+  是上一刀为了「认不出就不猜」临时收的口，不是一条语义。
+- **为什么不给装箱站另建一张 ND 表**：那会造出第二份权威。§11.180/§11.181 已经把「元素声明档」
+  收在一处，两站只许问它。
+- **为什么不顺手接 UDT 成员数组**（`obj.arr(i)`、`me->m.arr(i)`）：`arrayElemTypes_` 以裸名为键，
+  成员数组的元素档在另一族表里，今天没有现成问句；按「认不出就不猜」留债不着色。
+- **秩 4 与以上**（`VB6_SA_ND_ATN`）按构造一并覆盖（判据只看「至少一个下标」），但未单列真机读数：
+  那一形的宏形状由既有 ATN 站管，不在这一问里重猜。
+
+### 五、读数与随刀改的针
+
+- 新夹具 `tests/b209_nd_date_elem`（`B209Main.bas`：S1–S6 + T1–T4 共 10 行，与真机 P242/P243
+  逐字相同），x64 与 x86 **逐行相同**；修前基线 = `.temp/k201p/c3out`（C2440 ×6、无 exe）与
+  `.temp/k201p/c3p243`（T4 答 5/Double）。
+- 改坏即红：把两处判据改回按秩分叉，`check_date_conv.ps1` 当场报四条
+  （`R11 assignment leg still gates on rank = 1` / `R12 boxing leg still gates on rank = 1`），
+  还原后 PASS —— 与上一刀的 R8 同一套负控做法。
+- 闸门（本机全 PASS）：`check_date_conv`（新增 R11/R12/R13）、`check_manifest_coverage`
+  K1..K3（inputs=910 [.vbp=353 .bas=557] / registered=910）、`check_static_sentinel_registration`
+  （149 道）、`check_sa_access`、`check_builtin_slot_returns`、`check_rtl_naked_names`、
+  `check_test_helper_integrity`。
+- 形状清单：只新增本夹具 **2 行**（按 `emit_manifest.ps1` 的归一化口径本机算出），存量行一行未动；
+  文件 BOM 与 CRLF 保持。**语料里没有别的多维 Date 数组**（`tests` 全树按 `(...)` + `As Date`
+  grep 只命中本夹具），故本刀不改任何存量发码 —— 这是它能「只加两行」的原因，不是巧合。
+
+### 六、神谕与清单
+
+- 真机神谕：`.temp/k201p/P242.bas` / `p242.txt`（S1–S7）、`P243.bas` / `p243.txt`（T1–T4）。
+- 门：run `45872820867`（`dev`、head `1204ced4`）。
+- 刻意不跟的一格（背账）：UDT 成员数组 / With 成员的 Date 元素（`obj.arr(i) = "2021-03-04"`）
+  仍走原路 —— 元素声明档在成员那一侧是另一族表。
+
+### 七、记账
+
+- 探针：`.temp/k201p/P242.bas`（赋值站七格）、`P243.bas`（装箱四档）、`c3out`（修前 C2440 ×6）、
+  `c3p243`（修前 T4=5/Double）、`rows209.ps1`（清单两行的归一化口径复算）。
+- 夹具：`tests/b209_nd_date_elem`（`B209Main.bas` / `B209Res.vbp`），注册在
+  `tests/run_tests.ps1`（x64 + x86）。
+- 代码：`1204ced4`（两站判据 + 夹具 + 哨兵 R11–R13 + 清单两行）。
+- 教训：**上一刀为了不猜而收窄的那道闸，要回头量一次**。按秩设闸看着安全，实际是把
+  「声明说什么」换成了「形状长几个下标」；一旦语料里出现多维 Date 元素，坏的不是读数而是**编不过**。
+
+## §11.185 多维数组的 UBound/LBound：载体与维号同一套错误口径（第二百零二刀）
+
+### 一、问题
+
+§11.182 第五节把这一格记成背账（本文件 L12386–L12387）：
+
+> 刻意不跟的一格（背账，不假装对）：`Erase` 之后**多维**的 `UBound`/`LBound` —— C3 答
+> `0 / err=0`，真机抛 9。那一问不经装箱站（`vb6_UBoundND` 对 NULL 直接返 0），是另一条缺口。
+
+真机量下来缺口比那一句更宽：不止 `Erase` 之后，**未分配**的多维、**维号越界**、以及 1D 数组上
+**dim≠1**，C3 全都答 `err=0`。也就是说 `vb6_UBoundND`/`vb6_LBoundND` 里那句
+`if (!arr || dimension < 1 || dimension > arr->dimCount) return 0;` 是**三合一**的静默：
+三种本该报错的问法，被同一个 `return 0` 吞掉。1D 那两枚（`vb6_UBound`/`vb6_LBound`）则是另一种
+静默 —— 它们**根本不看** `dimension`，`UBound(b,2)` 直接交回 `uBound`。
+
+### 二、真机读数
+
+`.temp/k200p/P239.bas`（VB6Mini `/make`）→ `p239.txt`，19 行：
+
+- **N1 未分配**（`Dim a2() As Long`）：`UBound` = 9、`LBound` = 9、`UBound(a2,2)` = 9。
+- **N2 已分配 2×3**（`ReDim a2(1 To 2, 1 To 3)`）：`ub1=2 / lb1=1 / ub2=3 / lb2=1 / ub0d=2`，全 `err=0`。
+- **N3 维号越界**：`UBound(a2,3)` = 9、`LBound(a2,3)` = 9、`UBound(a2,0)` = 9、`UBound(a2,-1)` = 9。
+- **N4 `Erase` 之后**：`UBound` = 9、`LBound` = 9、`UBound(a2,2)` = 9。
+- **N5 1D 对照**（`ReDim b(0 To 4)`）：`UBound(b)` = 4 / `err=0`；`UBound(b,2)`、`LBound(b,2)`、
+  `UBound(b,0)` 全 = 9。
+
+### 三、判据与改法
+
+一处共用出口，加在 `vb6rtl_array.c` 里 `vb6_UBound` 之前：
+
+```c
+static void vb6_ArrDimFail(void) {
+    vb6_ErrRaise(9, vb6_BSTR_FromStr(L"VBA.Information"),
+                 vb6_BSTR_FromStr(L"Subscript out of range"));
+}
+```
+
+四处守卫：
+
+1. `vb6_UBoundND` / `vb6_LBoundND`：`!arr` → 抛 9（改前返 0）。
+2. 同两枚：`dimension < 1 || dimension > arr->dimCount` → 抛 9（改前返 0）。
+3. 同两枚：**先认 1D 描述符** —— `vb6_SaIs1D(arr)` 为真时按它自己的秩答（dim 必须 1，否则 9）。
+4. `vb6_UBound` / `vb6_LBound`：1D 分支里 `dimension != 1` → 抛 9（改前无视 `dimension`）。
+
+抛错文案与冷路径 `vb6_SaElemFail` 同一句（`VBA.Information` / `Subscript out of range`），
+因为真机对这两族问法报的是同一个 9。
+
+### 四、为什么这样改
+
+- **为什么 ND 入口要认 1D**：发码侧 `scanNDArraysInExpr` 是**按名字预扫整段过程**的 ——
+  同一过程里只要出现过 `UBound(b, 2)`，同名的 `UBound(b)` 也一律发成 ND 版。P239 的 N5 就是实物：
+  改前 `UBound(b)` 发成 `vb6_UBoundND((vb6_SafeArrayND*)(b), 1)`，而 `b` 是 1D 描述符，首 4 字节是
+  `cDims | fFeatures << 16`，读成 `dimCount` 是个天文数字 ⇒ 越界比较永远不成立 ⇒ 答案落在
+  `bounds[0]` 的垃圾上（实测交回 **0**，真机是 4）。在 ND 入口认一次 1D，是**幂等**的：
+  真 ND 描述符不会被 `vb6_SaIs1D` 认成 1D（首 WORD 是 dimCount 2..16、offset 2 恒 0），
+  而误入的 1D 描述符当场按自己的秩答。这样既补上 9，又顺手把 N5 那格 `ub=4` 答对。
+- **为什么不改发码侧**：发码侧只有名字和常量，秩是运行期属性（§11.182 / 账 #611 第346刀 同一条理由）。
+  要它「别把 1D 发成 ND」就得猜，而猜错的方向是**编过但读错**。运行期入口认描述符不需要猜。
+- **为什么不四处各写一遍抛错**：四次复制同一句文案，日后改错误号/来源就会不同步 —— 与
+  `vb6_SaElemFail` / `vb6_SaNdElemFail` 收在一处是同一套做法。
+- **为什么不动 `vb6_UBound` 的兜底支**：认不出的载体（既不是本 RTL 的 1D、也不像 ND）仍按原样
+  返 `uBound`，不在这刀里改判 —— 没有真机读数支撑的分支不猜。
+
+### 五、读数与随刀改的针
+
+- 修前基线（`.temp/k200p/c239x64.txt` 于改前编译产物）：19 行里 16 行该 9 的答 `err=0`，
+  另加 N5 的 `ub=0`（ND 误配的实物读数）。
+- 修后：`tests/b208_nd_bounds`（19 针）在 **x64 与 x86 都与 `p239.txt` 逐行相同**，diff=0。
+- 闸门（本机全 PASS）：`check_sa_access`（A3/A6 那两枚冷路径函数体未动；报告中
+  `table f 10→11` 是上一刀 `boxToVariant` 里新增的那一处 `arrayElemTypes_.find`，A11 只设下限 ≥3）、
+  `check_builtin_slot_returns`、`check_rtl_naked_names`、`check_com_variant_out_ref`。
+- 夹具：`tests/b208_nd_bounds`（`B208Main.bas` / `B208Res.vbp`），注册在 `tests/run_tests.ps1`
+  （`b208_nd_bounds` + `b208_nd_bounds_x86`，19 条针）。
+
+### 六、神谕与清单
+
+- 真机神谕：`.temp/k200p/P239.bas` / `p239.txt`（N1–N5 共 19 行）。
+- 门：`45879197287`（head `11175638`）**红两条** —— `Emit manifest` 报「新增 2 份输入没有登记哈希」、
+  `Tests (compile #1)` 报 `manifest_coverage`，**同一件事的两个落点，不是发码回归**：
+  该次清单 `期望 910 / 实得 912 / 相同 910 / 哈希不同 0 / 缺席 0 / 多出 2`。
+- 装行：吃 CI 那份产物（`gh run download -n emit-manifest`）→ `changed=0 added=2 removed=0`
+  ⇒ 存量 910 行一字未动，只加本夹具两行；提交 `abe77700`。
+- 复检门：`45880753386`（head `abe77700`）**23/23 全绿**。
+
+### 七、记账
+
+- 探针目录：`.temp/k200p/`（`P239.bas` 真机、`P239C.bas` 对照、`mk339.cmd` / `mk208.cmd`、
+  `c239x64.txt` / `c239x86.txt` 修前、`b208x64.txt` / `b208x86.txt` 修后、`ci200/emit-manifest.txt`、
+  `install_rows200.ps1`）。
+- 代码：`11175638`（RTL 四处守卫 + 夹具 + 注册）；清单：`abe77700`。
+- **号**：commit 文案写的是「第二百刀 / §11.183」，落纸时 §11.183（String→Date）与 §11.184
+  （Date 元素身份）已经被那两刀占了（`f4711fc0`/`a4dad126`、`1204ced4`），所以本节定为
+  **§11.185 / 第二百零二刀**；commit 文案保留原样以便追溯，**以文档号为准**。
+- 教训：**「返回值 0」和「抛 9」在发码层面长得一样**（都是 int32），所以静默的分支只有在真机上
+  才现形；而「1D 也可能被发成 ND」说明运行期入口不能假定进来的真是 ND —— 入口多认一档描述符，
+  比在发码侧猜秩便宜，也比事后修一个错读数便宜。
