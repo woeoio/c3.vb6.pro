@@ -552,7 +552,19 @@ if ($stiAll - $stiDecl - $stiDef -ne 3) {
 $stiHand = @([regex]::Matches($vCom, 'case\s+VT_BSTR\s*:\s*et\s*=')).Count
 if ($stiHand -ne 0) { $bad += ("A17 手抄的元素 switch (case VT_BSTR: et =) = " + $stiHand + " 处 (要求 0：第五十刀把它并进反向表；回来就是两份答案)") }
 
-$tnEmpty = @([regex]::Matches($vConv, 'case\s+vb6_vtEmpty\s*:')).Count
+# 账 #305 §11.172 (第一百八十九刀): 这一条必须**只看 TypeName 那张名单自己的函数体**。
+# 以前是全文件数 `case vb6_vtEmpty:`, 只因当时全文件只有 TypeName 一处写它;
+# 而 §11.172 让 vtEmpty 进 `vb6_IsNumeric` 的数值族 (**合法的第二处** —— 同一个值被两个
+# 不相干的问题各问一次), 全文件计数就把那处算成「名单被抄了两份」。
+# 判据的本意是「TypeName 的名单只许一份」, 所以把窗口收到 `vb6_TypeNameScalar` 的函数体。
+$tnBody = ''
+$tnStart = $vConv.IndexOf('vb6_TypeNameScalar(')
+if ($tnStart -ge 0) {
+    $tnEnd = $vConv.IndexOf("`n}", $tnStart)
+    if ($tnEnd -gt $tnStart) { $tnBody = $vConv.Substring($tnStart, $tnEnd - $tnStart) }
+}
+if ($tnBody -eq '') { $bad += 'A17 找不到 vb6_TypeNameScalar 的函数体 (计数窗口失效)' }
+$tnEmpty = @([regex]::Matches($tnBody, 'case\s+vb6_vtEmpty\s*:')).Count
 $tnScalarDef = @([regex]::Matches($vConv, '(?m)^static const wchar_t\*\s+vb6_TypeNameScalar\s*\(')).Count
 $tnScalarAll = @([regex]::Matches($vConv, 'vb6_TypeNameScalar\s*\(')).Count
 if ($tnEmpty -ne 1) { $bad += ("A17 TypeName 的标量名单里 case vb6_vtEmpty: = " + $tnEmpty + " 处 (恰好 1；2 = 名单被抄了两份，改一档就会漏另一档)") }

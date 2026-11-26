@@ -12884,8 +12884,10 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     Test-Vbp 'b196_format_string_round_x86' "$Tests\b196_format_string_round\B196Res.vbp" $b196Needles -Arch "x86"
     # 账 #305 §11.172 (第一百八十九刀): IsNumeric / IsDate 的文本判定 + 整只变体槽各档。
     # 改前只有 E1/V1 两格错（IsNumeric(Empty) 落 default 答 False，真机 True）；
-    # 其余 64 格是「已经对了」的证人 —— 本刀改的是 switch 里那一档，不是重写判定面，
-    # 所以这 64 格的逐字相同就是「没有误伤」的证据。
+    # 其余 63 格是「已经对了」的证人 —— 本刀改的是 switch 里那一档，不是重写判定面，
+    # 所以这 63 格的逐字相同就是「没有误伤」的证据。
+    # ⚠ 第二版撤掉 N14 IsNumeric("$1")：货币符号跟机器 locale 走（本机 zh-CN ¥ 答 False，
+    #   CI en-US $ 答 True），真值不唯一，不能进跨机夹具（§11.172 在册第二条）。
     $b197Needles = @(
     "N1=[True]",
     "N2=[True]",
@@ -12900,7 +12902,6 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "N11=[True]",
     "N12=[True]",
     "N13=[True]",
-    "N14=[False]",
     "N15=[False]",
     "N16=[False]",
     "N17=[False]",

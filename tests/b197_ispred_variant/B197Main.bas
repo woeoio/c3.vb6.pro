@@ -4,12 +4,14 @@ Option Explicit
 '
 ' 病: `vb6_IsNumeric` 的 switch 少 VT_EMPTY 一档 —— 落到 default 答 False，
 ' 而真机 `IsNumeric(Empty)` 是 True（Empty 的缺省值就是 0，数值语境里与 0 同用；
-' 与 Null 不同：`IsNumeric(Null)` 真机 False）。其余 65 格改前就已经逐字相同。
+' 与 Null 不同：`IsNumeric(Null)` 真机 False）。其余 63 格改前就已经逐字相同。
 '
 ' 真 VB6 读数:
-'   P214 (.temp/k189p/p214.txt, 42 格): N1..N30 文本档 + D1..D12 日期档
+'   P214 (.temp/k189p/p214.txt, 42 格): N1..N30 文本档 (N14 不入夹具, 见下) + D1..D12 日期档
 '   P215 (.temp/k189p/p215.txt, 24 格): E1..E16 字面量档 + V1..V8 整只变体槽档
-' 本夹具把 66 格合成一份，两台（x64/x86）都钉。
+' 本夹具把 65 格合成一份，两台（x64/x86）都钉。
+' ⚠ N14 IsNumeric("$1") 不入夹具：货币符号跟机器 locale 走（本机 zh-CN ¥ 答 False，
+'   CI en-US $ 答 True），真值不唯一（§11.172 在册第二条）。
 ' ⚠ E13/E15 用 CDate("12:00:00") / DateSerial(1900,1,1) 而不是 #12:00:00 PM#：
 '   C3 的日期字面量解析不收纯时间形（§11.172 在册第一条），与这两个判据无关。
 
@@ -32,7 +34,6 @@ Public Sub Main()
     Show "N11", IsNumeric("&H10"): ShowE "N11"
     Show "N12", IsNumeric("&O17"): ShowE "N12"
     Show "N13", IsNumeric("1,000"): ShowE "N13"
-    Show "N14", IsNumeric("$1"): ShowE "N14"
     Show "N15", IsNumeric("1%"): ShowE "N15"
     Show "N16", IsNumeric("1.2.3"): ShowE "N16"
     Show "N17", IsNumeric(""): ShowE "N17"
