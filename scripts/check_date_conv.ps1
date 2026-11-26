@@ -161,6 +161,17 @@ if ($r16out -ne 1) { $fail += ('R16 Variant leg CDate outlet = ' + $r16out + ' (
 # R17: b212 夹具两台在跑。
 $r17cells = N '\$Tests\\b212_variant_to_date\\B212Res\.vbp' $T
 if ($r17cells -ne 2) { $fail += ('R17 b212 run cells = ' + $r17cells + ' (want 2 = x64 + x86)') }
+# R18 (§11.189 第二百零六刀): Variant 右值的第二形 —— 调用。两个要点:
+#   ① 裸名被调/下标也算载体 (否则函数返回值永进不来, 真机 p246 的 W1/W4/W8 全错);
+#   ② 但已知数组的元素不得当载体 (第一版缺这条, 把 d2 = q(3) 的 Date 元素包成了
+#      vb6_CDate(VB6_SA_AT(double, q, 3)) —— 能编但形状错, 形状神谕当场报 b206 两行)。
+$r18call = N 'node\.value->kind == ASTNodeKind::IndexOrCallExpr' $A
+$r18arr = N 'ae188 != arrayElemTypes_\.end\(\)' $A
+if ($r18call -lt 1) { $fail += ('R18 call-shaped Variant leg = ' + $r18call + ' (want >= 1)') }
+if ($r18arr -ne 1) { $fail += ('R18 known-array exclusion = ' + $r18arr + ' (want 1)') }
+# R19: b213 夹具两台在跑。
+$r19cells = N '\$Tests\\b213_variant_call_to_date\\B213Res\.vbp' $T
+if ($r19cells -ne 2) { $fail += ('R19 b213 run cells = ' + $r19cells + ' (want 2 = x64 + x86)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -168,5 +179,6 @@ if ($fail.Count -gt 0) {
 }
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
-    ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells)
+    ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells +
+    ' call-cells=' + $r19cells)
 exit 0

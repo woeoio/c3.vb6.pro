@@ -390,14 +390,38 @@
             // 剥前缀答 **2021**、"abc" 与 Null 静默答 0 且 Err=0 —— 三条都是**错读数而不报错**。
             // `vb6_CDate(vb6_VARIANT)` 正是这一档的既有唯一出口 (BSTR→vb6_DateVal、Null→94、
             // Empty→0、Date/数值→数值), 不新写转换、也不动 RTL。
-            // 只认**裸标识符且已登记为 Variant** 那一形: 其它表达式答 Variant 时其 C 文本未必真是
-            // vb6_VARIANT (例如返回 Variant 的调用是 vb6_ret_<Proc>), 在这里猜会新造 C2440。
+            // 只认能**确知是 vb6_VARIANT 载体**的三种形: 裸标识符、裸名被调/下标
+            // (Variant 返回值函数在 C 侧就是 `vb6_FText()`，Variant 数组元素是
+            // `VB6_SA_AT(vb6_VARIANT, v, 0)`)，以及已经是 vb6_VARIANT 的表达式。
+            // 语义上还必须是 Variant —— 两条都满足才接 CDate，任一条不够都不猜。
+            // §11.189 (第二百零六刀): 第二形是这次补的 —— 真机 `.temp/k206p/p246.txt` 九条读数与
+            // 局部变量那一组**逐档相同** (44259 / 45000 / 13 保旧值 / 94 保旧值 / Empty→0)。
             bool valueIsVariant188 = false;
-            if (dateTarget183 && node.value
-                && node.value->kind == ASTNodeKind::IdentifierExpr) {
-                std::string vn188 = static_cast<const IdentifierExpr&>(*node.value).name;
-                std::transform(vn188.begin(), vn188.end(), vn188.begin(), ::tolower);
-                valueIsVariant188 = knownVariantVars_.count(vn188) != 0;
+            if (dateTarget183 && node.value && inferExprType(*node.value) == Vb6Type::Variant) {
+                bool shapeOk188 = cExprIsVariantCarrier(value);
+                if (!shapeOk188 && node.value->kind == ASTNodeKind::IdentifierExpr) {
+                    std::string vid188 = static_cast<const IdentifierExpr&>(*node.value).name;
+                    std::transform(vid188.begin(), vid188.end(), vid188.begin(), ::tolower);
+                    shapeOk188 = knownVariantVars_.count(vid188) != 0;
+                } else if (!shapeOk188 && node.value->kind == ASTNodeKind::IndexOrCallExpr) {
+                    const auto& ic188 = static_cast<const IndexOrCallExpr&>(*node.value);
+                    if (ic188.callee && ic188.callee->kind == ASTNodeKind::IdentifierExpr) {
+                        std::string cn188 = static_cast<const IdentifierExpr&>(*ic188.callee).name;
+                        std::transform(cn188.begin(), cn188.end(), cn188.begin(), ::tolower);
+                        auto ae188 = arrayElemTypes_.find(cn188);
+                        if (knownVariantVars_.count(cn188) != 0) {
+                            shapeOk188 = true;                    // Variant 变量 / Variant 数组的元素
+                        } else if (ae188 != arrayElemTypes_.end()) {
+                            shapeOk188 = false;                   // 已知数组且元素档不是 Variant (如 Date 数组) ⇒ 不是载体
+                        } else {
+                            // 不是已知数组 ⇒ 这是函数调用。但返回 Variant 的**函数名**并不在
+                            // knownVariantVars_ 里 (那张表记的是返回槽), 所以这里只靠语义答的
+                            // Variant + 前面那条 inferExprType 门。真机实测: FText() → vb6_FText() 是 vb6_VARIANT。
+                            shapeOk188 = true;
+                        }
+                    }
+                }
+                valueIsVariant188 = shapeOk188;
             }
             if (dateTarget183 && valueIsVariant188) {
                 c_.emitLine(target + " = vb6_CDate(" + value + ");");

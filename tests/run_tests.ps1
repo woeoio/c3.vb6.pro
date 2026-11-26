@@ -13324,6 +13324,21 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "V9 d=45000 err=94")
     Test-Vbp 'b212_variant_to_date' "$Tests\b212_variant_to_date\B212Res.vbp" $b212Needles
     Test-Vbp 'b212_variant_to_date_x86' "$Tests\b212_variant_to_date\B212Res.vbp" $b212Needles -Arch "x86"
+    # §11.189 第二百零六刀: Variant 右值还有第二个载体形 —— 调用的返回值。
+    # 真机 .temp/k206p/p246.txt 九行与局部变量那一组逐档相同; 改前一律 vb6_VariantToDouble(调用):
+    # 文本日期答 2021、"abc" 与 Null 静默答 0 且 Err=0。
+    $b213Needles = @(
+    "W1 d=44259 err=0",
+    "W2 d=44259 err=0",
+    "W3 d=45000 err=0",
+    "W4 d=45000 err=13",
+    "W5 d=45000 err=13",
+    "W6 d=44259 err=0",
+    "W7 d=0 err=0",
+    "W8 d=45000 err=94",
+    "W9 vt=8 tn=String")
+    Test-Vbp 'b213_variant_call_to_date' "$Tests\b213_variant_call_to_date\B213Res.vbp" $b213Needles
+    Test-Vbp 'b213_variant_call_to_date_x86' "$Tests\b213_variant_call_to_date\B213Res.vbp" $b213Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
