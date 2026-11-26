@@ -851,10 +851,14 @@
     // I2 `Call GTouch2(GFn(), o.Bad)` = gHit=0 gN=1（前面的照常求值）。
     // C 的实参求值顺序未定义，做不到「前一枚先求、后一枚不求」，故把首枚命中之前的实参
     // （含命中那枚）逐枚提升成临时量，每枚求值前比一次序号；调用本身包在同一个守卫里。
+    // 第一百九十一刀 (§11.174): 暴雷源放宽后**可能不止一枚**，这几行取的是**最后**一枚
+    // 可 raise 的实参 —— 只提到首枚时，第二枚仍以裸调用形式留在守卫内的实参表里，
+    // 而守卫那一次比较在它求值**之前**就做了，于是 raise 后调用照进（真机 A8 实测：
+    // hits=1001 且 Take2 跑了一次，应为 hits=1 且不进入）。
     // 空串 = 本语句无守卫。
     std::string stmtCallArgSerial_;
     bool stmtCallArgEmitted_ = false;
-    int stmtCallArgFirstLate_ = -1;
+    int stmtCallArgLastRaise_ = -1;
     // 第一百零五刀 (§11.83): 聚合体（Variant）实参位提升出来的临时量。
     // 聚合体不能像标量那样 `= 0` 起手，但 C 里 `vb6_VARIANT _ag = vb6_VariantEmpty();`
     // 是**可声明**的 —— 于是「落不到可声明档」这一条并不成立，代价只是所有权：

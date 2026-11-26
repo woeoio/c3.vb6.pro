@@ -97,6 +97,51 @@ bool CCodeGen::exprHasLateBoundComRead(Expr* e) const {
     }
 }
 
+// 第一百九十一刀 (§11.174): 「这枚表达式求值时可能 raise」—— 语句位置调用的实参守卫开闸判据。
+// 为什么需要它: 第一百零二刀只给「实参含晚绑定 COM 读」开闸 (真机 I 族量的那一族),
+// 而真机 A7/A8 (.temp/k191p/P217.bas) 量的口径与 I 族完全相同, 只是暴雷源不限于晚绑定读:
+//   `Take2 FEscape(), LogTag(2)` → 坏实参之后不求值、之前的恰好一次、被调方不进入。
+// 判据取**保守的宽**: 树里只要有一枚调用 (用户过程 / 内建 / 方法 / 数组下标) 或一枚可能
+// 除零的算符, 就当可能 raise。提升临时量本身无副作用 (ByRef 那一形已在提升处排除),
+// 宽一点只多一枚临时量, 窄一点就是错的读数。
+bool CCodeGen::exprCanRaiseStmt(Expr* e) const {
+    if (!e) return false;
+    switch (e->kind) {
+        case ASTNodeKind::IndexOrCallExpr: {
+            auto& c = static_cast<IndexOrCallExpr&>(*e);
+            if (exprCanRaiseStmt(c.callee.get())) return true;
+            for (auto& a : c.positional)
+                if (exprCanRaiseStmt(a.get())) return true;
+            for (auto& na : c.named)
+                if (exprCanRaiseStmt(na.value.get())) return true;
+            return true;   // 调用/下标本身就可能 raise (过程体内的 raise, 下标越界 9)
+        }
+        case ASTNodeKind::BinaryExpr: {
+            auto& b = static_cast<BinaryExpr&>(*e);
+            if (b.op == BinaryOp::Div || b.op == BinaryOp::IntDiv
+                || b.op == BinaryOp::Mod || b.op == BinaryOp::Pow)
+                return true;
+            return exprCanRaiseStmt(b.left.get()) || exprCanRaiseStmt(b.right.get());
+        }
+        case ASTNodeKind::UnaryExpr:
+            return exprCanRaiseStmt(static_cast<UnaryExpr&>(*e).operand.get());
+        case ASTNodeKind::MemberAccessExpr:
+            return exprCanRaiseStmt(static_cast<MemberAccessExpr&>(*e).object.get());
+        case ASTNodeKind::DictionaryAccessExpr:
+            return exprCanRaiseStmt(static_cast<DictionaryAccessExpr&>(*e).object.get());
+        case ASTNodeKind::NewExpr: {
+            auto& nw = static_cast<NewExpr&>(*e);
+            for (auto& a : nw.args)
+                if (exprCanRaiseStmt(a.get())) return true;
+            return true;   // New 本身会 raise (91 对象变量未设置 / 429)
+        }
+        case ASTNodeKind::TypeOfExpr:
+            return exprCanRaiseStmt(static_cast<TypeOfExpr&>(*e).object.get());
+        default:
+            return false;
+    }
+}
+
 
 // ============================================================
 // AST辅助: 检测语句列表中是否包含GoSubStmt

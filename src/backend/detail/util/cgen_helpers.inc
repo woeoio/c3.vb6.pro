@@ -948,6 +948,11 @@
     bool lateBoundComReadExpr(Expr* e) const;
     // 同一判据的**树**版：这棵表达式里有没有任何一枚晚绑定成员读。
     bool exprHasLateBoundComRead(Expr* e) const;
+    // 第一百九十一刀 (§11.174): 「这枚表达式求值时可能 raise」—— 语句位置调用的实参
+    //   守卫开闸判据。第一百零二刀只认晚绑定 COM 读，普通过程调用 / 内建 / 除零没有
+    //   开闸，于是真机 A7/A8 的「坏实参之后不求值、被调方不进入」在 C3 里不成立。
+    //   判据取**保守的宽**：树里有调用（用户过程 / 内建 / 方法 / 下标）或除零算符即真。
+    bool exprCanRaiseStmt(Expr* e) const;
     // 第一百零一刀 (§11.79): 条件位收口 —— 条件里含晚绑定读时，先发一行序号捕获，
     // 再把条件表达式折成 vb6_CondIfErr(<序号>, (<cond>))：求完序号变了就按真。
     // 真机 H1–H5: 单行 If / 多行 If 块 / ElseIf / Do While 的条件报 438 之后那一支都执行。

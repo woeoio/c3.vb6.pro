@@ -12987,6 +12987,20 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "B198-DONE")
     Test-Vbp 'b198_strconv_bytes' "$Tests\b198_strconv_bytes\B198Res.vbp" $b198Needles
     Test-Vbp 'b198_strconv_bytes_x86' "$Tests\b198_strconv_bytes\B198Res.vbp" $b198Needles -Arch "x86"
+    # 账 #305 §11.174 (第一百九十一刀): 语句位置调用的实参中止面。判据是真机
+    # (.temp/k191p/P217.bas 的 A7/A8 两格, 读数 p217.txt; 本夹具的四格另有自己的
+    # 真机读数 b199.txt, VB6Mini 与 C3 x64/x86 逐格一致)。
+    # 改前: 实参守卫只在「实参含晚绑定 COM 读」时开闸 —— `Take2 FEscape(), LogTag(2)`
+    # 两个实参都求值且被调方进去了 (B1 改前 1002, 真机 0)。
+    # B3 是 ByRef 不提升那条纪律的哨兵: 提升临时量会把写回丢到 _agN 上。
+    $b199Needles = @(
+    "B1=[0,11]",
+    "B2=[1,11]",
+    "B3=[8,3,0]",
+    "B4=[5,0,11]",
+    "B199-DONE")
+    Test-Vbp 'b199_stmt_arg_abort' "$Tests\b199_stmt_arg_abort\B199Res.vbp" $b199Needles
+    Test-Vbp 'b199_stmt_arg_abort_x86' "$Tests\b199_stmt_arg_abort\B199Res.vbp" $b199Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

@@ -325,21 +325,29 @@ void CCodeGen::visit(CallStmt& node) {
             ~CallArgScope102() {
                 g->stmtCallArgSerial_.clear();
                 g->stmtCallArgEmitted_ = false;
-                g->stmtCallArgFirstLate_ = -1;
+                g->stmtCallArgLastRaise_ = -1;
                 g->stmtCallArgVarTemps_.clear();
                 g->comPropWrites_.clear();
                 g->comPropWriteWindow_ = false;
             }
         } callArgScope102_{this};
+        // 第一百九十一刀 (§11.174): 开闸条件从「实参含晚绑定 COM 读」放宽到「实参可能 raise」。
+        // 真机 A7/A8 (.temp/k191p/P217.bas) 量的口径与 §11.80 的 I 族同一条: 坏实参之后的
+        // 实参不求值、之前的恰好求值一次、被调方不进入 —— 只是暴雷源不限于晚绑定读。
+        // 改前 `Take2 FEscape(), LogTag(2)` 两个实参都求值且被调方进去了 (hits=1002 vs 真机 0)。
         if (node.callee && node.callee->kind == ASTNodeKind::IndexOrCallExpr) {
             auto& c102 = static_cast<IndexOrCallExpr&>(*node.callee);
+            int last102 = -1;
             for (size_t i102 = 0; i102 < c102.positional.size(); i102++) {
                 if (c102.positional[i102]
-                    && exprHasLateBoundComRead(c102.positional[i102].get())) {
-                    stmtCallArgFirstLate_ = (int)i102;
-                    stmtCallArgSerial_ = "_eg" + std::to_string(tempCounter_++);
-                    break;
+                    && (exprHasLateBoundComRead(c102.positional[i102].get())
+                        || exprCanRaiseStmt(c102.positional[i102].get()))) {
+                    last102 = (int)i102;
                 }
+            }
+            if (last102 >= 0) {
+                stmtCallArgLastRaise_ = last102;
+                stmtCallArgSerial_ = "_eg" + std::to_string(tempCounter_++);
             }
         }
         pendingChainObj_.clear();

@@ -756,8 +756,12 @@
         // 第一百零二刀 (§11.80): 首枚命中之前的实参（含命中那枚）逐枚提升成临时量，
         // 每枚求值前比一次序号 —— 真机 I1（gN=0）/ I2（gN=1）量的就是这个顺序。
         // 地址实参 (&x) 求值无副作用也不会报错，直接留在调用里。
-        if (!stmtCallArgSerial_.empty() && (int)i <= stmtCallArgFirstLate_
+        // 第一百九十一刀 (§11.174): 上界改取**最后一枚可 raise** 的实参 (stmtCallArgLastRaise_),
+        // 并且 ByRef 实参一律不提升 —— 它本来就是地址表达式 (`&x`), 求值无副作用、不会 raise,
+        // 提升成临时量反而会把被调方的写回弄丢 (写进了 `_agN` 而不是 `x`)。
+        if (!stmtCallArgSerial_.empty() && (int)i <= stmtCallArgLastRaise_
             && argNestDepth_ == 1
+            && !isByRef
             && !(argVal.size() > 1 && argVal[0] == '&')) {
             std::string gtyp102 = "int32_t";
             if (i < calleeParams.size()) {
