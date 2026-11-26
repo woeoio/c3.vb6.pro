@@ -13043,6 +13043,19 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "F10 n=0 err=11")
     Test-Vbp 'b200_assign_abort' "$Tests\b200_assign_abort\B200Res.vbp" $b200Needles
     Test-Vbp 'b200_assign_abort_x86' "$Tests\b200_assign_abort\B200Res.vbp" $b200Needles -Arch "x86"
+    # §11.176 第一百九十三刀: Resume Next 的作用面收回到**过程级**。
+    # raise 一发生，被调方的剩余语句与调用方这条语句都不再执行，控制流落到最近的
+    # Resume Next 帧、从「出错语句的下一条」继续；隐式 resume **不清 Err**（G1 err=11）。
+    # G2 是反例哨兵: 被调方自带 Resume Next 时它自己那条语句中止、后面的 hits+1 照跑。
+    $b201Needles = @(
+    "G1 call_escape: hits=0 err=11",
+    "G2 call_swallow: hits=1 err=0",
+    "G3 assign_escape: n=0 hits=0 err=11",
+    "G4 two_hop: n=0 hits=10 err=11",
+    "G5 next_stmt: n=0 hits=1 err=11",
+    "G6 last_stmt: hits=1 err=11")
+    Test-Vbp 'b201_resume_scope' "$Tests\b201_resume_scope\B201Res.vbp" $b201Needles
+    Test-Vbp 'b201_resume_scope_x86' "$Tests\b201_resume_scope\B201Res.vbp" $b201Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

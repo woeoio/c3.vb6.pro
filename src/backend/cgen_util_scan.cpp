@@ -499,6 +499,40 @@ void CCodeGen::scanProcErrHandlers(Module& module) {
     }
 }
 
+// 第一百九十三刀 (§11.176): 过程体里有没有 `On Error Resume Next`（只认这一种，
+// 不把 GoTo 那族算进来 —— 它们已经是靠 setjmp 的）。递归走复合语句，口径同
+// hasOnErrorInStmts。
+bool CCodeGen::hasResumeNextInStmts(StmtList& stmts) const {
+    for (auto& stmt : stmts) {
+        if (!stmt) continue;
+        if (stmt->kind == ASTNodeKind::OnErrorStmt) {
+            if (static_cast<OnErrorStmt&>(*stmt).errorKind == OnErrorKind::ResumeNext) return true;
+            continue;
+        }
+        if (stmt->kind == ASTNodeKind::IfStmt) {
+            auto& s = static_cast<IfStmt&>(*stmt);
+            if (hasResumeNextInStmts(s.thenBody)) return true;
+            if (hasResumeNextInStmts(s.elseBody)) return true;
+            for (auto& e : s.elseIfs) if (e && hasResumeNextInStmts(e->body)) return true;
+        } else if (stmt->kind == ASTNodeKind::ForStmt) {
+            if (hasResumeNextInStmts(static_cast<ForStmt&>(*stmt).body)) return true;
+        } else if (stmt->kind == ASTNodeKind::ForEachStmt) {
+            if (hasResumeNextInStmts(static_cast<ForEachStmt&>(*stmt).body)) return true;
+        } else if (stmt->kind == ASTNodeKind::DoLoopStmt) {
+            if (hasResumeNextInStmts(static_cast<DoLoopStmt&>(*stmt).body)) return true;
+        } else if (stmt->kind == ASTNodeKind::WhileWendStmt) {
+            if (hasResumeNextInStmts(static_cast<WhileWendStmt&>(*stmt).body)) return true;
+        } else if (stmt->kind == ASTNodeKind::SelectCaseStmt) {
+            auto& sel = static_cast<SelectCaseStmt&>(*stmt);
+            for (auto& c : sel.cases) if (c && hasResumeNextInStmts(c->body)) return true;
+            if (hasResumeNextInStmts(sel.elseCase)) return true;
+        } else if (stmt->kind == ASTNodeKind::WithStmt) {
+            if (hasResumeNextInStmts(static_cast<WithStmt&>(*stmt).body)) return true;
+        }
+    }
+    return false;
+}
+
 bool CCodeGen::hasOnErrorInStmts(StmtList& stmts) const {
     for (auto& stmt : stmts) {
         if (!stmt) continue;

@@ -831,11 +831,17 @@ void vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description) {
     vb6_err.number = errNum;
     vb6_err.source = source;
     vb6_err.description = description;
-    if (vb6_err_resume_next) return;
+    // 第一百九十三刀 (§11.176): Resume Next 不再「就地返回」。
+    //   真机的 A5 读数（.temp/k191p/p217.txt）是 `Call PEscape` 之后 `hits` **不动** ——
+    //   raise 一发生，被调方的剩余语句与调用方这条语句**都不再执行**，控制流直接落到
+    //   最近的 Resume Next 帧（安装者可能是调用方，不一定是 raise 发生的那一层）。
+    //   所以这里先走 longjmp（帧由发码侧的 On Error Resume Next 装好），没帧才回到旧的
+    //   就地返回（比如只是一堆 RTL 内部 raise、外层还没装过帧）。
     if (vb6_err_jmp_active && vb6_error_jmp_set && vb6_error_jmp_ptr) {
         vb6_err_in_handler = 1;
         longjmp(*vb6_error_jmp_ptr, errNum);
     }
+    if (vb6_err_resume_next) return;
     // 未处理错误: 显示消息并退出
     // 定位调用点用: C3_COM_TRACE 下打印返回地址 (RVA 可对 -g 产出的 .map 符号化)
     if (GetEnvironmentVariableA("C3_COM_TRACE", NULL, 0) > 0) {

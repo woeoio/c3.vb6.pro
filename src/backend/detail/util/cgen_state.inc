@@ -740,6 +740,21 @@
 
     // P14.1.2: Resume dispatch switch支持 (每个过程独立)
     bool hasResume_ = false;            // 当前过程使用了Resume/Resume Next
+    // 第一百九十三刀 (§11.176): 本过程含 `On Error Resume Next`。
+    //   与 hasResume_ 是两件事: 后者是「有 Resume/Resume Next **语句**」。
+    //   为什么要单独一枚: 这一刀给 Resume Next 帧装**真捕获点**（setjmp + dispatch），
+    //   好让被调方里的 raise 直接 unwound 回来，而不是就地返回、让被调方跑完
+    //   （真机 A5: `Call PEscape` 之后 `hits` 不动）。于是本过程也要发 resume 点、
+    //   局部变量与 dispatch switch —— 这三样的启用判据从此是「有 Resume 语句」**或**
+    //   「有 Resume Next」。
+    bool hasResumeNext_ = false;
+    // 第一百九十三刀: 本过程的错误帧是否**真的装好**（`jmp_buf vb6_local_err_jmp` + 局部
+    //   resume 点变量 + 尾部 dispatch switch 三样齐备）。只由 cgen_decl_func / cgen_decl_proc
+    //   两个入口置真 —— 其余入口（Property / 继承类方法 / 控件方法片段）不装帧，
+    //   `On Error Resume Next` 在它们里面必须退回旧行为（只置 resume_next 旗），
+    //   否则发出来的 `goto vb6_err_dispatch_switch` / `&vb6_local_err_jmp` 会悬空
+    //   （VBFlexGrid x86 实测: C2094 标签未定义 + C2065 标识符未声明）。
+    bool errFrameReady_ = false;
     // 账 #305 §11.119 (第一百三十九刀): 活载体名册。
     //   只有「本过程一句 `Resume` 都没有」时才启用 —— 那种 handler 无论如何回不到块内,
     //   错误落点就可以把已登记的载体逐枚放掉 (`Resume` 可能回块内的那些一律不动,

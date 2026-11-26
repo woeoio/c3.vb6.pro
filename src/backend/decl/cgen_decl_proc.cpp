@@ -424,6 +424,8 @@ void CCodeGen::visit(SubDecl& node) {
     hasOnError_ = hasOnErrorInStmts(node.body);
     // P14.1.2: 检测Resume/Resume Next
     hasResume_ = hasResumeInStmts(node.body);
+    // 第一百九十三刀 (§11.176): 同 cgen_decl_func —— Resume Next 也发 resume 点与 dispatch。
+    hasResumeNext_ = hasResumeNextInStmts(node.body);
     inProtectedBlock_ = false;
     resumePointCounter_ = 0;
     dispatchPoints_.clear();
@@ -440,7 +442,8 @@ void CCodeGen::visit(SubDecl& node) {
     collectLabelWithDepth(node.body, 0, labelWithDepth_);
     if (hasOnError_) {
         c_.emitLine("jmp_buf vb6_local_err_jmp;");
-        if (hasResume_) {
+        errFrameReady_ = true;   // 第一百九十三刀: 同 cgen_decl_func
+        if (hasResume_ || hasResumeNext_) {
             c_.emitLine("int32_t vb6_err_resume_point = 0;");
             c_.emitLine("int32_t vb6_err_resume_next_point = 0;");
         }
@@ -527,7 +530,7 @@ void CCodeGen::visit(SubDecl& node) {
     c_.emitLine("return;");
 
     // P14.1.2: Resume dispatch switch - 仅通过goto可达
-    if (hasResume_ && !dispatchPoints_.empty()) {
+    if (!dispatchPoints_.empty()) {
         c_.emitLine("vb6_err_dispatch_switch:;");
         c_.emitLine("switch(vb6_err_dispatch) {");
         c_.indent();
@@ -549,6 +552,8 @@ void CCodeGen::visit(SubDecl& node) {
     hasGoSub_ = false;
     hasOnError_ = false;
     hasResume_ = false;
+    hasResumeNext_ = false;
+    errFrameReady_ = false;
     inProtectedBlock_ = false;
     dispatchPoints_.clear();
     currentErrorHandlerLabel_.clear();

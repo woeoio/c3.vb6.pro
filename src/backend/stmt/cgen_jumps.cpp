@@ -145,7 +145,31 @@ void CCodeGen::visit(OnErrorStmt& node) {
         case OnErrorKind::ResumeNext: {
             // On Error Resume Next
             c_.emitLine("vb6_ErrClear();  /* On Error: 见 visit(OnErrorStmt) 顶注 */");
-            c_.emitLine("vb6_err_resume_next = 1;");
+            // 第一百九十三刀 (§11.176): Resume Next 帧要装**真捕获点**。
+            //   改前只置 `vb6_err_resume_next = 1`，RTL 的 vb6_ErrRaise 就地返回 ⇒ 被调方
+            //   接着往下跑，真机 A5 里 `Call PEscape` 之后 `hits` 应当是**不动**的，本仓却跑到
+            //   100（100 \ 0 报 11 之后 `hits = hits + 100` 照样执行）。装上 setjmp 后，任何
+            //   木深处的 raise 直接 longjmp 回本帧，dispatch 落到「出错语句的下一条」。
+            // 只有帧真装好的入口（标准过程）才发这一套，其余入口退回旧行为（见 errFrameReady_ 注）。
+            if (errFrameReady_) {
+                c_.emitLine("vb6_error_jmp_ptr = &vb6_local_err_jmp;");
+                c_.emitLine("vb6_error_jmp_set = 1;");
+                c_.emitLine("vb6_err_jmp_active = 1;");
+                c_.emitLine("vb6_err_resume_next = 1;");
+                c_.emitLine("if (setjmp(vb6_local_err_jmp) != 0) {");
+                c_.indent();
+                // 真机读数：隐式 Resume Next **不清 Err**（G1 之后 err 仍为 11；G2 是 0 因为被调方
+                // 自己调了 Err.Clear）。VB6 只在**显式** Resume/Resume Next/On Error 语句上清。
+                c_.emitLine("vb6_err_dispatch = vb6_err_resume_next_point;");
+                c_.emitLine("goto vb6_err_dispatch_switch;");
+                c_.dedent();
+                c_.emitLine("}");
+                // 让每条语句都发 resume 点（第一百三十八刀的判据是 inProtectedBlock_）
+                inProtectedBlock_ = true;
+                needSetjmp_ = true;
+            } else {
+                c_.emitLine("vb6_err_resume_next = 1;");
+            }
             break;
         }
         case OnErrorKind::GoToZero:

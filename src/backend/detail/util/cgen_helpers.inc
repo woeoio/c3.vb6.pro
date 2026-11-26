@@ -956,6 +956,8 @@
     // 第一百九十二刀 (§11.175): 赋值站的「右值里有一次**必然爬出被调方**的 raise 调用」。
     //   与 exprCanRaiseStmt 的区别 = 被调方自带 On Error 与否（真机 D2/D10 两个反例）。
     bool exprCallsUnprotectedProc(Expr* e) const;
+    // 第一百九十三刀 (§11.176): 过程体里有没有 `On Error Resume Next`。
+    bool hasResumeNextInStmts(StmtList& stmts) const;
     // 第一百九十二刀: 建 procHasErrHandler_（本模块过程 → 是否自带 On Error）。
     void scanProcErrHandlers(Module& module);
     // 第一百零一刀 (§11.79): 条件位收口 —— 条件里含晚绑定读时，先发一行序号捕获，
