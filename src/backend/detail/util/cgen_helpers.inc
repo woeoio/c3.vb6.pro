@@ -953,6 +953,11 @@
     //   开闸，于是真机 A7/A8 的「坏实参之后不求值、被调方不进入」在 C3 里不成立。
     //   判据取**保守的宽**：树里有调用（用户过程 / 内建 / 方法 / 下标）或除零算符即真。
     bool exprCanRaiseStmt(Expr* e) const;
+    // 第一百九十二刀 (§11.175): 赋值站的「右值里有一次**必然爬出被调方**的 raise 调用」。
+    //   与 exprCanRaiseStmt 的区别 = 被调方自带 On Error 与否（真机 D2/D10 两个反例）。
+    bool exprCallsUnprotectedProc(Expr* e) const;
+    // 第一百九十二刀: 建 procHasErrHandler_（本模块过程 → 是否自带 On Error）。
+    void scanProcErrHandlers(Module& module);
     // 第一百零一刀 (§11.79): 条件位收口 —— 条件里含晚绑定读时，先发一行序号捕获，
     // 再把条件表达式折成 vb6_CondIfErr(<序号>, (<cond>))：求完序号变了就按真。
     // 真机 H1–H5: 单行 If / 多行 If 块 / ElseIf / Do While 的条件报 438 之后那一支都执行。

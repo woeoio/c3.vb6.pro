@@ -13024,6 +13024,22 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "B199-DONE")
     Test-Vbp 'b199_stmt_arg_abort' "$Tests\b199_stmt_arg_abort\B199Res.vbp" $b199Needles
     Test-Vbp 'b199_stmt_arg_abort_x86' "$Tests\b199_stmt_arg_abort\B199Res.vbp" $b199Needles -Arch "x86"
+    # §11.175 第一百九十二刀: 赋值站的语句级中止。右值里直接调用了**自身没有 On Error** 的
+    # 工程过程时 raise 必然爬出被调方 ⇒ 目标那一步不写 (真机 .temp/k192p/P219.bas, 读数 p219.txt)。
+    # F2/F7 是反例哨兵: 被调方自带 Resume Next / GoTo 处理器时序号同样会变, 但语句照常完成、
+    # 目标该写 —— 只靠「序号变了就中止」会把这两格写错, 所以判据落在「被调方有没有处理器」上。
+    $b200Needles = @(
+    "F1 n=-1 err=11",
+    "F2 n=5 err=11",
+    "F3 n=-1 err=11",
+    "F4 mPub=-1 err=11",
+    "F6 n=-1 err=11",
+    "F7 n=3 err=0",
+    "F8 n=-1 err=11",
+    "F9 d=-1 err=11",
+    "F10 n=0 err=11")
+    Test-Vbp 'b200_assign_abort' "$Tests\b200_assign_abort\B200Res.vbp" $b200Needles
+    Test-Vbp 'b200_assign_abort_x86' "$Tests\b200_assign_abort\B200Res.vbp" $b200Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

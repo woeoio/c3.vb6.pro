@@ -312,6 +312,23 @@ void CCodeGen::visit(AssignmentStmt& node) {
                 stmtAbortTmpType_ = mapType(tgtT79);
             }
         }
+        // 第一百九十二刀 (§11.175): 右值里**直接调用了自身没有 On Error 的工程过程** ——
+        // 那次 raise 必然爬出被调方, 调用方这条语句随即被中止 (真机 .temp/k192p/P218.bas:
+        // D1 x=-1 / D5 x=-1 / D7 arr0=-1 / D8 mPub=-1 / D11 x=-1 / D13 x=-1, Err 留 11)。
+        // 反例是同一张表里的 D2 (被调方 On Error Resume Next 吞掉但不清 Err ⇒ x=5) 与
+        // D10 (被调方自带 GoTo 处理器 ⇒ x=3): 它们的序号**也**变了, 所以只靠序号一变就
+        // 中止的老判据会把这两格写错 —— 这一刀的区别全部落在「被调方有没有处理器」上,
+        // 由 procHasErrHandler_ 静态给出。
+        // 目标档只开到整型/Double/String: 这三档的守卫与临时量机制已在 (第七十九/八十四/
+        // 八十五刀); Variant 目标的临时量要另造 (`(VARIANT)0` 不是合法初始化), 留作 backlog。
+        if ((tgtInt79 || tgtDbl97 || tgtT79 == Vb6Type::String) && node.value
+            && exprCallsUnprotectedProc(node.value.get())) {
+            mayRaise79 = true;
+            if (tgtInt79 || tgtDbl97) {
+                stmtAbortTmp_ = true;
+                stmtAbortTmpType_ = mapType(tgtT79);
+            }
+        }
         if (mayRaise79) {            const std::string gv79 = "_e" + std::to_string(stmtAbortSeq_++);
             c_.emitLine("const int32_t " + gv79 + " = vb6_ErrSerial();");
             stmtAbortGuard_ = gv79;

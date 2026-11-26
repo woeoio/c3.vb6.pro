@@ -97,6 +97,62 @@ bool CCodeGen::exprHasLateBoundComRead(Expr* e) const {
     }
 }
 
+// 第一百九十二刀 (§11.175): 赋值站的「右值里有一次**必然爬出去**的 raise」。
+//
+// 与第一百九十一刀（实参站）的 exprCanRaiseStmt 不是同一问：那一站问「这枚实参可能 raise」，
+// 宽着算不会错（实参本来就该在被调方之前求完）；赋值站问的是另一件事 ——「这次 raise 会不会
+// 爬出**被调方**，从而中止调用方这条语句」。真机把它分成了两族（.temp/k192p/P218.bas）：
+//
+//   D1/D5/D7/D8/D11/D13  被调方自身无 On Error ⇒ raise 必然爬出 ⇒ 目标不动
+//   D2/D10               被调方自带 On Error/Resume ⇒ 在内部就接了 ⇒ 目标该写 (x=5 / x=3)
+//
+// 两族在运行期状态上完全一样（vb6_ErrSerial 一视同仁），差别只在**被调方有没有处理器**，
+// 所以判据取静态的：右值树里存在一枚直接调用，其被调名在本模块过程表里且那张表记着
+// 「无处理器」。查不到名字的（内建、跨模块、晚绑定、下标）一律不计 —— 宽了会把 D2/D10
+// 那一族误判成中止 (旧注释里那次 fdrawstate_x86 翻红就是这个)。
+//
+// 递归处理: D13 是「外层也无处理器、但它调的是有问题的内层」—— 那条语句的 raise 照样爬出
+// 外层，所以这里按调用是否（传递地）落在无处理器过程上判，而不是只看被调方自己体内的形状。
+bool CCodeGen::exprCallsUnprotectedProc(Expr* e) const {
+    if (!e || procHasErrHandler_.empty()) return false;
+    switch (e->kind) {
+        case ASTNodeKind::IndexOrCallExpr: {
+            auto& c = static_cast<IndexOrCallExpr&>(*e);
+            if (c.callee && c.callee->kind == ASTNodeKind::IdentifierExpr) {
+                const std::string n =
+                    Symbol::toLower(static_cast<IdentifierExpr&>(*c.callee).name);
+                auto it = procHasErrHandler_.find(n);
+                if (it != procHasErrHandler_.end() && !it->second) return true;
+            }
+            for (auto& a : c.positional)
+                if (exprCallsUnprotectedProc(a.get())) return true;
+            for (auto& na : c.named)
+                if (exprCallsUnprotectedProc(na.value.get())) return true;
+            return false;
+        }
+        default:
+            break;
+    }
+    // 其余节点: 用与 raiseInTree85 相同的子节点遍历（属性访问/成员读的接收者、二元两侧、
+    // 一元子项、括号）。不在这里枚举全部 kind —— 只补常见的几族，其余按无风险处理。
+    switch (e->kind) {
+        case ASTNodeKind::MemberAccessExpr:
+            return exprCallsUnprotectedProc(static_cast<MemberAccessExpr&>(*e).object.get());
+        case ASTNodeKind::WithMemberExpr:
+            // 隐式接收者 (.Prop): 接收者是 With 块那枚变量, 不在树里 ⇒ 无子表达式可扫。
+            return false;
+        case ASTNodeKind::BinaryExpr: {
+            auto& b = static_cast<BinaryExpr&>(*e);
+            return exprCallsUnprotectedProc(b.left.get())
+                || exprCallsUnprotectedProc(b.right.get());
+        }
+        case ASTNodeKind::UnaryExpr:
+            return exprCallsUnprotectedProc(static_cast<UnaryExpr&>(*e).operand.get());
+        default:
+            return false;
+    }
+}
+
 // 第一百九十一刀 (§11.174): 「这枚表达式求值时可能 raise」—— 语句位置调用的实参守卫开闸判据。
 // 为什么需要它: 第一百零二刀只给「实参含晚绑定 COM 读」开闸 (真机 I 族量的那一族),
 // 而真机 A7/A8 (.temp/k191p/P217.bas) 量的口径与 I 族完全相同, 只是暴雷源不限于晚绑定读:
@@ -423,6 +479,25 @@ void CCodeGen::collectLabelWithDepth(StmtList& stmts, int depth,
 // ============================================================
 // P12.3: 检测语句列表中是否包含OnErrorStmt
 // ============================================================
+
+// 第一百九十二刀 (§11.175): 本模块过程表的「自带 On Error 与否」—— 赋值站的右值逃逸判据用它。
+// 扫全部顶层声明（Sub/Function/Property）；表值 = 过程体内是否有 OnErrorStmt/ResumeStmt。
+void CCodeGen::scanProcErrHandlers(Module& module) {
+    procHasErrHandler_.clear();
+    for (auto& decl : module.declarations) {
+        if (!decl) continue;
+        if (decl->kind == ASTNodeKind::SubDecl) {
+            auto& d = static_cast<SubDecl&>(*decl);
+            procHasErrHandler_[Symbol::toLower(d.name)] = hasOnErrorInStmts(d.body);
+        } else if (decl->kind == ASTNodeKind::FunctionDecl) {
+            auto& d = static_cast<FunctionDecl&>(*decl);
+            procHasErrHandler_[Symbol::toLower(d.name)] = hasOnErrorInStmts(d.body);
+        } else if (decl->kind == ASTNodeKind::PropertyDecl) {
+            auto& d = static_cast<PropertyDecl&>(*decl);
+            procHasErrHandler_[Symbol::toLower(d.name)] = hasOnErrorInStmts(d.body);
+        }
+    }
+}
 
 bool CCodeGen::hasOnErrorInStmts(StmtList& stmts) const {
     for (auto& stmt : stmts) {

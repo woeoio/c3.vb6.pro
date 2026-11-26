@@ -797,6 +797,14 @@
     // (-(pos+1))，见 vb6forms_menuproxy.c。
     std::unordered_map<std::string, int> knownMenuPopupPos_;
 
+    // 第一百九十二刀 (§11.175): 本模块**过程名 → 该过程自身是否含 On Error/Resume**。
+    //   赋值站的「right值逃逸」判据要用它: 一个自身没有 On Error 的过程里 raise 必然往外爬
+    //   (真机 D1/D5/D7/D8/D11/D13 都是「目标不动 + Err 留号」), 而自带处理器的那一类
+    //   (D2/D10) raise 在其内部就被接了, 调用方语句照常完成、目标该写 —— 这一层区别
+    //   **在运行期状态上看不出来** (`vb6_ErrSerial` 对两者一视同仁地自增), 只能静态判。
+    //   只在**本模块**建表: 跨模块调用查不到条目 ⇒ 不开闸 (宁可少改, 不造错码)。
+    std::unordered_map<std::string, bool> procHasErrHandler_;
+
     // P7.5: 窗体名 (小写)，用于识别 Form.Caption 等窗体自身属性
     std::string knownFormName_;
 
