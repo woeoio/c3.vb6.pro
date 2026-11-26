@@ -1,0 +1,4 @@
+Type=Exe
+Module=B206Main; B206Main.bas
+Startup="Sub Main"
+ExeName32="B206Res.exe"

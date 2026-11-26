@@ -411,6 +411,8 @@ static BSTR vb6_SA_ReadJoinStrAt(struct vb6_SafeArray1D* arr, int32_t index, int
             case vb6_sa_single:   v.vt = vb6_vtSingle;   v.fltVal = *(float*)slot; break;
             case vb6_sa_double:   v.vt = vb6_vtDouble;   v.dblVal = *(double*)slot; break;
             case vb6_sa_currency: v.vt = vb6_vtCurrency; v.cyVal = *(int64_t*)slot; break;
+            /* 账 §11.181: Date 元素以前落 default → 13 / 空串; 真机按日期文本输出 */
+            case vb6_sa_date:     v.vt = vb6_vtDate;     v.dblVal = *(double*)slot; break;
             default:
                 vb6_ErrRaise(13, vb6_BSTR_FromStr(L"VBA.Information"),
                              vb6_BSTR_FromStr(L"Type mismatch"));
@@ -459,6 +461,7 @@ static BSTR vb6_SA_ReadFilterText(struct vb6_SafeArray1D* arr, int32_t index,
             case vb6_sa_single:   v.vt = vb6_vtSingle;   v.fltVal = *(float*)slot; break;
             case vb6_sa_double:   v.vt = vb6_vtDouble;   v.dblVal = *(double*)slot; break;
             case vb6_sa_currency: v.vt = vb6_vtCurrency; v.cyVal = *(int64_t*)slot; break;
+            case vb6_sa_date:     v.vt = vb6_vtDate;     v.dblVal = *(double*)slot; break;  /* 账 §11.181 */
             default:
                 if (hasText) *hasText = 0;
                 return vb6_BSTR_Empty();
@@ -482,6 +485,7 @@ static void vb6_SA_ReadVariantAt(struct vb6_SafeArray1D* arr, int32_t index, vb6
         case vb6_sa_single:   out->vt = vb6_vtSingle;   out->fltVal = *(float*)slot; break;
         case vb6_sa_double:   out->vt = vb6_vtDouble;   out->dblVal = *(double*)slot; break;
         case vb6_sa_currency: out->vt = vb6_vtCurrency; out->cyVal = *(int64_t*)slot; break;
+        case vb6_sa_date:     out->vt = vb6_vtDate;     out->dblVal = *(double*)slot; break;  /* 账 §11.181 */
         default: out->vt = vb6_vtEmpty; break;
     }
 }

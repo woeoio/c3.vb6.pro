@@ -6475,7 +6475,7 @@ if ($Category -in @("all", "run", "bas")) {
         "R17-bool-vt=8203 tn=Boolean()", "R17-byte-vt=8209 tn=Byte()",
         "R17-int-vt=8194 tn=Integer()", "R17-long-vt=8195 tn=Long()",
         "R17-sing-vt=8196 tn=Single()", "R17-dbl-vt=8197 tn=Double()",
-        "R17-cur-vt=8198 tn=Currency()", "R17-date-vt=8197 tn=Double()",
+        "R17-cur-vt=8198 tn=Currency()", "R17-date-vt=8199 tn=Date()",
         "R17-obj-vt=8201 tn=Object()", "R17-udt-vt=8204 tn=Variant()",
         "R17-boxed-vt=8195 tn=Long() cell=4242", "R17-boxw=99", "R17-undim-vt=8204 tn=Variant()",
         "RE-DONE")
@@ -13160,6 +13160,27 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "T11 overwrite vt=2 val=5")
     Test-Vbp 'b205_unalloc_array_box' "$Tests\b205_unalloc_array_box\B205Res.vbp" $b205Needles
     Test-Vbp 'b205_unalloc_array_box_x86' "$Tests\b205_unalloc_array_box\B205Res.vbp" $b205Needles -Arch "x86"
+    # §11.181 第一百九十八刀: **Date 元素档**。元素枚举里补 vb6_sa_date（与 vb6_sa_double
+    # 同宽同布局，只差标签），于是 VarType 8199 / TypeName "Date()" / 元素 7 / "Date" 全对上。
+    # 真机 .temp/k198p/p234.txt 与夹具同一批读数（D1..D13 逐行相同）。
+    # 刻意不钉两格（见 §11.181 第五节）: Erase 之后 VarType/TypeName 走「谓词实参」那一站，
+    # 仍答 8204/"Variant()"（.temp/k198p/p236.txt）；String→Date 隐式转换（.temp/k198p/p235.txt）。
+    $b206Needles = @(
+    "D1 unalloc vt=8199 isarr=True tn=Date()",
+    "D2 alloc vt=8199 tn=Date() lb=0 ub=2",
+    "D3 elem vt=7 tn=Date dbl=43832.6278356481",
+    "D4 num vt=7 tn=Date dbl=45000.5",
+    "D5 box vt=7 tn=Date dbl=45000.5",
+    "D6 arr vt=8199 tn=Date() isarr=True lb=0 ub=2",
+    "D7 aftererase vt=8199 tn=Date() ub=2",
+    "D8 literal vt=7 tn=Date dbl=44259",
+    "D9 each vt=7 tn=Date",
+    "D10 scalar vt=7 tn=Date dbl=36525.9999884259",
+    "D11 back vt=7 tn=Date dbl=38020.2125810185",
+    "D12 pres vt=8199 tn=Date() ub=3 dbl=39606",
+    "D13 tovar dbl=39606")
+    Test-Vbp 'b206_date_elem_array' "$Tests\b206_date_elem_array\B206Res.vbp" $b206Needles
+    Test-Vbp 'b206_date_elem_array_x86' "$Tests\b206_date_elem_array\B206Res.vbp" $b206Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

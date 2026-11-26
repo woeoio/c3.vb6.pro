@@ -330,8 +330,12 @@ void CCodeGen::visit(ForEachStmt& node) {
             // §B164 站②: VB 数组元素 —— VB6_SA_AT 是裸读，交出去的是**数组自己**那只
             // BSTR(借用)，故按「右值不持有」走 Clear+深拷贝。第五十四刀那台在此既不清旧值
             // 也不复制，于是两种半句各缺一半: 漏一只 BSTR，或把数组的串 free 掉。
-            emitVariantSlotStore(varAcc, "vb6_VariantFromValue(VB6_SA_AT(" + elemCType + ", "
-                                 + arrRef091f + ", " + idxVar + "))", false);
+            // 账 §11.181 (第一百九十八刀): Date 数组的元素在 C 侧是 double，_Generic 只能答
+            // VT_R8；真机 P234 的 C10（For Each）答 vt=7 / "Date" ⇒ 换成带标签那一枚。
+            const std::string feElem198 = (collElemType == Vb6Type::Date)
+                ? ("vb6_VariantDate(VB6_SA_AT(" + elemCType + ", " + arrRef091f + ", " + idxVar + "))")
+                : ("vb6_VariantFromValue(VB6_SA_AT(" + elemCType + ", " + arrRef091f + ", " + idxVar + "))");
+            emitVariantSlotStore(varAcc, feElem198, false);
         } else {
             c_.emitLine(varAcc + " = VB6_SA_AT(" + elemCType + ", " + arrRef091f + ", " + idxVar + ");");
         }

@@ -166,6 +166,9 @@
     // 逐字节回退到 vb6_VariantFromValue(原样) —— 非布尔路径的生成码不变.
     // expr 允许为 nullptr (该位置没有 AST 实参, 如命名实参) → 按原样装箱.
     std::string boxToVariant(Expr* expr, const std::string& cExpr) const;
+    // 账 §11.181 (第一百九十八刀): Date 数组的**元素**装进 Variant —— 元素在 C 侧是 double,
+    // _Generic 只能答 VT_R8; 这一问按声明档把标签补成 VT_DATE。认不出就交空串。
+    std::string dateElemVariantBox(const Expr* expr, const std::string& cExpr) const;
     // C30-10 第三十二刀: 「这枚节点在 VB6 里是 Integer 档 (VarType 2)」——与装箱权威
     // boxToVariant 同一份判据 (字面量 / `As Integer` 变量两形)。两位调用者:
     // wrapVariantValue 的 `case Long` (它不能把这档抢去装 VT_I4) 与 boxToVariant 自己。

@@ -44,6 +44,7 @@ int32_t vb6_SaElemSize(vb6_safearray_elemtype t) {
         case vb6_sa_variant: return (int32_t)sizeof(vb6_VARIANT);
         case vb6_sa_ptr:     return (int32_t)sizeof(void*);
         case vb6_sa_currency: return (int32_t)sizeof(int64_t);  /* P1-9修复: VB6 Currency = 8bytes */
+        case vb6_sa_date:    return (int32_t)sizeof(double);    /* 账 §11.181: 与 vb6_sa_double 同宽 */
         case vb6_sa_udt:     return 0;  /* UDT: elemSize set externally, cannot determine here */
         default:             return 4;
     }
@@ -65,6 +66,7 @@ vb6_safearray_elemtype vb6_SaElemTypeFromVt(VARTYPE comVt) {
         case VT_I4:      return vb6_sa_long;
         case VT_R4:      return vb6_sa_single;
         case VT_R8:      return vb6_sa_double;
+        case VT_DATE:    return vb6_sa_date;      /* 账 §11.181: 日期档 —— 以前落 default 变 Variant */
         case VT_BSTR:    return vb6_sa_bstr;
         case VT_VARIANT: return vb6_sa_variant;
         case VT_I8:      return vb6_sa_variant;   /* 枚举里没有 64 位整数档 (§B155 记着) */
@@ -84,6 +86,7 @@ int32_t vb6_SaVtFromElemType(vb6_safearray_elemtype t) {
         case vb6_sa_variant:  return (int32_t)vb6_vtVariant;     /* 12 */
         case vb6_sa_ptr:      return (int32_t)vb6_vtDispatch;    /* 9  = VB6 的 vbObject */
         case vb6_sa_currency: return (int32_t)vb6_vtCurrency;    /* 6  */
+        case vb6_sa_date:     return (int32_t)vb6_vtDate;        /* 7  */
         default:              return (int32_t)vb6_vtVariant;     /* empty / udt */
     }
 }
@@ -1105,6 +1108,7 @@ static void vb6_SaElemToVariant(int32_t et, const void* p, VARIANT* out) {
         case vb6_sa_long:  out->vt = VT_I4;  out->lVal = *(int32_t*)p; break;
         case vb6_sa_single:out->vt = VT_R4;  out->fltVal = *(float*)p; break;
         case vb6_sa_double:out->vt = VT_R8;  out->dblVal = *(double*)p; break;
+        case vb6_sa_date:  out->vt = VT_DATE; out->dblVal = *(double*)p; break;   /* 账 §11.181 */
         case vb6_sa_currency: out->vt = VT_CY; out->cyVal.int64 = *(int64_t*)p; break;
         case vb6_sa_ptr:
             out->vt = VT_DISPATCH;

@@ -4636,6 +4636,26 @@ bool CCodeGen::cExprIsVariantCarrier(const std::string& cExpr) const {
 //          vb6_VariantObject —— 类型那一问 (§B136 第二十八刀) 答了句柄, 这一路不吃它
 // 不显式改写的 (Integer/Long/Double/String/Object) 在 _Generic 下与 VB6 同档, 保持
 // 原样以免动到存量发码。
+// 账 §11.181 (第一百九十八刀): Date 数组的**元素**装进 Variant 要答 VT_DATE (VarType 7 /
+// TypeName "Date"), 而元素在 C 侧就是 double (VB6_SA_AT(double, q, i)) —— _Generic 只能答
+// VT_R8。这一问按声明那张表 arrayElemTypes_ (与第一百九十七刀同一份) 认出「Date 数组的
+// 一枚元素」, 再把标签补上。真机 P234: C3 elem vt=7 tn=Date。只认一维单下标 —— 多维阶位
+// 不在这一问里猜 (认不出就交空串, 走改前那一档)。
+std::string CCodeGen::dateElemVariantBox(const Expr* expr, const std::string& cExpr) const {
+    if (!expr || expr->kind != ASTNodeKind::IndexOrCallExpr) return std::string();
+    /* 幂等: 实参站与存储站会各问一次装箱 (wrapVariantValue 末尾就交回 boxToVariant),
+       第二问拿到的是已经包好的文本 —— 再包一层就成 vb6_VariantDate(vb6_VARIANT) (C2440)。 */
+    if (cExpr.rfind("vb6_VariantDate(", 0) == 0) return std::string();
+    const auto& ic198 = static_cast<const IndexOrCallExpr&>(*expr);
+    if (!ic198.callee || ic198.callee->kind != ASTNodeKind::IdentifierExpr) return std::string();
+    if (ic198.positional.size() != 1) return std::string();
+    const std::string nm198 = Symbol::toLower(
+        static_cast<const IdentifierExpr&>(*ic198.callee).name);
+    auto it198 = arrayElemTypes_.find(nm198);
+    if (it198 == arrayElemTypes_.end() || it198->second != Vb6Type::Date) return std::string();
+    return "vb6_VariantDate((double)(" + cExpr + "))";
+}
+
 std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
     // C30-11 第六十五刀: 实参站的比较符 Null 传播（与存储站同一个判据）。
     {
@@ -4701,6 +4721,13 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
     {
         std::string curBox178 = currencyVariantBox(expr, cExpr);
         if (!curBox178.empty()) return curBox178;
+    }
+    // 账 §11.181 (第一百九十八刀): 这里多问一问「这是不是 Date 数组的一枚元素」。
+    // 为什么必须在装箱站问: 元素在 C 侧就是 double (VB6_SA_AT(double, q, i)), 标签丢了;
+    // 真机 P234: `v = q(1)` / `TypeName(q(0))` / For Each 全部答 VT_DATE(7) / "Date"。
+    {
+        std::string db198 = dateElemVariantBox(expr, cExpr);
+        if (!db198.empty()) return db198;
     }
     if (!expr) return "vb6_VariantFromValue(" + cExpr + ")";
     // 已经是 VARIANT 的表达式交给 _Generic 的 vb6_VariantIdentity 档恒等直传,

@@ -31,6 +31,7 @@ typedef enum vb6_safearray_elemtype {
     vb6_sa_ptr   = 9,   // void* (对象引用)
     vb6_sa_currency = 10, // int64_t (VB6 Currency: value*10000)
     vb6_sa_udt    = 11,   // UDT (elemSize set externally)
+vb6_sa_date   = 12,   // double (OLE 日期序列号) —— 与 vb6_sa_double 同宽同布局, 只差标签
 } vb6_safearray_elemtype;
 
 // 一维数组描述符 (VB6绝大多数用例是一维)

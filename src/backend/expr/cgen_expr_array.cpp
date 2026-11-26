@@ -17,7 +17,7 @@ std::string CCodeGen::mapSaElemType(Vb6Type type) const {
         case Vb6Type::Long:     return "vb6_sa_long";
         case Vb6Type::Single:   return "vb6_sa_single";
         case Vb6Type::Double:   return "vb6_sa_double";
-        case Vb6Type::Date:     return "vb6_sa_double";
+        case Vb6Type::Date:     return "vb6_sa_date";   // 账 §11.181: 以前并到 vb6_sa_double, 标签就丢了
         case Vb6Type::Currency: return "vb6_sa_currency";  // P1-9修复: 8-byte Currency
         case Vb6Type::String:   return "vb6_sa_bstr";
         case Vb6Type::Variant:  return "vb6_sa_variant";

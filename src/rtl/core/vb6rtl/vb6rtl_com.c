@@ -637,6 +637,7 @@ static VARTYPE vb6_ComSaVtBlittable(vb6_safearray_elemtype et) {
         case vb6_sa_long:
         case vb6_sa_single:
         case vb6_sa_double:
+        case vb6_sa_date:              /* 账 §11.181: DATE 也是 8 字节 POD, 出站答 VT_DATE */
             return (VARTYPE)vb6_SaVtFromElemType(et);
         default:
             return 0;   /* 0 = 这一档不出站 */
@@ -1574,6 +1575,10 @@ static vb6_VARIANT vb6_VariantElemFromSlotData(void* data, int32_t off, vb6_safe
             result.vt = vb6_vtDouble;
             result.dblVal = ((double*)data)[off];
             break;
+        case vb6_sa_date:              /* 账 §11.181: 日期元素的标签是 VT_DATE, 载体仍是 double */
+            result.vt = vb6_vtDate;
+            result.dblVal = ((double*)data)[off];
+            break;
         case vb6_sa_single:
             result.vt = vb6_vtDouble; /* VB6 Single -> Double promotion */
             result.dblVal = (double)((float*)data)[off];
@@ -1738,6 +1743,8 @@ void vb6_VariantArraySet(vb6_VARIANT* v, int32_t index, vb6_VARIANT val) {
         case vb6_sa_byte:   ((uint8_t*)arr->data)[off] = vb6_CByteV(val); break;
         case vb6_sa_bool:   ((int16_t*)arr->data)[off] = vb6_CBoolV(val); break;
         case vb6_sa_double: ((double*)arr->data)[off] = vb6_CDblV(val); break;
+        /* 账 §11.181: 写日期元素走 CDate 那一档 —— 文本按日期解析 (真机 S2: "2021-03-04" → 44259) */
+        case vb6_sa_date:   ((double*)arr->data)[off] = vb6_CDate(val); break;
         case vb6_sa_single: ((float*)arr->data)[off] = (float)vb6_CSngV(val); break;
         case vb6_sa_currency:
             ((int64_t*)arr->data)[off] = vb6_CurrencyScale(vb6_CCurV(val));
