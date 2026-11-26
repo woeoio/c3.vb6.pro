@@ -47,6 +47,11 @@ void CCodeGen::visit(SelectCaseStmt& node) {
     Vb6Type testType = inferExprType(*node.testExpr);
     bool isStringSelect = TypeSystem::isString(testType);
     bool isFloatSelect = TypeSystem::isFloat(testType);
+    // §11.190 (第二百零七刀): Date 主语的 Select Case —— 承载档必须是 **double**。
+    // 改前落 int32_t 档 (`double d` 被截成 36xxx), 再把标签当 BSTR 去 `==`:
+    // 真机 Y6 (`Select Case d: Case "2021-03-04"`) 真值 1, 改前答 0 (既截断又比错类型)。
+    // 标签是串时按同一条口径折成日期序列 (vb6_DateVal, 与 binary 比较那腿同一枚入口)。
+    bool isDateSelect = (testType == Vb6Type::Date);
 
     // 账 #305 第311刀「实施」= 主语静态答 **Variant** 时，承载档改由 Case 标签回答。
     // VB6 对 Variant 主语的 Select Case 是按 Case 项的类型逐项做 VarCmp；我方以前只问
@@ -126,7 +131,9 @@ void CCodeGen::visit(SelectCaseStmt& node) {
 
     // 根据测试表达式类型选择临时变量类型
     std::string tempType;
-    if (isStringSelect) {
+    if (isDateSelect) {
+        tempType = "double";
+    } else if (isStringSelect) {
         tempType = "BSTR";
     } else if (isFloatSelect) {
         // Fix 136: Single 测试必须按 **float** 承载并参与 Case 比较。
@@ -157,6 +164,9 @@ void CCodeGen::visit(SelectCaseStmt& node) {
         } else if (testIsVariant && !isStringSelect && !isFloatSelect) {
             // int32_t temp = Variant → vb6_VariantToLong(Variant)
             initExpr = "vb6_VariantToLong(" + testVar + ")";
+        } else if (testIsVariant && isDateSelect) {
+            // §11.190: 槽主语进 Date 承载 —— 走 CDate 那一档 (文本按日期解析、Null 抛 94)
+            initExpr = "vb6_CDate(" + testVar + ")";
         } else if (testIsVariant && isStringSelect) {
             // BSTR temp = Variant → vb6_VariantToString(Variant)
             initExpr = "vb6_VariantToString(" + testVar + ")";
@@ -299,13 +309,21 @@ void CCodeGen::visit(SelectCaseStmt& node) {
         for (size_t vi = 0; vi < caseClause->values.size(); vi++) {
             auto& cv = caseClause->values[vi];
             std::string cond;
+            // §11.190: Date 主语的标签 —— 串档折成日期序列, 其余按数值原样
+            auto dateLabel190 = [&](Expr* lbl, const std::string& txt) -> std::string {
+                if (!isDateSelect) return txt;
+                return (lbl && inferExprType(*lbl) == Vb6Type::String)
+                           ? ("vb6_DateVal(" + txt + ")") : txt;
+            };
 
             if (cv.isIsClause) {
                 // Case Is > 0 → tempVar > 0 (比较符在 cv.relOp, 右操作数在 cv.value)
                 if (cv.hasRelOp && cv.value) {
                     emitExpr(*cv.value);
                     std::string rightVal = std::move(lastExpr_);
-                    if (isStringSelect) {
+                    if (isDateSelect) {
+                        cond = tempVar + " " + mapBinaryOp(cv.relOp) + " " + dateLabel190(cv.value.get(), rightVal);
+                    } else if (isStringSelect) {
                         // 字符串比较: vb6_StrCmp(tempVar, rightVal) op 0
                         // <vbeclipse>: 本模块 Option Compare Text → 恒文本入口
                         cond = std::string(optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + rightVal + ") " + mapBinaryOp(cv.relOp) + " 0";
@@ -329,7 +347,10 @@ void CCodeGen::visit(SelectCaseStmt& node) {
                 std::string lo = std::move(lastExpr_);
                 emitExpr(*cv.toValue);
                 std::string hi = std::move(lastExpr_);
-                if (isStringSelect) {
+                if (isDateSelect) {
+                    cond = tempVar + " >= " + dateLabel190(cv.value.get(), lo) + " && " + tempVar
+                           + " <= " + dateLabel190(cv.toValue.get(), hi);
+                } else if (isStringSelect) {
                     // 字符串范围比较: wcscmp >= lo && wcscmp <= hi
                     cond = std::string(optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + lo + ") >= 0 && "
                            + (optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + hi + ") <= 0";
@@ -342,7 +363,9 @@ void CCodeGen::visit(SelectCaseStmt& node) {
             } else {
                 // 精确匹配
                 emitExpr(*cv.value);
-                if (isStringSelect) {
+                if (isDateSelect) {
+                    cond = tempVar + " == " + dateLabel190(cv.value.get(), lastExpr_);
+                } else if (isStringSelect) {
                     cond = std::string(optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + lastExpr_ + ") == 0";
                 } else if (isFloatSelect) {
                     // Fix 136: Single 语义精确匹配

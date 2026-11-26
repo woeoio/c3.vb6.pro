@@ -172,6 +172,20 @@ if ($r18arr -ne 1) { $fail += ('R18 known-array exclusion = ' + $r18arr + ' (wan
 # R19: b213 夹具两台在跑。
 $r19cells = N '\$Tests\\b213_variant_call_to_date\\B213Res\.vbp' $T
 if ($r19cells -ne 2) { $fail += ('R19 b213 run cells = ' + $r19cells + ' (want 2 = x64 + x86)') }
+# R20 (§11.190 第二百零七刀): 比较站那一腿 —— Date 与 String 相比要折成日期序列。
+# 旧形把 Date 侧 wrapToBSTR 后发 vb6_StrCmp(vb6_CStrDate(d), "…"), 比的是格式化文本
+# (真机 p248 的 Y2/Y3 答 0、Y7 答 1)。三枚钉子: 腿在、元素档问句在、Select Case 走 double。
+$B = Get-Content -Raw (Join-Path $root 'src\backend\expr\cgen_expr_binary.cpp')
+$S = Get-Content -Raw (Join-Path $root 'src\backend\stmt\cgen_select.cpp')
+$r20leg = ([regex]::Matches($B, '\(lDate190 && rStr190\) \|\| \(lStr190 && rDate190\)', 'Multiline')).Count
+$r20elem = ([regex]::Matches($B, 'arrayElemTypes_\.find\(Symbol::toLower\(', 'Multiline')).Count
+$r20sel = ([regex]::Matches($S, 'bool isDateSelect = \(testType == Vb6Type::Date\);', 'Multiline')).Count
+if ($r20leg -ne 1) { $fail += ('R20 Date-vs-String comparison leg = ' + $r20leg + ' (want 1)') }
+if ($r20elem -lt 1) { $fail += ('R20 Date element档 ask in comparison = ' + $r20elem + ' (want >= 1)') }
+if ($r20sel -ne 1) { $fail += ('R20 Select Case Date carrier = ' + $r20sel + ' (want 1)') }
+# R21: b214 夹具两台在跑。
+$r21cells = N '\$Tests\\b214_date_string_compare\\B214Res\.vbp' $T
+if ($r21cells -ne 2) { $fail += ('R21 b214 run cells = ' + $r21cells + ' (want 2 = x64 + x86)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -180,5 +194,5 @@ if ($fail.Count -gt 0) {
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
     ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells +
-    ' call-cells=' + $r19cells)
+    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells)
 exit 0

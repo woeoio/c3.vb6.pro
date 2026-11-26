@@ -501,6 +501,51 @@ void CCodeGen::visit(BinaryExpr& node) {
         node.op == BinaryOp::Le || node.op == BinaryOp::Ge) {
         Vb6Type lt = inferExprType(*node.left);
         Vb6Type rt = inferExprType(*node.right);
+        // §11.190 (第二百零七刀): Date 与 String 相比 —— VB6 把**文本折成日期序列**再比数值。
+        // 改前两侧都被 wrapToBSTR 折成字符串, 发成 vb6_StrCmp(vb6_CStrDate(d), "…"): 比的
+        // 是**格式化后的文本**, 于是真机 `.temp/k207p/p248.txt` 的 Y2 (相等) 答 0、Y3 (小于)
+        // 答 0、Y7 (与当天正午比) 答 1 —— 三条静默错值 (Y1/Y4 只是 lexicographic 恰好对)。
+        // 文本侧用 vb6_DateVal (账 #417 的唯一日期解析入口, 解析不了就抛 13), 数值侧原样。
+        bool lDate190 = (lt == Vb6Type::Date);
+        bool rDate190 = (rt == Vb6Type::Date);
+        // 「这格是 Date 吗」不能只问 inferExprType: 数组元素 (`q(0)`) 那一形答 Variant,
+        // 于是一条腿漏掉 (真机 Y3 改前/改后都答 0)。元素档仍然只问既有那两张表:
+        // 裸名数组问 arrayElemTypes_, UDT 成员问 inferUdtFieldVb6Type (它同时给 isArray)。
+        auto isDateOperand190 = [&](Expr* e) -> bool {
+            if (!e) return false;
+            if (inferExprType(*e) == Vb6Type::Date) return true;
+            if (e->kind == ASTNodeKind::IndexOrCallExpr) {
+                const auto& ic = static_cast<const IndexOrCallExpr&>(*e);
+                if (ic.callee && ic.callee->kind == ASTNodeKind::IdentifierExpr) {
+                    auto it = arrayElemTypes_.find(Symbol::toLower(
+                        static_cast<const IdentifierExpr&>(*ic.callee).name));
+                    return it != arrayElemTypes_.end() && it->second == Vb6Type::Date;
+                }
+                if (ic.callee && (ic.callee->kind == ASTNodeKind::MemberAccessExpr
+                                  || ic.callee->kind == ASTNodeKind::WithMemberExpr)) {
+                    bool isArr190 = false;
+                    return inferUdtFieldVb6Type(ic.callee.get(), &isArr190) == Vb6Type::Date
+                           && isArr190;
+                }
+                return false;
+            }
+            if (e->kind == ASTNodeKind::MemberAccessExpr
+                || e->kind == ASTNodeKind::WithMemberExpr) {
+                bool isArr190 = false;
+                return inferUdtFieldVb6Type(e, &isArr190) == Vb6Type::Date && !isArr190;
+            }
+            return false;
+        };
+        if (!lDate190) lDate190 = isDateOperand190(node.left.get());
+        if (!rDate190) rDate190 = isDateOperand190(node.right.get());
+        bool lStr190 = (lt == Vb6Type::String);
+        bool rStr190 = (rt == Vb6Type::String);
+        if ((lDate190 && rStr190) || (lStr190 && rDate190)) {
+            std::string dl190 = lStr190 ? ("vb6_DateVal(" + left + ")") : left;
+            std::string dr190 = rStr190 ? ("vb6_DateVal(" + right + ")") : right;
+            lastExpr_ = "(-((" + dl190 + ") " + mapBinaryOp(node.op) + " (" + dr190 + ")))";
+            return;
+        }
         if (lt == Vb6Type::String || rt == Vb6Type::String) {
             // 两侧都需要是BSTR: 非BSTR端用wrapToBSTR转换
             if (lt != Vb6Type::String) left = wrapToBSTR(left, *node.left);
