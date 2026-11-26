@@ -12957,6 +12957,36 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "B197-DONE")
     Test-Vbp 'b197_ispred_variant' "$Tests\b197_ispred_variant\B197Res.vbp" $b197Needles
     Test-Vbp 'b197_ispred_variant_x86' "$Tests\b197_ispred_variant\B197Res.vbp" $b197Needles -Arch "x86"
+    # 账 #305 §11.173 (第一百九十刀): StrConv 的档位语义。判据以 TwinBASIC 为准
+    # (.temp/k189p/TB_StrConv.bas; C3 的 String 是 Unicode, 字节重解释那两档跟 VB 的
+    # ANSI 语义有真实差异; VB6Mini 在这两档上自相矛盾)。改前三档全错:
+    #   vbUnicode / vbFromUnicode 是 no-op; 999 被 and 0x3C 拆成 vbWide+vbHiragana
+    #   交出全角串; vbUnicode + vbUpperCase 既不报错也不折大小写。
+    # 钉 18 格 + DONE。S6 (TB 字节串的隐式奇数字节)、S7 的逐字符码点 (跟代码页走)、
+    # X1/X3/X4 的值那半边 (要等语句中止闸) 不钉, 理由都写在 §11.173 在册。
+    $b198Needles = @(
+    "S1=[len 6 :65,0,66,0,67,0,]",
+    "S2=[len 1 :16961,]",
+    "S3=[6]",
+    "S4=[0]",
+    "S5=[0]",
+    "S7L=[2]",
+    "S8=[len 0 :]",
+    "S9=[2]",
+    "S10=[0]",
+    "C1=[len 3 :65,66,67,]",
+    "C2=[len 3 :97,98,99,]",
+    "C3=[len 11 :72,101,108,108,111,32,87,111,114,108,100,]",
+    "C4=[len 3 :97,98,99,]",
+    "C5=[len 7 :65,98,99,32,68,101,102,]",
+    "X1E=[5]",
+    "X2=[0]",
+    "X3E=[5]",
+    "X5=[len 0 :]",
+    "L1=[len 3 :65,66,67,]",
+    "B198-DONE")
+    Test-Vbp 'b198_strconv_bytes' "$Tests\b198_strconv_bytes\B198Res.vbp" $b198Needles
+    Test-Vbp 'b198_strconv_bytes_x86' "$Tests\b198_strconv_bytes\B198Res.vbp" $b198Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

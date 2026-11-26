@@ -73,6 +73,21 @@ BSTR vb6_StrConv(BSTR text, int32_t conversion, int32_t localeID) {
     int32_t len = vb6_BSTR_Len(text);
     if (len == 0) return vb6_BSTR_Empty();
 
+    /* 账 #305 §11.173 (第一百九十刀): 档位校验先于一切。
+       TB 读数 (.temp/k189p/TB_StrConv.bas):
+         X1  StrConv("abc", vbUnicode + vbUpperCase) -> ERR 5
+         X3  StrConv("abc", 999)                     -> ERR 5
+       规则: 只认 0..255 那位域; vbUnicode 与 vbFromUnicode 不许同时出现;
+       字节重解释两档不许与大小写档同用。改前 999 被 `& 0x3C` 拆成 vbWide+vbHiragana
+       走了 LCMapStringEx, 交出全角串 (真机是 ERR 5) —— 那是位域截得太松。
+       注: 值那半边仍是旧的 (raise 之后调用方照样拿到空串), 归 §11.173 在册第一條. */
+    int32_t caseBits = conversion & 3;
+    int32_t byteBits = conversion & 0xC0;
+    if ((conversion & ~0xFF) != 0 || byteBits == 0xC0 || (byteBits && caseBits)) {
+        vb6_ErrRaiseNumber(5);
+        return vb6_BSTR_Empty();
+    }
+
     /* vbUpperCase=1, vbLowerCase=2, vbProperCase=3 - simple wchar transforms */
     if (conversion == 1 || conversion == 2 || conversion == 3) {
         wchar_t* buf = (wchar_t*)malloc((len + 1) * sizeof(wchar_t));
@@ -111,7 +126,7 @@ BSTR vb6_StrConv(BSTR text, int32_t conversion, int32_t localeID) {
         if (conversion & 8)  mapFlags |= 0x00400000; /* LCMAP_HALFWIDTH */
         if (conversion & 16) mapFlags |= 0x00200000; /* LCMAP_KATAKANA */
         if (conversion & 32) mapFlags |= 0x00100000; /* LCMAP_HIRAGANA */
-        if (mapFlags == 0) goto strconv_unicode;
+        if (mapFlags == 0) return SysAllocStringLen(text, len);
 
         /* Determine locale name from localeID */
         wchar_t localeName[85];
@@ -142,8 +157,40 @@ BSTR vb6_StrConv(BSTR text, int32_t conversion, int32_t localeID) {
         return result;
     }
 
-strconv_unicode:
-    /* vbUnicode=64, vbFromUnicode=128: no-op (internal strings are already Unicode) */
+    /* 账 #305 §11.173 (第一百九十刀): vbUnicode=64 —— 把 BSTR 的 UTF-16LE 字节缓冲
+       当 ANSI (CP_ACP) 字节流重解释。TB 读数 S1: StrConv("ABC", vbUnicode) 是
+       "A\0B\0C\0" (len 6) —— 正是 A 的 ACP 解码把 ASCII 尾部那个 00 也转成了 U+0000。 */
+    if (byteBits == 0x40) {
+        int32_t nBytes = len * 2;
+        int need = MultiByteToWideChar(CP_ACP, 0, (const char*)text, (int)nBytes, NULL, 0);
+        if (need <= 0) return SysAllocStringLen(text, len);
+        BSTR out = SysAllocStringLen(NULL, (UINT)need);
+        if (!out) return vb6_BSTR_Empty();
+        MultiByteToWideChar(CP_ACP, 0, (const char*)text, (int)nBytes, out, need);
+        return out;
+    }
+
+    /* vbFromUnicode=128 —— 反向: 先窄化成 ACP 字节, 再把字节流当 UTF-16LE 重解释。
+       TB 读数 S2: StrConv("ABC", vbFromUnicode) 的 Len 是 1, 内容是 0x4241 ('A','B'
+       两个字节) —— 宽字符数取 **floor(字节数/2)**。尾巴那半个字节在 TB 里藏在字节串的
+       隐式长度里 (所以 S6 的双重往返还能把那枚 'C' 捞回来), C3 的 String 没有那个字段,
+       那两个格归 §11.173 在册第二條。 */
+    if (byteBits == 0x80) {
+        int need = WideCharToMultiByte(CP_ACP, 0, text, (int)len, NULL, 0, NULL, NULL);
+        if (need <= 0) return vb6_BSTR_Empty();
+        char* buf = (char*)malloc((size_t)need + 2);
+        if (!buf) return vb6_BSTR_Empty();
+        WideCharToMultiByte(CP_ACP, 0, text, (int)len, buf, need, NULL, NULL);
+        memset(buf + need, 0, 2);
+        int32_t wcount = (int32_t)(need / 2);
+        BSTR out = SysAllocStringLen(NULL, (UINT)wcount);
+        if (!out) { free(buf); return vb6_BSTR_Empty(); }
+        if (wcount > 0) memcpy(out, buf, (size_t)wcount * sizeof(wchar_t));
+        free(buf);
+        return out;
+    }
+
+    /* conversion == 0 与其余未列档: 原样 (TB 读数 C4: StrConv("abc", 0) = "abc") */
     (void)localeID;
     return SysAllocStringLen(text, len);
 }
