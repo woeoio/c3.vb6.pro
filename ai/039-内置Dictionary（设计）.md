@@ -12932,3 +12932,99 @@ else shapeOk = true;                                      // 不是数组 ⇒ �
 - 教训：**「能编能跑」不是验收标准，形状也是语义。** 第一版看着完全正确（读数全对），
   但它把一个 double 绕道 `vb6_VARIANT` 再回来；只有拿上一刀的二进制逐份对发码才看得见。
   下一刀开始前先问一句：这次放宽的判据会不会把**本来已经对的格**也一起改了？
+
+---
+
+## §11.190 Date 与 String 相比：比日期序列，不比格式化文本（第二百零七刀）
+
+### 一、问题
+
+赋值站的系列刀收完后，把镜头转到**比较站**。两件事先探：
+
+1. **不带括号的调用**（`d = FText`）—— 实测 C3 已逐行正确（九格全对），**不需改码**；
+   此数据入账，免得以后有人把它当缺口重做。
+2. **Date 与 String 相比** —— 这里真的错了。改前两侧都被 `wrapToBSTR` 折成字符串，
+   发成 `vb6_StrCmp(vb6_CStrDate(d), "…")`：**比的是格式化后的文本**。而 VB6 是把文本
+   **折成日期序列再比数值**。
+
+### 二、真机读数（VB6Mini `/make`，`.temp/k207p`）
+
+`P248.bas` 七格（标量 / 元素 / 反序 / 不可解析串 / Select Case / 带时刻）：
+
+```
+Y1 gt=1 err=0   Y2 eq=1 err=0   Y3 lt=1 err=0   Y4 rev=1 err=0
+Y5 bad=1 err=13 Y6 sel=1 err=0  Y7 time=0 err=0
+```
+
+改前 C3：`Y1=1 Y2=0 Y3=0 Y4=1 Y5=0 err=0 Y6=0 Y7=1` —— **五条错**，其中 Y2/Y3/Y7 是
+静默错值（`Y1/Y4` 只是 lexicographic 恰好对）；`Y5` 连 13 都不报；`Y6` 的主语还被截成 int32_t。
+
+`Y7` 是最能说明性质的一格：`d > "2021-03-04 12:00:00 PM"` 真机是 **假**（午夜 vs 正午），
+按文本比却是 **真**（"3/4/2021" 的首字符 '3' > '2'）。
+
+### 三、判据与改法
+
+**比较站**（`cgen_expr_binary.cpp`，在原来那条「任一侧是 String 就 StrCmp」之前加一腿）：
+
+```cpp
+if ((lDate && rStr) || (lStr && rDate)) {
+    dl = lStr ? "vb6_DateVal(" + left + ")" : left;
+    dr = rStr ? "vb6_DateVal(" + right + ")" : right;
+    lastExpr_ = "(-((" + dl + ") op (" + dr + ")))";
+}
+```
+
+文本侧走 `vb6_DateVal`（账 #417 的唯一日期解析入口，解不开就抛 13），数值侧原样 —— 没有
+新写转换。「这格是 Date 吗」不能只问 `inferExprType`：数组元素 `q(0)` 那一形答 Variant
+（Y3 就是这么掉的），所以同一条 `isDateOperand190` 问句把三张既有表串起来：`inferExprType`、
+裸名数组的 `arrayElemTypes_`、UDT 成员的 `inferUdtFieldVb6Type`（带 `isArray`，与 §11.187 同口径）。
+
+**Select Case**（`cgen_select.cpp`）：Date 主语的承载档从 `int32_t` 改成 **`double`**，
+串标签用同一个 `vb6_DateVal` 折。改前 `Select Case d` 先把日期截成 36xxx 再拿 BSTR 去 `==`，
+两头都错。
+
+### 四、为什么这样改
+
+- **不新开转换**：`vb6_DateVal` 是赋值站那四刀一直在用的那一枚；比较站接上去就同源。
+- **为什么两条腿都要改**：`If` 与 `Select Case` 在 VB6 里是同一套「文本按日期解释」的语义，
+  只改一边就会出现「If 对、Select 错」这种半对状态，比全错更难发现。
+- **代价（已看见的）**：`check_caseis_shape` 那条「cgen_select 读 `cv.relOp` 三次」的哨兵
+  当场报红（变成四次）—— 这不是误报，是把哨兵的**语义**从「string/float/integer」改写成
+  「string/date/float/integer」；改数字的同时把注释一起改了，不留下一个无人能解释的 4。
+
+### 五、读数与随刀改的针
+
+- 新夹具 `tests/b214_date_string_compare`（Y1–Y7 七行，与真机逐字相同），x64 与 x86 **逐行相同**。
+- 新哨兵：R20（比较腿 + 元素档问句 + Select Case 的 Date 承载）、R21（b214 两台在跑）；
+  `check_caseis_shape` 的 relOp 读次数 3→4（注释同步）。
+- 改坏即红：把比较腿的条件抹成 `if (false)` ⇒ `R20 Date-vs-String comparison leg = 0`，还原后 PASS。
+- 闸门（本机全 PASS）：`check_date_conv`（`cmp-cells=2`）、`check_caseis_shape`、
+  `check_select_carrier_authority`、`check_select_label_owner`、`check_manifest_coverage`
+  （inputs=922 `[.vbp=359 .bas=563]`）、`check_static_sentinel_registration`、`check_sa_access`、
+  `check_extender_emit_channel`。
+- 存量对照：`tests/test_datelit.bas` 十三条针逐条重跑（`K-case-hit=True`）；两条形状重登记
+  的文件都逐行看过差异 —— `test_datelit` 与 `VBFlexGridDemo`（MinDate/MaxDate 属性）都是
+  「Date 主语的 Select Case 从 int32_t 承载变 double」，**正是本刀想要的形状**。
+
+### 六、神谕与清单
+
+- 真机神谕：`.temp/k207p/P248.bas` / `p248.txt`（七行）；`.temp/k207p/P247.bas` / `p247.txt`
+  （九行，带括号/不带括号两形等价，**无缺口**）。
+- 修前取证：`.temp/k207p/c3a`（Y2/Y3 答 0、Y5 不报错、Y6 答 0、Y7 答 1）。
+- 门：run `45904454152`（`dev`、head `8670381a`）**23/23 全绿**（上一次 `a1223cfe` 因
+  `check_caseis_shape` 的 3 次读 + 两份存量形状红，已按上节归因重登记）。
+- 刻意不跟的格（背账）：串不可解析时 VB6 的“分支仍执行”怪相已有读数（Y5）但现在只是
+  “报错后行为碰对”，没有逐档解释；`Case Is` 的 Date 无比较符那一形未単列读数；
+  成员/委托当比较操作数未接（UDT 成员只接 `inferUdtFieldVb6Type` 那一张表）。
+
+### 七、记账
+
+- 探针：`.temp/k207p/P247.bas`（九格）、`P248.bas`（七格）、`rows214.ps1`（清单两行复算）。
+- 夹具：`tests/b214_date_string_compare`，注册在 `tests/run_tests.ps1`（x64 + x86）。
+- 代码：`a1223cfe`（比较腿 + Select Case + 夹具 + 哨兵 R20/R21）；
+  `8670381a`（`check_caseis_shape` 3→4、`test_datelit`/`VBFlexGridDemo` 两行重登记）。
+- **号**：本节 = 第二百零七刀 / §11.190。
+- 教训：**同一个语义在不同站上会分别错，且错法各不相同。** 赋值站是 C2440（编不过），
+  比较站是“编得过、答得理直气壮”；而 `Select Case` 错得更隐蔽（主语被截成 int32_t，
+  读数据看着像“日期范围判断总是不命中”）。找它们的办法只有一个：真机逐格对读，
+  再把每一个读数钉成夹具里的一行。
