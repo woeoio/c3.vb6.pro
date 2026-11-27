@@ -14265,3 +14265,112 @@ W8=7     DatePart("w", CDate(0))
   `DateDiff`/`DatePart`/`Weekday` 只是三行裸 `(int32_t)date`，读代码时看着都「像截断整日」。
   哨兵因此把「裸形 0 处」写成一条账：下次再有人写「取整日」，会先撞上这条规则而不是撞上
   一个月末边界。
+
+## §11.204 Int / Fix 在 Date 实参上保持 Date 身份（第二百二十一刀）
+
+上一刀的背账第 1 条是「`Int`/`Fix` 对 `Date` 实参返回什么类型」。本刀量完，答案不是取整口径，
+而是**身份**：值一直是对的，缺的是它算不算一个日期。
+
+### 一、现象
+
+真机 `.temp/k221p/P283.bas`（`t = CDate(44259.9999999)`）：
+
+```
+V1=7   VarType(Int(t))            C3 改前 5
+V2=7   VarType(Fix(t))            C3 改前 5
+V3=5   VarType(Int(2.5))          一致（数值实参仍是 Double）
+V4=7   VarType(Int(CDate(1.5)))
+C1=[2021/3/4]  CStr(Int(t))       C3 改前 [44259]
+C2=[2021/3/4]  CStr(Fix(t))       C3 改前 [44259]
+C3=[1899/12/29] CStr(Int(CDate(-0.5)))
+C4=[1899/12/28] CStr(Int(CDate(-1.5)))     Int = floor
+C5=[1899/12/29] CStr(Fix(CDate(-1.5)))     Fix = 向零
+D1=[44259]     CStr(Int(44259.75))         数值实参，不给日期
+D2=[2021/3/4]  CStr(Int(CDate(44259.75)))
+I1=True I2=False   IsDate(Int(t)) / IsDate(Int(2.5))
+```
+
+两条要分清：
+
+1. **取整口径没变**：`Int` 是 `floor`、`Fix` 是向零截断，入口拿的是**原始序列**
+   （`Int(CDate(44259.9999999))` = 44259 = 3/4，不是上一刀那套「进位后 3/5」）。
+   `Int`/`Fix` 是纯数值运算，不属于「哪一天」那一族，所以它不碰 `vb6_serial_day_half`。
+2. **身份跟着实参**：`Date` 进 `Date` 出，`Double` 进 `Double` 出。于是 `CStr` 走日期文本、
+   `VarType` 答 7、`IsDate` 答 True。
+
+`P285.bas` 再把身份穿透量了一圈（十一格，两边逐行相同）：
+
+```
+K1=[2021/3/5]     CStr(Int(t) + 1)
+K2=[2021/3/3]     CStr(Int(t) - 1)
+K3=[88518]        CStr(Int(t) * 2)          —— 一旦乘，就回到数值
+K4=[2021/3/4]     dd = Int(t) 赋给 Date 变量
+K6=True           Int(t) = CDate(44259)
+K9=[44259]        CDbl(Int(t))
+L1=[2021/3/4 12:00:00]  Int(t) + 0.5
+```
+
+### 二、改法
+
+`cgen_util_type.cpp` 的 `inferExprType` 里，`Int`/`Fix` 那一档加一条与 §11.166 的 Currency
+并排的规则：
+
+```cpp
+if ((Symbol::toLower(id.name) == "int" || Symbol::toLower(id.name) == "fix")
+    && !call.positional.empty() && call.positional[0]
+    && inferExprType(*call.positional[0]) == Vb6Type::Date) {
+    return Vb6Type::Date;
+}
+```
+
+**没有**动 `builtin_funcs.inc` 里 `Int → Double` 那一行：那张表是「名字的默认返回类型」，
+而这里是「按实参定档」的少数几档之一（Currency 那一刀立的先例）。改全局表会把
+`Int(2.5)` 一起弄成 Date。
+
+一处规则、三处消费：`CStr` 站（`vb6_CStrDate`）、`VarType`（VT_DATE 7）、`IsDate`（True）。
+
+### 三、夹具与区域无关
+
+`tests/b228_int_fix_date`（二十三格，x64/x86 各一份）：
+
+- `F1..F4`：`VarType` 四个整数（7/7/5/7）—— 身份最直接的读数；
+- `G1/G2`：`CStr(Int(t))` 含 `/`、不含 `:`；`G3..G5`：负数三格 `Day(...)` = 29/29/28
+  （floor 与向零的分岔）；
+- `H1..H4`：`CStr(Int(±2.5))`、`CStr(Fix(-2.5))`、`CStr(Int(44259.75))` 四枚裸数字
+  （数值实参不许沾日期）；`H5`：`CStr(Int(CDate(44259.75)))` 含 `/`；
+- `I1/I2`：`IsDate` 两格；
+- `J1/J2`：`Day(Int(t))` = 4、`Hour(Int(t))` = 0（取整仍按原始序列）；
+- `K1..K4`：身份穿透四格（`+1` 含 `/` 不含 `:`、`*2` = 88518、`+0.5` 含 `:`）。
+
+真机 `P284`/`P286` → `p284.txt`/`p286.txt` 全 True；C3 改后 x64/x86 同形；`P283` 十九行、
+`P285` 十一行逐行相同。
+
+### 四、回归面
+
+- 这一刀只改**类型推断**，不改任何取值路径；`Int`/`Fix` 在 `Double`/`Currency` 实参上的
+  行为与 §11.166 那一刀一致（Currency 那一档仍在、`VarType` 仍答 6）。
+- VBP 类既有的日期夹具（b222/b223/b224/b225/b226/b227）本机复跑全 True。
+- 发射面：**这是后端改动，进 `--emit-c`**。清单只增 b228 两行（inputs 948 → 950），
+  已由逐行 targeted 复算核对。
+
+### 五、读数与针
+
+- 新增 **R39**：b228 两台在跑；`cgen_util_type.cpp` 里那条 Date 身份规则恰 1 处。
+- 本机闸门：`check_date_conv`（`intfix228-cells=2`）、`check_time_split`、
+  `check_general_date_outlets`、`check_manifest_coverage`（inputs=950，sets equal）、
+  `check_select_carrier_authority`。
+- 神谕：`.temp/k221p/P283.bas`（十九行）、`P284.bas`（夹具十九格）、`P285.bas`（穿透十一行）、
+  `P286.bas`（穿透四格）。
+- 门：run `45954678024`（`dev`、head `077dc7eb`）。
+
+### 六、记账
+
+- 代码：`077dc7eb`（类型推断一处 + 夹具 + R39 + 清单两行）。
+- **号**：本节 = 第二百二十一刀 / §11.204。
+- 背账：`Round` 与 `Abs` 在 Date 实参上是否也保 Date 未量（§11.166 只量了 Currency）；
+  `CInt`/`CLng`/`CCur` 对 Date 实参的错误码（VB6 是 94 还是接受序列号）未量；
+  `Int(Date)` 与 `DateAdd("d",-1,…)` 在末秒那一格的交互未量。
+- 教训：**「值对」和「身份对」是两条验收线。** 前七刀一直在文本形状上打磨，所以「`Int` 值对」
+  看起来天经地义；直到 `CStr` 把同一个值打成两种东西，身份才浮出水面。这一刀最省力的地方
+  在于**没有**去动那张全局返回类型表 —— 动了就会把 `Int(2.5)` 一起改坏；按实参定档这件事，
+  先例（Currency）早就写在那儿了，缺的只是「Date 也该有一份」。
