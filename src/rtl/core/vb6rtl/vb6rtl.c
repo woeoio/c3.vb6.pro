@@ -895,12 +895,27 @@ void vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description) {
     // "VBA.Information"/"VBA.Conversion" 占位符（那是写给人看的位置标签，从来不是 VB6 的
     // Err.Source）。口径：NULL 与那两枚内部串都算「运行期错误」⇒ 用播种的工程名；
     // 用户 `Err.Raise n, src, desc` 给的 src 一律原样保留（E3 = [mySrc]）。
-    if (!source || vb6_ErrSourceIsInternal(source)) source = vb6_err_source_seed;
+    // §11.218 (第二百三十五刀): 真机 .temp/k226p/P330 的 A2/A9 —— `Err.Raise 5`（省掉 source 与
+    // description）**不会清掉**已经存在的那两格：A2 读到 [s1]/[d1]（前面刚赋过），A9 读到
+    // [P330]/[x]（source 空 ⇒ 补工程名，description 非空 ⇒ 保留）。所以「缺参」不是「清空」，
+    // 而是「没有值时才补」：source 空 ⇒ 工程名，description 空 ⇒ 号对应的默认文本。
+    // 内部 raise（传了 VBA.* 位置标签的那一族）不算「缺参」：它是一次新的运行期错误，
+    // source 照旧翻成工程名，description 走默认表。
+    const int sourceMissing = (source == NULL);
+    if (sourceMissing) {
+        source = (vb6_err.source && *vb6_err.source) ? vb6_err.source : vb6_err_source_seed;
+    } else if (vb6_ErrSourceIsInternal(source)) {
+        source = vb6_err_source_seed;
+    }
     vb6_err.source = source;
     // §11.217 第二半: 真机 E9 的 Description 是 "Division by zero"，而
     // vb6_ErrRaiseNumber(11) 以前交的是 NULL ⇒ Err.Description 空串。号与描述属于同一个
     // 权威，所以描述表也住这一处: 调用方给了就一字不改，没给才查表（表里没有就留空）。
-    if (!description) description = vb6_ErrDefaultDescription(errNum);
+    if (!description) {
+        description = (sourceMissing && vb6_err.description && *vb6_err.description)
+                          ? vb6_err.description
+                          : vb6_ErrDefaultDescription(errNum);
+    }
     vb6_err.description = description;
     // 第一百九十三刀 (§11.176): Resume Next 不再「就地返回」。
     //   真机的 A5 读数（.temp/k191p/p217.txt）是 `Call PEscape` 之后 `hits` **不动** ——
@@ -934,6 +949,19 @@ void vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description) {
 
 void vb6_ErrRaiseNumber(int32_t errNum) {
     vb6_ErrRaise(errNum, NULL, NULL);
+}
+
+// §11.218 (第二百三十五刀): `Err.Source = v` / `Err.Description = v` 的写面。
+// 真机 .temp/k226p/p330.txt 的 A1/A4/A5/A7/A10: 赋值只动那一格文本，`Err.Number` **不动**
+// （A1/A4-A7/A10 的号仍是 0，A8 赋描述之后号仍是 13），`Err.Clear` 才把两格一起清掉。
+// 所有权: 与 vb6_ErrRaise 同口径 —— 存一份**真 BSTR**（读侧按 BSTR 取长度，宽字面量会读成
+// 空串，§11.217 实测）。旧的副本不释放: 与 raise 站点造 BSTR 一样属于既有口径，本刀不另造一格。
+void vb6_ErrSetSource(BSTR value) {
+    vb6_err.source = value ? vb6_BSTR_FromStr(value) : NULL;
+}
+
+void vb6_ErrSetDescription(BSTR value) {
+    vb6_err.description = value ? vb6_BSTR_FromStr(value) : NULL;
 }
 
 // Task #44 (SSTabEx): VB6 '/' 与 Mod 的零除数语义是运行期错误 11 ("Division by zero"),

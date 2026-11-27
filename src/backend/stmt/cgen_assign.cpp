@@ -364,6 +364,22 @@ void CCodeGen::visit(AssignmentStmt& node) {
                 memObjLetScalar_ = savedLetScalar;
                 return;
             }
+            // §11.218 (第二百三十五刀): `Err.Source = v` / `Err.Description = v`。
+            // 真机 .temp/k226p/p330.txt 的 A1/A4/A5/A7/A10: 赋值只动那一格文本，`Err.Number` 不动；
+            // `Err.Clear` 才把两格一起清掉。以前这里把读取侧的折算当左值：
+            // `vb6_ErrSource() = ...` ⇒ error C2106（探针的两段就是这么报的）。读写各一处出口，
+            // 写落 RTL 的两枚 setter（各自拷一份真 BSTR，理由见 vb6rtl.c 的所有权注释）。
+            if ((objAt == "err" || objAt == "lasterror") &&
+                (memAt == "source" || memAt == "description") &&
+                !knownLocalVars_.count(objAt)) {
+                emitExpr(*node.value);
+                std::string rhsErr = wrapToBSTR(std::move(lastExpr_), *node.value);
+                c_.emitLine(std::string("vb6_ErrSet") +
+                            (memAt == "source" ? "Source" : "Description") +
+                            "(" + rhsErr + ");");
+                memObjLetScalar_ = savedLetScalar;
+                return;
+            }
         }
     }
 #include "backend/detail/stmt/cgen_assign_host_pseudo.inc"

@@ -13918,6 +13918,23 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "E10=0/0/0")
     Test-Vbp 'b241_err_source_desc' "$Tests\b241_err_source_desc\B241Res.vbp" $b241Needles
     Test-Vbp 'b241_err_source_desc_x86' "$Tests\b241_err_source_desc\B241Res.vbp" $b241Needles -Arch "x86"
+    # §11.218 第二百三十五刀: `Err.Source = v` / `Err.Description = v` 的写面。
+    # 真机 .temp/k226p/p330.txt（十格）：赋值只动那一格文本、Number 不动；
+    # `Err.Raise 5`（省掉源与描述）**不清格**（A2/A9），只有 `Err.Clear` 才清。
+    # 改前这两句整份工程编不过（error C2106: '=' 左操作数必须为左值）。
+    $b242Needles = @(
+    "A1=[s1]/[d1]/0",
+    "A2=[s1]/[d1]/5",
+    "A3=[]/[]/0",
+    "A4=[]/[only desc]/0",
+    "A5=[only src]/[]/0",
+    "A6=[over]/[rd]/5",
+    "A7=[]/[]/0",
+    "A8=13/[B242Res]/[after13]",
+    "A9=[B242Res]/[x]/5",
+    "A10=[ss]/[dd]/0")
+    Test-Vbp 'b242_err_assign' "$Tests\b242_err_assign\B242Res.vbp" $b242Needles
+    Test-Vbp 'b242_err_assign_x86' "$Tests\b242_err_assign\B242Res.vbp" $b242Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

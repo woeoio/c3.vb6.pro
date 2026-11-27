@@ -80,6 +80,8 @@ vb6_Dir|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_Environ|0	0		0	open	BSTR
 vb6_ErrRaise|1	1	store	0	open	BSTR
 vb6_ErrRaise|2	1	store	0	open	BSTR
+vb6_ErrSetDescription|0	0	handoff-to-plain:vb6_BSTR_FromStr	0	open	BSTR
+vb6_ErrSetSource|0	0	handoff-to-plain:vb6_BSTR_FromStr	0	open	BSTR
 vb6_ErrSourceIsInternal|0	0		0	open	BSTR
 vb6_FileCopy|0	0	handoff-reads:vb6_path_from	U	open	BSTR
 vb6_FileCopy|1	0	handoff-reads:vb6_path_from	U	open	BSTR

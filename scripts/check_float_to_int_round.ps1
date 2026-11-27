@@ -536,8 +536,33 @@ if ($entry217 -notmatch 'projectName_') {
 $b241Cells = @([regex]::Matches($runnerText, 'b241_err_source_desc\\B241Res\.vbp')).Count
 if ($b241Cells -ne 2) { $bad += ("S18 b241 run cells = " + $b241Cells + " (want 2 = x64 + x86)") }
 
+# ---- S19: Err.Source / Err.Description 的写面 (账 §11.218 第二百三十五刀) ----
+# 真机 .temp/k226p/p330.txt（十格）：赋值只动那一格文本、Number 不动；`Err.Raise 5` 缺参
+# **不清格**（A2/A9），只有 `Err.Clear` 才清；改前这两句整份工程编不过（C2106）。
+# 三条判据：(a) 赋值的两个出口在 RTL 里各一枚 setter（不许再发成左值）；
+#           (b) 赋值站按 err/lasterror 接收者接管、且不碰 Number；
+#           (c) 缺参 raise 的「有值就保留」两条路都在；夹具 b242 两套。
+$asm217 = Get-CodeText (Join-Path $root "src\backend\stmt\cgen_assign.cpp")
+if ($asm217 -notmatch '"vb6_ErrSet"\)') {
+    $bad += "S19 the assignment site no longer routes Err.Source/Description through the RTL setters"
+}
+if ($asm217 -notmatch 'memAt == "source" \|\| memAt == "description"') {
+    $bad += "S19 the Err object member list (source/description) was dropped from the assignment site"
+}
+$rtl218 = Get-CodeText (Join-Path $root "src\rtl\core\vb6rtl\vb6rtl.c")
+foreach ($setter in @('vb6_ErrSetSource', 'vb6_ErrSetDescription')) {
+    if ($rtl218 -notmatch ("void " + $setter + "\(BSTR value\)")) {
+        $bad += ("S19 RTL setter " + $setter + " is gone")
+    }
+}
+if ($rtl218 -notmatch 'const int sourceMissing = \(source == NULL\);') {
+    $bad += "S19 the omitted-argument branch of vb6_ErrRaise was dropped (Raise no longer keeps the existing source/description)"
+}
+$b242Cells = @([regex]::Matches($runnerText, 'b242_err_assign\\B242Res\.vbp')).Count
+if ($b242Cells -ne 2) { $bad += ("S19 b242 run cells = " + $b242Cells + " (want 2 = x64 + x86)") }
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face)"

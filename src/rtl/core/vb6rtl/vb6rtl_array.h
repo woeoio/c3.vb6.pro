@@ -483,6 +483,10 @@ void vb6_ErrRaiseNumber(int32_t errNum);
 void vb6_SetErrSourceSeed(const wchar_t* name);
 int vb6_ErrSourceIsInternal(BSTR src);
 BSTR vb6_ErrDefaultDescription(int32_t errNum);
+// §11.218 (第二百三十五刀): `Err.Source = v` / `Err.Description = v` 的写面（只动那一格，
+// `Err.Number` 不动；存一份真 BSTR）。
+void vb6_ErrSetSource(BSTR value);
+void vb6_ErrSetDescription(BSTR value);
 // C30-11 第七十九刀 (§B227): 错误序号 —— 每次 vb6_ErrRaise 自增。赋值站用它判
 // 断「本语句里 raise 过吗」：变了就不写目标（VB6 的语句级中止）。
 int32_t vb6_ErrSerial(void);
