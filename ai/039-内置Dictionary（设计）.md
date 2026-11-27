@@ -14471,3 +14471,149 @@ if ((idn == "int" || idn == "fix" || idn == "abs" || idn == "round")
   Date 上，工作量和风险都只剩「别把转换函数混进来」——所以夹具里专门放了三枚转换守卫。
   另外，量身份时**必须重置 `v`**：第一版 `P287` 里 `CInt(t)` 抛 6，而 `v` 还留着上一次的
   值，看着像「返回了日期」，其实是假读数。
+
+## §11.206 Round 的口径：半到偶 + 位域 0..22（第二百二十三刀）
+
+上一刀背账第二条：「`Round` 的平局是银行家四入 —— 真机 `Round(CDate(-0.5), 0)` = `0`，
+C3 给 `-1`」。量完发现这不是一个点，而是整条口径，而且**顺带把 `vb6_FltToLng` 的第二份
+手写取整改掉了**。
+
+### 一、现象（真机 `.temp/k223p/P290.bas` / `P291.bas`）
+
+```
+D1=[0]      Round(0.5)          C3 改前 [1]
+D3=[2]      Round(2.5)          C3 改前 [3]
+D5=[0]      Round(-0.5)         C3 改前 [-1]
+D7=[-2]     Round(-2.5)         C3 改前 [-3]
+D8=[4]      Round(4.5)          C3 改前 [5]
+E1=[0.12]   Round(0.125, 2)     C3 改前 [0.13]
+E5=[1.234]  Round(1.2345, 3)    C3 改前 [1.235]
+E8=[0]      Round(0.05, 1)      C3 改前 [0.1]
+H1=[1234]   Round(1234.5)       C3 改前 [1235]
+H3=[-4]     Round(-4.5)         C3 改前 [-5]
+```
+
+一眼看上去就是「C 的 `round()` 是半值向外，VB6 是半值取偶」。但这一格还带着两个**必须同时
+成立**的读数，它们把"改成取偶"之外的可能性也钉死了：
+
+```
+E4=[2.68]   Round(2.675, 2)
+E3=[1]      Round(1.005, 2)
+R9=[1]      Round(1.005, 2) 在夹具里同一格
+E9=[0.2]    Round(0.15, 1)
+RE=[3]      Round(2.5000000000000004, 0)
+RF=[2]      Round(2.4999999999999996, 0)
+```
+
+### 二、为什么只能是「先乘再半到偶」
+
+第一反应是「VB6 先转成十进制串，再按十进制舍入」。它会给出：
+
+- `2.675` → 串 `"2.675"` → 平局 → 取偶 → `2.68` ✓
+- `1.005` → 串 `"1.005"` → 平局 → 取偶 → `1.00` = `1` ✓
+
+看起来对。但 `RE` 那一格会把它推翻：`2.5000000000000004` 的十五位十进制串恰好是 `2.5`，
+按串走应得 `2`，真机给 `3`。**真值比中点大一丁点，VB6 就往上走** —— 说明它手里还留着
+那个 4e-16。
+
+反过来，纯精确值也不行：`0.05` 的双精度值是 `0.05000000000000000277`，精确比较**大于**
+中点，按精确值应得 `0.1`，真机给 `0`。
+
+两枚读数一起看，只剩一种解释：**先把值乘 `10^n`，用的是双精度乘法**——
+
+- `0.05 * 10`：真值 `0.5000000000000000277`，最近的 double 就是 `0.5`（半步 2.78e-16）⇒ 落回平局 ⇒ 取偶 ⇒ `0`
+- `2.5000000000000004 * 1`：不经过任何缩放，仍大于中点 ⇒ `3`
+- `2.675 * 100`：真值 `267.49999999999998`，最近的 double 是 `267.5`（差 1.8e-14 < 半步 2.8e-14）⇒ 落回平局 ⇒ 取偶 ⇒ `2.68`
+- `1.005 * 100`：真值 `100.49999999999999`，最近的 double 还是它自己（差 1.07e-14 > 半步 7.1e-15）⇒ 不足半步 ⇒ `1`
+
+四格全中，而且**没有一格需要额外假设**。所以口径就是：`scaled = x * 10^n`，然后
+`scaled` 半到偶，再除回 `10^n`。
+
+### 三、位域：0..22
+
+```
+N22 err=0   Round(1.5, 22)   → 1.5
+N23 err=5   Round(1.5, 23)   → 错误 5 (Invalid procedure call or argument)
+G1  err=5   Round(2.5, -1)
+```
+
+改前 C3 对 `-1` 与 `25` 都照算（`pow(10,-1)` 给小因子、`pow(10,25)` 给一个大因子），
+一位错误都没有。夹具钉 `S1 err=5`（负数）、`S2 err=5`（23）、`S3 err=0 v=[1.5]`（22 是边界内）。
+
+### 四、改法：半到偶只留一个主人
+
+这一刀最值得说的不是 `Round`，而是**它本来会是第二份手写**。
+
+`vb6rtl_conv.c` 里 `vb6_FltToLng`（浮点 → 窄整型，账 #248 / Fix 431）早就是同一条规则：
+
+```c
+double f = floor(x);
+double d = x - f;
+if (d > 0.5) return (int64_t)(f + 1);
+if (d < 0.5) return (int64_t)f;
+return (((int64_t)f & 1) == 0) ? (int64_t)f : (int64_t)(f + 1);
+```
+
+如果照直写，`Round` 会再抄一遍这五行 —— 那正是本仓反复量到的「同一个决定抄了两遍」。
+所以本刀把身子提成公共谓词：
+
+```c
+double vb6_RoundHalfEven(double x) {
+    double f = floor(x);
+    double d = x - f;                 /* 0 <= d < 1 */
+    if (d > 0.5) return f + 1.0;
+    if (d < 0.5) return f;
+    return (((int64_t)f & 1) == 0) ? f : f + 1.0;   /* 平局：留偶数那一边 */
+}
+int64_t vb6_FltToLng(double x) { return (int64_t)vb6_RoundHalfEven(x); }
+double vb6_Round(double x, int32_t decimals) {
+    if (decimals < 0 || decimals > 22) { vb6_ErrRaiseNumber(5); return x; }
+    double factor = pow(10.0, (double)decimals);
+    double scaled = x * factor;
+    if (scaled != scaled) return x;
+    return vb6_RoundHalfEven(scaled) / factor;
+}
+```
+
+**没有**用 `rint()`：它随 FP 环境（舍入模式）可改，MSVC 各架构的实现也不一致；手算的
+floor + 小数部分在哪都是同一个答案。`FltToLng` 的行为逐值不变（同一个公式，只是搬了家），
+这一点由 b179（Currency 平局）与 b196（Format 定点）两份既有夹具本机复跑确认。
+
+### 五、夹具与区域无关
+
+`tests/b230_round_banker`（十九格，x64/x86 各一份）：全是纯数字的 `CStr` 文本
+（`.` 小数点在本机 zh-CN 与 CI en-US 一致，没有日期文本），外加三条 `Err.Number`。
+真机 `P296` 与 C3 x64/x86 逐行相同。
+
+### 六、读数与针
+
+- `check_float_to_int_round` 的 **S2 跟到新主人**：tie-break 那一句必须住在
+  `vb6_RoundHalfEven` 体内（恰好 1 处），`vb6_FltToLng` 只许委托一次。
+- 新增 **S9**：`vb6_RoundHalfEven` 定义 1 / 声明 1 / `.c` 站点 3（定义 + FltToLng + Round）；
+  `vb6_Round` 体内位域门 `decimals < 0 || decimals > 22` 恰 1、`vb6_ErrRaiseNumber(5)` 恰 1、
+  `round(` 回潮 0；b230 两台在跑。
+- 本机闸门：`check_float_to_int_round`、`check_date_conv`、`check_time_split`、
+  `check_currency_round_station`（R19 那一条本来就把 Abs/Int/Fix/Round 的 Currency 身份钉在一起）、
+  `check_conv_strict_parse`、`check_manifest_coverage`（inputs=954，sets equal）、
+  `check_rtl_embedded`（exe 内的 RTL 与磁盘逐字节一致）、`check_rtl_proto_arity`、
+  `check_static_sentinel_registration`。
+- 神谕：`.temp/k223p/P290.bas`（平局与位数）、`P291.bas`（平局邻域、负零、位数上限）、
+  `P292.bas`（16/20/25/28/29/30、Empty/Null）、`P293.bas`（18..26 扫描、子类型）、
+  `P294.bas`（六种子类型 × 直接/变体两路）、`P296.bas`（夹具十九格）。
+- 门：run `45967646983`（`dev`、head `c5041ffd`）。
+
+### 七、记账
+
+- 代码：`c5041ffd`（`vb6_RoundHalfEven` 提公共 + `vb6_Round` 重写 + 夹具 + S2 改写 + S9 + 清单两行）。
+- **号**：本节 = 第二百二十三刀 / §11.206。
+- 背账（都已在 `P293`/`P294` 取到真值，下一刀直接开工）：
+  - **`Round` 的子类型保持**：真机 `Round(Integer)`→2、`Long`→3、`Single`→4、`Currency`→6、
+    `Byte`→17、`Double`→5，`Empty`→2（Integer）、`Null`→1；变体两路（`v = i` 再 `Round(v)`）
+    同样保子类型。C3 一律答 Double（Currency 直参那一路已对）。
+  - `Hex(Date)` 的「先四入后进制」：`Hex(CDate(44259.6242685185))` 真机 `ACE4`、C3 `ACE3`。
+  - `Err.Source` / `Err.Description` 在 C3 里读出来是空串（真机给项目名 + 英文描述）——
+    `Err` 对象那一族的老账，与本刀无关。
+- 教训：**"看起来像格式化问题"的差，往往是"先乘再舍"这一层的位置问题。** 十进制串模型
+  能解释四分之三的格子，剩下的那一格（`2.5000000000000004`）才说明真值没被截断成串。
+  另一条：这一刀最省事的地方是发现 `vb6_FltToLng` 早就写好了同一个谓词 —— 先找一找
+  「这条规则是不是已经有一个主人」，比写第二份快，也免得下一次有人只改一处。
