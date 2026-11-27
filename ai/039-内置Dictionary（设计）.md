@@ -15132,3 +15132,55 @@ b233 当场红）。这不是小尾巴，是真机把两件事同时钉住了：
 1. `Abs("")` / `Abs("x")` 出现在**字符串消费面**（`s = CStr(Abs(v))`）时仍走 `vb6_Abs(vb6_VariantToDouble(v))`，C3 给 `[0]/0`、真机 `[keep]/13`（P312 的 S1/S2）—— 仍是「数值位提取」那一族缺的第三面。
 2. `Hex/Oct` 的 `LongLong` 档（16 位宽）。
 3. `Err.Source` / `Err.Description` 空串。
+
+### §11.213 第二百三十刀：Abs/Int/Fix 在非变体面上一律严格
+
+**读数（真机 `.temp/k225p/P323` / `P324`，VB6Mini `/make`）**
+
+| 格 | 表达式（`v` 为 Variant 槽，目标先置 `"keep"`） | 真机 |
+| --- | --- | --- |
+| S1 | `v = "": s = CStr(Abs(v))` | `[keep]/13` |
+| S2 | `v = "x": s = CStr(Abs(v))` | `[keep]/13` |
+| S3 | `v = "2.5": s = CStr(Abs(v))` | `[2.5]/0` |
+| S4 | `v = Null: s = CStr(Abs(v))` | `[keep]/94` |
+| S5 | `v = Empty: s = CStr(Abs(v))` | `[0]/0` |
+| T1/T2 | `CStr(Int(""))` / `CStr(Fix("x"))` | `[keep]/13` |
+| T3 | `CStr(Int(Null))` | `[keep]/94` |
+| T4 | `v = "-2.5": CStr(Fix(v))` | `[-2]/0` |
+| U1..U4 | `s = Abs(v)`（**直接字符串赋值**，不经 CStr） | 与 S1..S4 逐格相同 |
+| V1..V3 | `s = "n=" & Abs(v)`（**拼接**面） | 与 S1..S3 同形（V3 = `[n=2.5]/0`） |
+| W1 | `w = "keep": w = Abs(v)`，`v = Null`（**Variant 目标**） | `[]/0/True`（值变 Null，`IsNull` 为真） |
+| X1 | `s = Sgn(v) & ""`，`v = ""` | `[keep]/13` |
+
+三件事同时成立：**字符串赋值面、CStr 面、拼接面**对 Abs/Int/Fix 的整只槽实参**一律严格**（Null ⇒ 94、非数值文本 ⇒ 13）；而**变体面**（`w = Abs(Null)`）仍是 Null 进 Null 出。也就是说 §11.211 给 Sgn 立的「严格提取」不是 Sgn 的特例，而是这一族在**所有非变体消费面**上的通例 —— Sgn 只是因为没有 `*V` 出口，所以它在变体面上也无处可逃。
+
+**改前**
+
+三面都发 `vb6_Abs(vb6_VariantToDouble(v))`（Int/Fix 同形）：`VariantToDouble` 必须保持宽松（`Val` 那一族整族靠它），于是 Null 与文本双双折成 `0.0`，三面各自静默给 `0`、`Err.Number = 0`。
+
+**改法：一处判据 + 两张表同步**
+
+1. **发码站**（`cgen_expr_call_builtin_argtype.inc`）：把 §11.211 那条只认 `vb6_Sgn` 的分支扩成**四枚一族**（`vb6_Abs`/`vb6_Sgn`/`vb6_Int`/`vb6_Fix`），判据仍是「整只槽被 `vb6_VariantToDouble(` 整串包裹」（按括号配平找闭合位、闭合位必须落在末字符），改写成 `vb6_DblStrict(<槽>)`。判据不问消费面 —— 因为这一站看不见消费面，而下游两站（装箱）本来就要先看到这串文本。
+2. **两张装箱表**（`cgen_util_ctrl.cpp` 的 `mathNullFamilyV` 与 `boxToVariant`）：行结构从「一个前缀」扩成「两个前缀 + 一个出口」，`abs`/`int`/`fix` 三行同时挂 `vb6_X(vb6_VariantToDouble(` 与 `vb6_X(vb6_DblStrict(`，出口仍是 `vb6_AbsV`/`vb6_IntV`/`vb6_FixV`。这一步是**必须**的：判据是文本前缀，argtype 站把前缀换掉之后，装箱站若还只认旧前缀就会静默落空 —— §11.208 的 `Round` 与 §11.210 的 `HexSlot` 都是这个原形的两枚实物。落空的后果不是「少优化」而是 **W1 从 Null 变成 94**。
+3. 两张表**逐字相同**（哨兵 S14(c) 钉着这一句）：同一个发射形状存在两个消费面（BSTR 实参与 VARIANT 装箱），两边各写一份表就会漂。
+
+`vb6_DblStrict` 仍是唯一的严格入口（§11.75 第九十七刀），本刀没有新增 RTL 函数、也没有改 `vb6_Abs`/`vb6_Int`/`vb6_Fix` 本体：它们仍是平滑函数，抛错归调用点那一位主人。
+
+**夹具与哨兵**
+
+- 新夹具 `tests/b237_abs_string_face`（18 格）：S1..S5、T1..T4、U1..U4、V1..V3、W1、X1，全部 `Debug.Print`，x64 + x86 两套。
+- `scripts/check_float_to_int_round.ps1` 新增 **S14**（现 S1..S14）四条：(a) 严格族恰一处且四枚名字都在里面；(b) 两个装箱站都带第二前缀列，`abs`/`int`/`fix` 三行都有；(c) **两张表逐行相同**（两个消费面一个权威）；(d) b237 两套在跑。
+- 清单 `emit-manifest.expected.txt`：本机先增两行，随后按 CI 交回的清单登记 **7 行**（2 新增 + 5 移动 —— 移动的正是 Abs/Int/Fix 变体槽语料里那一处 `VariantToDouble` → `DblStrict`）。
+
+**验证**
+
+- 夹具 x64 / x86 各 18 格与真机 P324 逐行 `IDENTICAL`。
+- 回归：b231（`Abs`/`Round` 族 14 针）、b232（15 针）、b235（14 格，含 `Abs/Int/Fix(Null)` 仍是 Null 与 Sgn 门）、b236（12 格）复跑全绿 —— 变体面的 Null 传播没有被子波。
+- 本机 13 条门禁全绿。
+- CI：head `c2d2d3c8` → 23 格里 22 绿 + 唯一红 = `Emit manifest`（2 新增 / 5 移动，符合预期）；按 CI 清单登记（`4460d084`）后 head `4e8f145e` → GA **46048677327 = 23/23 success**，failure=0。
+
+**背账**
+
+1. `w = "keep": w = CStr(Abs(v))`（`v = Null`）—— 真机 `[keep]/94`（**目标一字不动**），C3 现在给 `[]/94`：错误号对了、值被清成空串。这是**变体目标上的赋值守卫**那一族（表达式里抛错 ⇒ 语句整条中止），与本刀的提取门是两件事，下一刀处理。
+2. `Hex/Oct` 的 `LongLong` 档（16 位宽）。
+3. `Err.Source` / `Err.Description` 空串。
