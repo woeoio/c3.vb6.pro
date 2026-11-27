@@ -14374,3 +14374,100 @@ if ((Symbol::toLower(id.name) == "int" || Symbol::toLower(id.name) == "fix")
   看起来天经地义；直到 `CStr` 把同一个值打成两种东西，身份才浮出水面。这一刀最省力的地方
   在于**没有**去动那张全局返回类型表 —— 动了就会把 `Int(2.5)` 一起改坏；按实参定档这件事，
   先例（Currency）早就写在那儿了，缺的只是「Date 也该有一份」。
+
+## §11.205 Abs / Round 也保持 Date 身份（第二百二十二刀）
+
+上一刀的背账第一条：「`Round` 与 `Abs` 在 `Date` 实参上是否也保 `Date` 未量（§11.166 只量了
+Currency）」。本刀量完 —— 是同一族，而且量出了两条**不属于身份**的差异，一并记进背账。
+
+### 一、现象
+
+真机 `.temp/k222p/P288.bas`（`t = CDate(44259.6242685185)`）：
+
+```
+A1 err=0 vt=7 v=[2021/3/4 14:58:57]      Abs(t)
+A2 err=0 vt=7 v=[2021/3/5]               Round(t, 0)
+A3 err=0 vt=7 v=[2021/3/4 14:52:48]      Round(t, 2)
+C1 err=0 vt=7 v=[12:00:00]               Abs(CDate(-0.5))
+C3 err=0 v=[2021/3/4 14:58:57]           CStr(Abs(t))
+C4 err=0 v=[2021/3/5]                    CStr(Round(t, 0))
+B2 err=0 vt=3 v=[44260]                  CLng(t)
+B3 err=0 v=[ACE4]                        Hex(t)
+B1 err=6 vt=0                            CInt(t) → Overflow
+```
+
+C3 改前：五处 `vt=5`、`CStr` 打裸序列号（`44259.6242685185` / `44260`），
+`Abs(CDate(-0.5))` 打 `0.5`。`CInt`/`CLng`/`CCur`/`Hex`/`Sgn` 本来就对。
+
+### 二、改法
+
+同一处类型推断（`cgen_util_type.cpp`），把上一刀那一名单从 `Int/Fix` 扩到 `Int/Fix/Abs/Round`：
+
+```cpp
+const std::string idn = Symbol::toLower(id.name);
+if ((idn == "int" || idn == "fix" || idn == "abs" || idn == "round")
+    && !call.positional.empty() && call.positional[0]
+    && inferExprType(*call.positional[0]) == Vb6Type::Date) {
+    return Vb6Type::Date;
+}
+```
+
+这不是新规则，而是把 §11.166（Currency）已经并在一起的那四枚名字补齐到 Date 这一档 ——
+四枚函数本身都是「同型返回」，只是以前 Date 这一半没人接。
+
+`CInt`/`CLng`/`CCur`/`CSng`/`CDbl` 是**转换**函数，按定义换型，不在这一档；`Hex`/`Sgn`
+返回数值，也不在。
+
+### 三、夹具与区域无关
+
+`tests/b229_abs_round_date`（十六格，x64/x86 各一份）：
+
+- `E1..E4`：`VarType` 四枚 7（`Abs(t)` / `Round(t,0)` / `Round(t,2)` / `Abs(CDate(-0.5))`）；
+- `E5/E6`：`VarType(Abs(2.5))` = 5、`VarType(Round(2.5))` = 5（数值实参不沾日期）；
+- `F1..F4`：`CStr(Abs(t))` 含 `/` 含 `:`、`CStr(Round(t,0))` 含 `/` 不含 `:`；
+- `F5/F6`：`Day(Round(t,0))` = 5、`Hour(Abs(CDate(-0.5)))` = 12；
+- `F7`：`CStr(Abs(2.5))` = `2.5`（区域无关：小数点两边都是 `.`）；
+- `G1..G4`：`VarType(CLng(t))` = 3、`CStr(CLng(t))` = `44260`、`VarType(CCur(t))` = 6、
+  `CInt(t)` 的 `Err.Number` = 6（三枚转换的守卫，防本刀把它们误扩进去）。
+
+真机 `P289` → `p289.txt` 十六行全 True；C3 改后 x64/x86 同形；`P288` 十二行逐行相同。
+
+### 四、本刀量到但**未改**的两条（夹具刻意避开）
+
+1. **`Round` 的平局是银行家四入**：真机 `CStr(Round(CDate(-0.5), 0))` = `0:00:00`（结果 0），
+   C3 给 `-1`。这不是身份问题，是 `Round` 的取整模式 —— 平局要往偶数靠。
+2. **`Hex(Date)` 先四入再转十六进制**：真机 `Hex(CDate(44259.6242685185))` = `ACE4`（44260），
+   C3 给 `ACE3`（44259 截断）。`Hex` 内部走的是 `CLng` 语义（它自己那一格 `CLng(t)` 早就对），
+   但 `Hex` 这一站没有转问那个出口。
+
+两条都够单独一刀：`Round` 那条要一张宽网格（平局、负数、`n` 位数），`Hex` 那条要顺带
+看 `Oct` 与 `Hex`/`Oct` 的负数补码形状。
+
+### 五、回归面
+
+- 只改类型推断，不改取值；`Abs`/`Round` 在 `Double`/`Currency` 实参上路径不变。
+- VBP 类日期夹具（b222…b228）本机复跑全 True。
+- 发射面：**后端改动进 `--emit-c`**，清单只增 b229 两行（inputs 950 → 952）。
+
+### 六、读数与针
+
+- **R39** 跟进新名字集（`idn == "int" || "fix" || "abs" || "round"` 恰 1 处）；
+  新增 **R40**：b229 两台在跑、`idn == "abs" || idn == "round"` 在集合里恰 1 处。
+- 本机闸门：`check_date_conv`（`absr229-cells=2`）、`check_time_split`、
+  `check_general_date_outlets`、`check_manifest_coverage`（inputs=952，sets equal）、
+  `check_select_carrier_authority`。
+- 神谕：`.temp/k222p/P287.bas`（第一版，量的取整与错误码）、`P288.bas`（十二行）、
+  `P289.bas`（夹具十六格）。
+- 门：run `45958394182`（`dev`、head `fa98a5c3`）。
+
+### 七、记账
+
+- 代码：`fa98a5c3`（类型推断一处 + 夹具 + R39 改写 + R40 + 清单两行）。
+- **号**：本节 = 第二百二十二刀 / §11.205。
+- 背账：`Round` 的银行家四入（含 `n` 位、负数、`CDate` 与纯数值两条入口）；
+  `Hex`/`Oct` 对 `Date` 的「先四入后进制」；`Abs`/`Sgn` 在 `Empty`/`Null` 上的传播。
+- 教训：**先例是一份「名单」，补齐它比发明规则便宜得多。** §11.166 把 `Abs/Int/Fix/Round`
+  并成一组、按实参定档，写的时候只为 Currency；这一刀没有新判断，只是把同一组名字接到
+  Date 上，工作量和风险都只剩「别把转换函数混进来」——所以夹具里专门放了三枚转换守卫。
+  另外，量身份时**必须重置 `v`**：第一版 `P287` 里 `CInt(t)` 抛 6，而 `v` 还留着上一次的
+  值，看着像「返回了日期」，其实是假读数。
