@@ -12,27 +12,23 @@ Option Explicit
 ' oracle ran in zh-CN): only "does it contain / or :", "does CDate accept it",
 ' "does it round-trip to the same instant", and lengths. Never pin the text.
 Public Sub Main()
-    Dim f As Integer
     Dim s As String
     Dim d As String
     Dim t As String
-    f = FreeFile
-    Open App.Path & "\b221.txt" For Output As #f
     On Error Resume Next
     s = CStr(Now)
-    Print #f, "W1 len=" & CStr(Len(s) > 10)
-    Print #f, "W2 slash=" & CStr(InStr(s, "/") > 0)
-    Print #f, "W3 colon=" & CStr(InStr(s, ":") > 0)
-    Print #f, "W4 isdate=" & CStr(IsDate(s))
-    Print #f, "W5 str=" & CStr(VarType(s) = vbString)
-    Print #f, "W6 round=" & CStr(Abs(CDate(s) - Now) < 0.01)
+    Debug.Print "W1 len=" & CStr(Len(s) > 10)
+    Debug.Print "W2 slash=" & CStr(InStr(s, "/") > 0)
+    Debug.Print "W3 colon=" & CStr(InStr(s, ":") > 0)
+    Debug.Print "W4 isdate=" & CStr(IsDate(s))
+    Debug.Print "W5 str=" & CStr(VarType(s) = vbString)
+    Debug.Print "W6 round=" & CStr(Abs(CDate(s) - Now) < 0.01)
     d = CStr(Date)
-    Print #f, "X1 isdate=" & CStr(IsDate(d))
-    Print #f, "X2 len=" & CStr(Len(d) >= 6)
-    Print #f, "X3 nocolon=" & CStr(InStr(d, ":") = 0)
+    Debug.Print "X1 isdate=" & CStr(IsDate(d))
+    Debug.Print "X2 len=" & CStr(Len(d) >= 6)
+    Debug.Print "X3 nocolon=" & CStr(InStr(d, ":") = 0)
     t = CStr(Time)
-    Print #f, "Y1 colon=" & CStr(InStr(t, ":") > 0)
-    Print #f, "Y2 len=" & CStr(Len(t) >= 4)
-    Print #f, "Y3 diff=" & CStr(s <> d)
-    Close #f
+    Debug.Print "Y1 colon=" & CStr(InStr(t, ":") > 0)
+    Debug.Print "Y2 len=" & CStr(Len(t) >= 4)
+    Debug.Print "Y3 diff=" & CStr(s <> d)
 End Sub
