@@ -232,6 +232,18 @@ $r28cells = N '\$Tests\\b218_octext_date_label\\B218Res\.vbp' $T
 if ($r28cells -ne 2) { $fail += ('R28 b218 run cells = ' + $r28cells + ' (want 2 = x64 + x86)') }
 $r28opt = N '(?m)^Option Compare Text\s*$' (Get-Content -Raw (Join-Path $Root 'tests\b218_octext_date_label\B218Main.bas'))
 if ($r28opt -ne 1) { $fail += ('R28 b218 Option Compare Text = ' + $r28opt + ' (want 1: the whole point of the cell)') }
+# R29 (§11.195 第二百一十二刀): Select Case 的**主语**判据必须问三处权威 ——
+# 裸名数组表 (arrayElemTypes_) 与 UDT 成员 (inferUdtFieldVb6Type) 各留读点，
+# 而且 AllString 那条强制改走串承载的闸要带 !isDateSelect。
+$r29elem = N 'arrayElemTypes_' $s26
+$r29udt = N 'inferUdtFieldVb6Type' $s26
+$r29gate = N '!isDateSelect && testType == Vb6Type::Variant' $s26
+if ($r29elem -lt 4) { $fail += ('R29 cgen_select arrayElemTypes_ reads = ' + $r29elem + ' (want >= 4: label side + subject side)') }
+if ($r29udt -ne 2) { $fail += ('R29 cgen_select inferUdtFieldVb6Type reads = ' + $r29udt + ' (want 2: UDT field + UDT field array)') }
+if ($r29gate -ne 1) { $fail += ('R29 AllString string-carrier gate = ' + $r29gate + ' (want 1: must not hijack a Date subject)') }
+# R30: b219 夹具两台在跑。
+$r30cells = N '\$Tests\\b219_date_subject_elem\\B219Res\.vbp' $T
+if ($r30cells -ne 2) { $fail += ('R30 b219 run cells = ' + $r30cells + ' (want 2 = x64 + x86)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -240,5 +252,5 @@ if ($fail.Count -gt 0) {
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
     ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells +
-    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells)
+    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells)
 exit 0

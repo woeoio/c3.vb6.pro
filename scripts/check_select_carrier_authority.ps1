@@ -84,7 +84,8 @@ if ($allN -ne 3) { $bad += ('R1 bare-name census across src = ' + $allN + ' (wan
 # ---- R2: 翻串档那一发的形状 ----
 $flipN = @([regex]::Matches($select, 'isStringSelect\s*=\s*true')).Count
 if ($flipN -ne 1) { $bad += ('R2 the carrier flip isStringSelect = true = ' + $flipN + ' (want exactly 1)') }
-$guard = [regex]::Match($select, '(?s)if \(!isStringSelect && !isFloatSelect && testType == Vb6Type::Variant\s*\r?\n\s*&& labelClass == SelectCaseLabelClass::AllString\) \{\s*\r?\n\s*isStringSelect = true;')
+# §11.195: 主语是 Date 数组元素/UDT 成员时 inferExprType 答 Variant, 这一闸必须让路 (!\)。
+$guard = [regex]::Match($select, '(?s)if \(!isStringSelect && !isFloatSelect && !isDateSelect && testType == Vb6Type::Variant\s*\r?\n\s*&& labelClass == SelectCaseLabelClass::AllString\) \{\s*\r?\n\s*isStringSelect = true;')
 if (-not $guard.Success) {
     $bad += 'R2 flip is not inside the single if that asks BOTH testType == Vb6Type::Variant AND the label authority (AllString) (want that exact guard)'
 }

@@ -51,7 +51,32 @@ void CCodeGen::visit(SelectCaseStmt& node) {
     // 改前落 int32_t 档 (`double d` 被截成 36xxx), 再把标签当 BSTR 去 `==`:
     // 真机 Y6 (`Select Case d: Case "2021-03-04"`) 真值 1, 改前答 0 (既截断又比错类型)。
     // 标签是串时按同一条口径折成日期序列 (vb6_DateVal, 与 binary 比较那腿同一枚入口)。
+    // §11.195 (第二百一十二刀): 主语是 **Date 数组元素 / UDT 成员** 时 inferExprType 答
+    // Variant ⇒ 旧判据把它当 Variant 主语, 标签全是串时又被拉去串承载, 发成
+    // `BSTR _vb6_select = VB6_SA_AT(double, q, 0);` (真机 P259 实测一条 C2440)。
+    // 判据与 binary 比较那腿同形: 先问语义类型, 再补「裸名数组」与「UDT 成员」两形。
     bool isDateSelect = (testType == Vb6Type::Date);
+    if (!isDateSelect && node.testExpr) {
+        Expr* subj195 = node.testExpr.get();
+        if (subj195->kind == ASTNodeKind::IndexOrCallExpr) {
+            const auto& ic195 = static_cast<const IndexOrCallExpr&>(*subj195);
+            if (ic195.callee && ic195.callee->kind == ASTNodeKind::IdentifierExpr) {
+                auto it195 = arrayElemTypes_.find(Symbol::toLower(
+                    static_cast<const IdentifierExpr&>(*ic195.callee).name));
+                isDateSelect = (it195 != arrayElemTypes_.end() && it195->second == Vb6Type::Date);
+            } else if (ic195.callee
+                       && (ic195.callee->kind == ASTNodeKind::MemberAccessExpr
+                           || ic195.callee->kind == ASTNodeKind::WithMemberExpr)) {
+                bool isArr195 = false;
+                isDateSelect = inferUdtFieldVb6Type(ic195.callee.get(), &isArr195) == Vb6Type::Date
+                               && isArr195;
+            }
+        } else if (subj195->kind == ASTNodeKind::MemberAccessExpr
+                   || subj195->kind == ASTNodeKind::WithMemberExpr) {
+            bool isArr195 = false;
+            isDateSelect = inferUdtFieldVb6Type(subj195, &isArr195) == Vb6Type::Date && !isArr195;
+        }
+    }
 
     // 账 #305 第311刀「实施」= 主语静态答 **Variant** 时，承载档改由 Case 标签回答。
     // VB6 对 Variant 主语的 Select Case 是按 Case 项的类型逐项做 VarCmp；我方以前只问
@@ -76,7 +101,7 @@ void CCodeGen::visit(SelectCaseStmt& node) {
         }
         if (dateLabelPresent) break;
     }
-    if (!isStringSelect && !isFloatSelect && testType == Vb6Type::Variant
+    if (!isStringSelect && !isFloatSelect && !isDateSelect && testType == Vb6Type::Variant
         && labelClass == SelectCaseLabelClass::AllString) {
         isStringSelect = true;
     }

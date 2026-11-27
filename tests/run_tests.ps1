@@ -13409,6 +13409,16 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "V5 else err=0")
     Test-Vbp 'b218_octext_date_label' "$Tests\b218_octext_date_label\B218Res.vbp" $b218Needles
     Test-Vbp 'b218_octext_date_label_x86' "$Tests\b218_octext_date_label\B218Res.vbp" $b218Needles -Arch "x86"
+    # §11.195 第二百一十二刀: Select Case 的**主语**是 Date 数组元素 / UDT 成员。
+    # 真机 .temp/k212p/p259.txt 五行; 改前 inferExprType 答 Variant ⇒ 走串承载 ⇒ C2440。
+    $b219Needles = @(
+    "E1 hit err=0",
+    "E2 hit err=0",
+    "E3 hit err=0",
+    "E4 hit err=0",
+    "E5 hit err=0")
+    Test-Vbp 'b219_date_subject_elem' "$Tests\b219_date_subject_elem\B219Res.vbp" $b219Needles
+    Test-Vbp 'b219_date_subject_elem_x86' "$Tests\b219_date_subject_elem\B219Res.vbp" $b219Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
