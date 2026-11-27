@@ -13838,6 +13838,25 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "X1=[keep]/13")
     Test-Vbp 'b237_abs_string_face' "$Tests\b237_abs_string_face\B237Res.vbp" $b237Needles
     Test-Vbp 'b237_abs_string_face_x86' "$Tests\b237_abs_string_face\B237Res.vbp" $b237Needles -Arch "x86"
+    # §11.214 第二百三十一刀: 右值里一次 raise ⇒ 语句整条中止，Variant 目标一个字不写。
+    # 真机 .temp/k225p/P326 十四格逐行相同（x64 / x86）。
+    $b238Needles = @(
+    "Q1=[keep]/94/False",
+    "Q2=[keep]/13/False",
+    "Q3=[keep]/13/False",
+    "Q4=[keep]/13/False",
+    "Q5=[keep]/11/False",
+    "Q6=[keep]/13/False",
+    "Q7=[]/0/True",
+    "Q8=[keep]/13/False",
+    "Q9=[]/0/True",
+    "Q10=[2.5]/0/False",
+    "Q11=[keep]/94",
+    "Q12=[keep]/13",
+    "Q13=[keep]/11",
+    "Q14=[-99]/13")
+    Test-Vbp 'b238_variant_store_abort' "$Tests\b238_variant_store_abort\B238Res.vbp" $b238Needles
+    Test-Vbp 'b238_variant_store_abort_x86' "$Tests\b238_variant_store_abort\B238Res.vbp" $b238Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

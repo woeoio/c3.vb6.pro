@@ -431,8 +431,36 @@ foreach ($nm213 in @('abs', 'int', 'fix')) {
 $b237Cells = @([regex]::Matches($runnerText, 'b237_abs_string_face\\B237Res\.vbp')).Count
 if ($b237Cells -ne 2) { $bad += ("S14 b237 run cells = " + $b237Cells + " (want 2 = x64 + x86)") }
 
+# ---- S15: 变体目标上的赋值守卫 (账 §11.214 第二百三十一刀) ----
+# 真机 .temp/k225p/P325/P326：右值里任何一次 raise（94 转换 / 13 类型不符 / 11 除零）都把语句
+# 整条中止 —— Variant 目标一个字不写（W1..W8/W10 十格全是 [keep]）。
+# 三条判据：
+#  (a) 赋值站那一支仍认晚绑定读（§11.84 第一百零六/一百零七刀，不许回退）；
+#  (b) 同一支也认 exprCanRaiseVariantStore（宽谓词），且该谓词把 Add/Sub/Mul 一并算进来
+#      （真机 W7 `w = v + 1` 也中止，而 exprCanRaiseStmt 只认 Div/IntDiv/Mod/Pow）；
+#  (c) 夹具 b238 两套。
+$sem214 = Get-CodeText (Join-Path $root "src\backend\detail\stmt\cgen_assign_value_sem.inc")
+$scan214 = Get-CodeText (Join-Path $root "src\backend\cgen_util_scan.cpp")
+if ($sem214 -notmatch 'exprHasLateBoundComRead\(node\.value\.get\(\)\)') {
+    $bad += "S15 the late-bound branch was dropped from the Variant store guard"
+}
+if ($sem214 -notmatch 'exprCanRaiseVariantStore\(node\.value\.get\(\)\)') {
+    $bad += "S15 the Variant store guard no longer asks exprCanRaiseVariantStore"
+}
+$mPred214 = [regex]::Match($scan214, 'bool CCodeGen::exprCanRaiseVariantStore\(Expr\* e\) const \{[\s\S]*?\n\}')
+if (-not $mPred214.Success) { $bad += "S15 exprCanRaiseVariantStore body not found" }
+else {
+    foreach ($op214 in @('Add', 'Sub', 'Mul', 'Div', 'IntDiv', 'Mod', 'Pow')) {
+        if ($mPred214.Value -notmatch ('BinaryOp::' + $op214)) {
+            $bad += ("S15 exprCanRaiseVariantStore does not treat BinaryOp::" + $op214 + " as raising")
+        }
+    }
+}
+$b238Cells = @([regex]::Matches($runnerText, 'b238_variant_store_abort\\B238Res\.vbp')).Count
+if ($b238Cells -ne 2) { $bad += ("S15 b238 run cells = " + $b238Cells + " (want 2 = x64 + x86)") }
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise)"

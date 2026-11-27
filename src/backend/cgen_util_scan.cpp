@@ -198,11 +198,57 @@ bool CCodeGen::exprCanRaiseStmt(Expr* e) const {
     }
 }
 
+// 第二百三十一刀 (§11.214): 变体目标赋值站的「右值可能 raise」。
+// 真机 .temp/k225p/P325 十格全是「目标不动」：W1/W10 `w = CStr(Abs(v))`/94、W3 `w = Abs(v)`/13、
+// W4 `w = Int("")`/13、W5 `w = CLng(v)`/13、W6 `w = 1 / d`/11、W7 `w = v + 1`/13。
+// 与 exprCanRaiseStmt 只差一条：**加减乘也箿进**。理由是这两族走的是同一条路 ——
+// `v + 1` 里的 v 是整只槽，运算前要过数值提取（vb6_VariantToLong），那就和 CLng 一样会 raise。
+// 多算的代价只多一枚临时量（提升本身无副作用），少算的代价是「号对了、值被清」。
+bool CCodeGen::exprCanRaiseVariantStore(Expr* e) const {
+    if (!e) return false;
+    switch (e->kind) {
+        case ASTNodeKind::BinaryExpr: {
+            auto& b = static_cast<BinaryExpr&>(*e);
+            if (b.op == BinaryOp::Add || b.op == BinaryOp::Sub
+                || b.op == BinaryOp::Mul || b.op == BinaryOp::Div
+                || b.op == BinaryOp::IntDiv || b.op == BinaryOp::Mod
+                || b.op == BinaryOp::Pow)
+                return true;
+            return exprCanRaiseVariantStore(b.left.get())
+                || exprCanRaiseVariantStore(b.right.get());
+        }
+        case ASTNodeKind::UnaryExpr:
+            return exprCanRaiseVariantStore(static_cast<UnaryExpr&>(*e).operand.get());
+        case ASTNodeKind::IndexOrCallExpr: {
+            auto& c = static_cast<IndexOrCallExpr&>(*e);
+            if (exprCanRaiseVariantStore(c.callee.get())) return true;
+            for (auto& a : c.positional)
+                if (exprCanRaiseVariantStore(a.get())) return true;
+            for (auto& na : c.named)
+                if (exprCanRaiseVariantStore(na.value.get())) return true;
+            return true;   // 调用/下标本身就可能 raise
+        }
+        case ASTNodeKind::MemberAccessExpr:
+            return exprCanRaiseVariantStore(static_cast<MemberAccessExpr&>(*e).object.get());
+        case ASTNodeKind::DictionaryAccessExpr:
+            return exprCanRaiseVariantStore(static_cast<DictionaryAccessExpr&>(*e).object.get());
+        case ASTNodeKind::NewExpr: {
+            auto& nw = static_cast<NewExpr&>(*e);
+            for (auto& a : nw.args)
+                if (exprCanRaiseVariantStore(a.get())) return true;
+            return true;
+        }
+        case ASTNodeKind::TypeOfExpr:
+            return exprCanRaiseVariantStore(static_cast<TypeOfExpr&>(*e).object.get());
+        default:
+            return false;
+    }
+}
+
 
 // ============================================================
 // AST辅助: 检测语句列表中是否包含GoSubStmt
 // ============================================================
-
 bool CCodeGen::hasGoSubInStmts(StmtList& stmts) const {
     for (auto& stmt : stmts) {
         if (!stmt) continue;

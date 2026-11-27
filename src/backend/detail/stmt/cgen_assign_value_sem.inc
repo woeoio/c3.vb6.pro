@@ -179,7 +179,16 @@
         // (§B 族早就在用的那一枚: 裸读是它的特例, 不会漏掉第一百零六刀那一形)。
         // 槽形 (数组元素 / UDT 字段 / 解引用) 不能浅搬 —— 那是**借来**的存储:
         // 一律 vb6_VariantAssign (Clear + 深拷贝), 再把临时量自己放掉 (它自有才放)。
-        if (node.value && exprHasLateBoundComRead(node.value.get())) {
+        if (node.value && (exprHasLateBoundComRead(node.value.get())
+                           // §11.214 (第二百三十一刀): 不止晚绑定读 —— 真机 .temp/k225p/P325
+                           // W1..W8/W10 量的是一句更宽的话：右值**任何**一次 raise
+                           // （94 转换 / 13 类型不符 / 11 除零）都把语句整条中止，
+                           // Variant 目标一个字都不写（十格全是 [keep]）。改前这一支只认
+                           // 晚绑定读，其余落到 emitVariantSlotAssign 直接盖写（实测 `[]`）。
+                           // 判据用既有的宽谓词 exprCanRaiseStmt（§11.174 第一百九十一刀）:
+                           // 树里只要有一枚调用或可能除零的算符就当可能 raise —— 宽一点只多
+                           // 一枚临时量，窄一点就是错的读数。
+                           || exprCanRaiseVariantStore(node.value.get()))) {
             const std::string gv107 = "_e" + std::to_string(stmtAbortSeq_++);
             const std::string tv107 = "_vs" + std::to_string(tempCounter_++);  // _av is taken by scalar temps (cgen_assign.cpp:32), so use a fresh prefix
             const bool owns107 = variantRhsOwnsValue(node.value.get(), value);

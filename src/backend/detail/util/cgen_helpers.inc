@@ -956,6 +956,12 @@
     //   开闸，于是真机 A7/A8 的「坏实参之后不求值、被调方不进入」在 C3 里不成立。
     //   判据取**保守的宽**：树里有调用（用户过程 / 内建 / 方法 / 下标）或除零算符即真。
     bool exprCanRaiseStmt(Expr* e) const;
+    // 第二百三十一刀 (§11.214): 「变体目标这一句的右值可能 raise」—— 比 exprCanRaiseStmt
+    //   宽一档：任何算术算符（Add/Sub/Mul 也算）在**整只变体槽**参与时都会先做数值提取，
+    //   而那次提取会 raise（真机 .temp/k225p/P325 W7: `w = v + 1`，v="x" ⇒ 13 且目标不动）。
+    //   只给「Variant 目标赋值」那一站用；语句实参那一族仍走 exprCanRaiseStmt，
+    //   两者不合并（合并会把第一百九十一刀已量的格重新洗一遍）。
+    bool exprCanRaiseVariantStore(Expr* e) const;
     // 第一百九十二刀 (§11.175): 赋值站的「右值里有一次**必然爬出被调方**的 raise 调用」。
     //   与 exprCanRaiseStmt 的区别 = 被调方自带 On Error 与否（真机 D2/D10 两个反例）。
     bool exprCallsUnprotectedProc(Expr* e) const;
