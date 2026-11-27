@@ -15082,3 +15082,53 @@ b233 当场红）。这不是小尾巴，是真机把两件事同时钉住了：
 2. `Hex(<整枚数组>)` / `Oct(<整枚数组>)`：真机 `[keep]/13`，C3 是 `[0]/0`，`Oct(a)` 更把数组描述符指针当整数打出来（P312 的 A1..A3）。整枚数组不是槽，判据要问 `isWholeArrayRef` 这一族，与「槽的宽度」是两回事。
 3. `Hex/Oct` 的 `LongLong` 档（`Hex(CLngLng(...))` 的 16 位宽）尚未与真机对齐。
 4. `Err.Source` / `Err.Description` 空串。
+
+### §11.212 第二百二十九刀：整枚数组不是数
+
+**读数（真机 `.temp/k225p/P320` / `P321` / `P322`，VB6Mini `/make`）**
+
+| 格 | 表达式（`On Error Resume Next`，目标先置 `"keep"`） | 真机 |
+| --- | --- | --- |
+| A1 | `s = Hex(a)`，`a() As Long` 已 `ReDim a(1 To 3)` | `[keep]/13` |
+| A2 | `s = Oct(a)` | `[keep]/13` |
+| A3 | `s = Hex(a())`（空括号那一形） | `[keep]/13` |
+| A4 | `s = Hex(b)`，`b() As String` | `[keep]/13` |
+| A5 | `s = Hex(c)`，`c() As Long` **从未 ReDim** | `[keep]/13` |
+| A8 | `v = a: s = Hex(v)`（槽里装着数组） | `[keep]/13` |
+| A9 | `v = a: s = Oct(v)` | `[keep]/13` |
+| A6 | `s = Hex(a(1))`，`a(1) = -5` | `FFFFFFFB/0` |
+| A10 | `s = Oct(-5)` | `177773/0` |
+
+五档形状（裸名 / 空括号 / String 元素 / 未分配 / 装进 Variant）答的是同一条：**13 Type mismatch，目标一字不动**。而元素那一形（A6）一个字都不许变 —— 这正是「判据必须是整枚数组、不是数组名」的理由。
+
+**改前**
+
+`Hex(a)` 走到内建函数实参适配站后发成 `vb6_Hex(a)` —— 把载体指针按 `double` 交出去。x64 上 C 只是给一条指针截断警告，运行期把描述符地址当整数打进十六进制（§11.210 的探针 P312 里 A3 打出 `EA921860`），`Err.Number` 仍是 0。`Oct(a)` 同形。槽那一形（A8/A9）走 `vb6_HexSlot`/`vb6_OctSlot`，宽度表 `vb6_HexMaskOf` 对数组位只能给 `0xFFFFFFFF`，于是把描述符指针打成数值。
+
+**改法：两处判据、一位报错主人**
+
+1. **发码站**（`cgen_expr_call_builtin_argtype.inc`）：`args.size()==1` 且 `callee` 恰是 `vb6_Hex`/`vb6_Oct`、且 `isWholeArrayRef(node.positional[0])` ⇒ 把那一位实参换成 `vb6_ArrayArgMismatch()`，同步替换 `argList`。三个限定各有理由：
+   - 只认这一对名字：`Hex/Oct` 是**唯一**「整枚数组能过语义层、到运行期才报 13」的一族；`Abs(a)`/`Sgn(a)` 在 VB6 里是**编译期** 31（P311 实测），走不到运行期，本站不许顺手把它们也改道。
+   - 判据问 `isWholeArrayRef`：它已经把「裸名」「`A()`」「UDT 数组成员」三形都收在一处（§B218 第一百五十八刀），本站不再自己数括号。
+   - 这一段排在宽度那一块**之前**，且宽度块加了 `args[0] != "vb6_ArrayArgMismatch()"` 的护栏 —— 数组没有「宽度」，增宽只会把元素档误折进来。
+2. **RTL**：新增 `double vb6_ArrayArgMismatch(void)`，只做两件事 —— `vb6_ErrRaise(13, "VBA.Information", "Type mismatch")` 然后返回 `0.0`。它是**表达式位**的出口（表达式里不能调 `void` 的 `vb6_ErrRaise`），错误号口径仍只住这一位，cgen 里不出现 `ErrRaise` 字面。
+3. **槽那一形**：`vb6_HexSlot`/`vb6_OctSlot` 在读 `vt` 之后、宽度表之前按位问 `vt & vb6_vtArray` ⇒ 同一枚 13。位置有讲究：`vt` 是位掩码（`vtArray|vtLong` 之类），`==` 判不出来；而必须排在 `vb6_HexW`/`vb6_OctW` 之前，否则载体指针已经被打成数值。
+
+**夹具与哨兵**
+
+- 新夹具 `tests/b236_hex_oct_array_arg`（12 格，`Debug.Print`）：H1..H5 = 五种整枚数组形状各 13、H6/H11/H12 = 元素与显式转换照常（`FFFFFFFB`/`FF`）、H7 = 标量 `Hex(255)`=`FF`、H8/H9 = 槽里装数组、H10 = `Oct(-5)`=`177773`。x64 + x86 两套。
+- `scripts/check_float_to_int_round.ps1` 新增 **S13**（现 S1..S13）四条：(a) 发码站 `vb6_ArrayArgMismatch()` 恰 2 处（赋值 + 护栏比较），且 `isWholeArrayRef` 与 `Hex/Oct` 的合取还在；(b) 该 RTL 出口体内 `vb6_ErrRaise(` 恰 1 处且号是 13；(c) 两条 Slot 都按位问 `vt & vb6_vtArray`，且**在**宽度表之前；(d) b236 两套都在跑。
+- 清单 `emit-manifest.expected.txt` 增两行，inputs 962 → 964。
+
+**验证**
+
+- 夹具 x64 / x86 各 12 格与真机 P322 逐行 `IDENTICAL`。
+- 回归：b233（37 格）、b234（19 格）复跑仍与各自真机读数逐行相同；P312 复跑 A1/A2/A3 从 `[0]/0`、`[EA921860]/0` 变成 `[keep]/13`（A4 元素照旧 `FFFFFFFB`）。
+- 本机 13 条门禁全绿（`check_rtl_proto_arity` 1809 → 1810 对自动收进新原型；`check_rtl_embedded` 138 份资源逐字节一致）。
+- CI：head `2f114a52` → GA **46038513179 = 23/23 success**，failure=0。
+
+**背账**
+
+1. `Abs("")` / `Abs("x")` 出现在**字符串消费面**（`s = CStr(Abs(v))`）时仍走 `vb6_Abs(vb6_VariantToDouble(v))`，C3 给 `[0]/0`、真机 `[keep]/13`（P312 的 S1/S2）—— 仍是「数值位提取」那一族缺的第三面。
+2. `Hex/Oct` 的 `LongLong` 档（16 位宽）。
+3. `Err.Source` / `Err.Description` 空串。
