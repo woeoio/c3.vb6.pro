@@ -14,7 +14,11 @@
 #
 # 规则:
 #   R1  date.c 里四舍五入那一问恰好 1 处 (`+ 0.5` 那一句)，且住在 vb6_SecondsOfDay 里
-#       (它的定义恰好 1、站点恰好 5 = 定义 + 三枚 getter + DateAdd 分解站)。
+#       (它的定义恰好 1、站点恰好 4 = 定义 + 三枚 getter)。
+#       §11.202 (第二百一十九刀) 把 DateAdd 从「问 vb6_SecondsOfDay + 自己裸截日期」
+#       改成直接问 vb6_split_serial(date, &datePart, &sod)：它的日期半原来不同步，
+#       DateAdd("s",1,CDate(44259.9999999)) 落在前一天。所以站点从 5 落到 4，
+#       而新的那一问由 R6 钉住。
 #   R2  旧的截断形整体不许回来: `(int32_t)(t * 24.0)` / `(int32_t)(t * 1440.0)` /
 #       `(int32_t)(t * 86400.0)` 各 0 (getter 那三枚)、`(int32_t)(timePart * ` 0 (DateAdd 那三行)。
 #   R3  三枚 getter 各定义 1 次，且各自体里就是一行 `return vb6_SecondsOfDay(...) …` (合计 3)。
@@ -36,7 +40,7 @@ $r1def = N '^static int32_t vb6_SecondsOfDay\(double date\) \{' $D
 $r1sites = N 'vb6_SecondsOfDay\(' $D
 if ($r1round -ne 1) { $fail += ('R1 rounding site (+ 0.5) = ' + $r1round + ' (want 1: the split asks one outlet)') }
 if ($r1def -ne 1) { $fail += ('R1 vb6_SecondsOfDay definition = ' + $r1def + ' (want 1)') }
-if ($r1sites -ne 5) { $fail += ('R1 vb6_SecondsOfDay sites = ' + $r1sites + ' (want 5 = def + three getters + DateAdd)') }
+if ($r1sites -ne 4) { $fail += ('R1 vb6_SecondsOfDay sites = ' + $r1sites + ' (want 4 = def + three getters; DateAdd asks vb6_split_serial instead, see R6)') }
 # R2
 $r2t24 = N '\(int32_t\)\(t \* 24\.0\)' $D
 $r2t1440 = N '\(int32_t\)\(t \* 1440\.0\)' $D
@@ -61,6 +65,13 @@ $r5cells = N "Test-Vbp 'b419_time_split" $T
 $r5sent = N 'check_time_split\.ps1' $T
 if ($r5cells -ne 2) { $fail += ('R5 b419 run cells = ' + $r5cells + ' (want 2 = x64 + x86)') }
 if ($r5sent -ne 1) { $fail += ('R5 this sentinel is not registered in run_tests.ps1 = ' + $r5sent + ' (want 1)') }
+# R6 (§11.202 第二百一十九刀): DateAdd 整段问 splitter —— 两半同步，且不再裸截日期。
+$r6split = N 'vb6_split_serial\(date, &datePart, &sod\);' $D
+$r6raw = N 'int32_t datePart = \(int32_t\)date;' $D
+$r6cells = N "Test-Vbp 'b226_dateadd_carry" $T
+if ($r6split -ne 1) { $fail += ('R6 DateAdd asks splitter = ' + $r6split + ' (want 1)') }
+if ($r6raw -ne 0) { $fail += ('R6 raw day half = ' + $r6raw + ' (want 0: DateAdd must not truncate the date half itself)') }
+if ($r6cells -ne 2) { $fail += ('R6 b226 run cells = ' + $r6cells + ' (want 2 = x64 + x86)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -68,5 +79,5 @@ if ($fail.Count -gt 0) {
 }
 Write-Host ('PASS check_time_split: round=' + $r1round + ' outlet-def=' + $r1def + ' sites=' + $r1sites +
     ' old-trunc=' + ($r2t24 + $r2t1440 + $r2t86400 + $r2tp) + ' getters=' + $r3ret + ' datediff=' + $r4diff +
-    ' cells=' + $r5cells)
+    ' dadd-split=' + $r6split + ' cells=' + $r5cells + '/' + $r6cells)
 exit 0
