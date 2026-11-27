@@ -262,6 +262,12 @@ inline const char* const* ownedTempOwnedReturnExits() {
         // VARIANT 子表那一侧同名单，见 ownedTempOwnedVariantExits）。
         "vb6_FixV",
         "vb6_IntV",
+        // §11.207 (第二百二十四刀): Round 的变体位 —— 与 Int/Fix 同形（新造的 VARIANT，
+        // 子类型跟载体），VARIANT 子表那一侧同名。
+        "vb6_RoundV",
+        // §11.207 (第二百二十四刀): Int/Fix/Round 共享的「按载体装回哪一档」——自己也是
+        // 一枚交出新造 VARIANT 的出口（三枚只委托它）。
+        "vb6_VariantNumSameKind",
         // C30-11 第七十一刀: Len 的变体位交回一枚新造的 VARIANT(Long)。
         // （Trim 一族不在此名单: 它们推导为 '1'/'store', 走 ownedTempExceptions。）
         "vb6_LenV",
@@ -389,6 +395,10 @@ inline const char* const* ownedTempOwnedVariantExits() {
         // 推导为 alias/store，走 ownedTempExceptions）。
         "vb6_FixV",
         "vb6_IntV",
+        // §11.207 (第二百二十四刀): Round(Variant) 同档 —— 交出一枚新造的 VARIANT，
+        // 子类型跟载体（RTL 里三枚同问 vb6_VariantNumSameKind）。
+        "vb6_RoundV",
+        "vb6_VariantNumSameKind",
         "vb6_LenV",          // C30-11 第七十一刀: Len(Variant) 交出一枚新造的 VARIANT
         "vb6_LenBV",         // C30-11 第九十一刀: LenB(Variant) 同档（新造的 VARIANT(Long)）
         "vb6_VCmpNullV",

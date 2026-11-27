@@ -595,6 +595,11 @@ BSTR vb6_Oct(int32_t n);
 //   所以头里只留**原型**，身子在 vb6rtl_conv.c（与 vb6_AbsV 同文件）。
 vb6_VARIANT vb6_IntV(vb6_VARIANT v);
 vb6_VARIANT vb6_FixV(vb6_VARIANT v);
+// §11.207 (第二百二十四刀): Int/Fix/Round 三枚共享的「按载体装回哪一档」。
+// 声明在这里而不是留在 .c 里当 static：发码侧那张 variantPrefixes 表是从 RTL 定义派生的，
+// 表里有的名字必须在伞头里看得见（check_emitted_declared 的 R1），否则「表说它是 VARIANT
+// 出口、头里却查不到」—— 二者取一的话，只能是它真的成为一枚出口。
+vb6_VARIANT vb6_VariantNumSameKind(vb6_VARIANT v, double d);
 vb6_VARIANT vb6_HexV(vb6_VARIANT v);
 vb6_VARIANT vb6_OctV(vb6_VARIANT v);
 

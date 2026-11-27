@@ -141,7 +141,7 @@ vb6_VARIANT vb6_AbsV(vb6_VARIANT v) {
 // 以前 IntV/FixV 只开了 Currency 一格、其余全部堆成 VT_R8（实测 iL/iB/iS 全是 5）。
 // 本函数不重算值：调用方先按载体算出 double，这里只负责「装回哪一档」——
 // 三枚（Int/Fix/Round）同问这一处，免得下次只改一处。
-static vb6_VARIANT vb6_VariantNumSameKind(vb6_VARIANT v, double d) {
+vb6_VARIANT vb6_VariantNumSameKind(vb6_VARIANT v, double d) {
     switch (v.vt) {
     case vb6_vtByte:     return vb6_VariantByte((uint8_t)d);
     case vb6_vtInteger:  return vb6_VariantInt((int16_t)d);

@@ -94,6 +94,11 @@ $exempt = @{
     #   Single/Double/Currency/Date/Boolean/Empty/Null/BSTR 十一档读数；I8 落 default =
     #   vb6_CLng(vb6_VariantToDouble) 位非（权威换算，不是静默交 0）。
     "vb6_VarNotV" = "Not(Variant) 的保档只覆盖采集器 U 的 C 段 oracle；I8 落 default = vb6_CLng(vb6_VariantToDouble) 位非得 Long（权威换算，不是静默交 0），保 LongLong 档无 oracle"
+    # §11.207 (第二百二十四刀): Int/Fix/Round 的**变体载体**保档（vb6_VariantNumSameKind）。
+    #   覆盖面同 vb6_AbsV: P298/P300 只给了十几档 oracle（Byte/Integer/Long/Single/Double/
+    #   Currency/Date/Boolean/BSTR/Empty/Null）；I8/I1/UI2 三档真 VB6 的 Variant 造不出来。
+    #   落 default = vb6_VariantDouble(d)，而 d 已经是 vb6_VariantConvNum 的权威换算结果。
+    "vb6_VariantNumSameKind" = "Int/Fix/Round 的载体保档只覆盖 P298/P300 的十几档 oracle；I8/I1/UI2 落 default = vb6_VariantConvNum 的权威换算再装 Double（不是静默交 0），保 LongLong 档无 oracle"
 }
 
 # Decimal 这一档（§B143）：同一张表要答两档，所以名单也列两份。
@@ -128,6 +133,8 @@ $decExempt = @{
     "vb6_AbsV" = "Abs 的保档只有 AB 段那 13 档；Decimal 落 default = vb6_VariantToDouble 取绝对值 ⇒ 答 Double，96 位精度要保得先有 oracle"
     # C30-10 第五十三刀: 同上（Not(Variant)）—— Decimal 档无 oracle，落 default 取 Long。
     "vb6_VarNotV" = "Not(Variant) 的保档只覆盖 U 段 C 那批；Decimal 落 default = vb6_CLng(vb6_VariantToDouble) 位非 ⇒ 答 Long，96 位精度要保得先有 oracle"
+    # §11.207 (第二百二十四刀): Int/Fix/Round 的载体保档 —— Decimal 无 oracle，落 default 答 Double。
+    "vb6_VariantNumSameKind" = "Int/Fix/Round 的保档只覆盖 P298/P300 那批（Decimal 不在其中）；Decimal 落 default = vb6_VariantConvNum 换算后装 Double，96 位精度要保得先有 oracle"
 }
 
 # ai/032 §6.9: 小整型两档（VT_I1 / VT_UI2）—— 同一张表要答的第四、五档，名单也各列一份。
@@ -155,6 +162,8 @@ $smExempt = @{
     "vb6_AbsV"            = "Abs：SByte/UInteger 两档是 C3 扩展，真 VB6 无对应 oracle；default 按数值取绝对值交 Double"
     # C30-10 第五十三刀: 同上（Not(Variant)）。
     "vb6_VarNotV"         = "Not(Variant)：SByte/UInteger 两档是 C3 扩展，真 VB6 无对应 oracle；default 按数值取位非交 Long"
+    # §11.207 (第二百二十四刀): Int/Fix/Round 的载体保档 —— 同 Abs 那一格的口径。
+    "vb6_VariantNumSameKind" = "Int/Fix/Round 的载体保档：SByte/UInteger 两档是 C3 扩展，真 VB6 无对应 oracle；default 按 vb6_VariantConvNum 换算交 Double"
 }
 
 $fnRe     = [regex]'^[A-Za-z_][A-Za-z0-9_ \*]*?([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*\)\s*\{\s*$'

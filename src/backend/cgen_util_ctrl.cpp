@@ -4596,12 +4596,21 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
                 // `As Integer` 变量符号表记成 Long), 不在这一站抢装 VT_I4 —— 交给末尾那个
                 // 唯一权威 boxToVariant (判据 = isNarrowIntExpr, 两位共用一处)。
                 if (isNarrowIntExpr(static_cast<const Expr*>(valueNode))) break;
+                // §11.207 (第二百二十四刀): **整枚数组**不在此列 —— `VarType(d)` 里 d 是
+                // 载体描述符, 该答 vtArray|vt<元素> (8195/8194/8197…), 强装成 VT_I4/I2 就
+                // 只剩 3/2 (实测 tests/k483_redim_member_elem 的 K483-long-vt / K483-int-vt)。
+                if (isWholeArrayRef(static_cast<const Expr*>(valueNode))
+                    || isSafeArrayCarrier(cExpr)) break;
                 // §11.207: 显式收窄 —— `vb6_Abs(l)` 这类 C 侧返回 double 的调用，不 cast
                 // 就会让 _Generic 猜成 VT_R8（真机 AL/IL/FL/RL 全要求 3|Long）。
                 return "vb6_VariantLong((int32_t)(" + cExpr + "))";
             // `Dim i As Integer` / CInt(...) 这一族以前也装成 VT_I4 (同一行 d121 的
             // int=3)。VB6 对 Integer 就是 VT_I2 —— 显式收窄, 不靠 _Generic 猜 short。
-            case Vb6Type::Integer:   return "vb6_VariantInt((int16_t)(" + cExpr + "))";
+            // 整枚数组同一句排除（见上）。
+            case Vb6Type::Integer:
+                if (isWholeArrayRef(static_cast<const Expr*>(valueNode))
+                    || isSafeArrayCarrier(cExpr)) break;
+                return "vb6_VariantInt((int16_t)(" + cExpr + "))";
             case Vb6Type::Double:    return "vb6_VariantDouble(" + cExpr + ")";
             default: break;
         }
@@ -4852,11 +4861,14 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
         // §11.207 (第二百二十四刀): 与存储站 `case Integer` 同一行 —— 这里以前**没有**
         // Integer 臂，于是 `Int(i)` / `Int(CBool(True))` 这类 C 侧返回 double 的调用落
         // default ⇒ VT_R8（真机 II/RI/D1 全要求 2|Integer）。
+        // 整枚数组除外：`VarType(d)` 该答 vtArray|vt<元素>（k483 的 8194）。
+        if (isWholeArrayRef(expr) || isSafeArrayCarrier(cExpr)) break;
         return "vb6_VariantInt((int16_t)(" + cExpr + "))";
     case Vb6Type::Long:
         // §11.207 (第二百二十四刀): 与存储站同一条 —— `vb6_Abs(l)` / `vb6_Int(l)` 这类
         // C 侧返回 double 的调用，不 cast 就被 _Generic 猜成 VT_R8（真机 AL/IL/FL/RL = 3）。
         // 窄档（Integer 值）已在上面被 isNarrowIntExpr 接走，不会走到这里。
+        if (isWholeArrayRef(expr) || isSafeArrayCarrier(cExpr)) break;
         return "vb6_VariantLong((int32_t)(" + cExpr + "))";
     case Vb6Type::Boolean:        // 形参是 int16_t: 显式收窄, 兼容 _Bool/int 两种 C 侧布尔表示.
         return "vb6_VariantBool((int16_t)(" + cExpr + "))";
