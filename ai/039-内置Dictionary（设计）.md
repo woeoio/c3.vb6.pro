@@ -14163,3 +14163,105 @@ vb6_split_serial(date, &datePart, &sod);
   `Print #`/`Write #` 这一层打转，本刀的量尺一碰进位，问题立刻下潜到 `DateAdd` 的取整方式。
   哨兵因此不钉「行为」而钉**形状**：裸截断 0 处 —— 因为下一个人写 `DateDiff` 时，最容易
   复制的就是那一行。
+
+## §11.203 DateDiff / DatePart / Weekday 的「哪一天」走同一句 splitter（第二百二十刀）
+
+上一刀把 `DateAdd` 收进 `vb6_split_serial`，背账里写「`DateDiff` 与 `DatePart` 对同一序列是否
+也走 splitter 未对照」。本刀一量，三家全落在同一个坑里，只有 `DateAdd` 刚被拉出来。
+
+### 一、现象
+
+真机 `.temp/k220p/P280.bas`，取 `t = CDate(44259.9999999)`（四入后是 2021-03-05 00:00:00）：
+
+```
+A1=[2021/3/6]          DateAdd("d", 1, t)              C3 一致
+A2=[2021/4/5]          DateAdd("m", 1, t)              C3 一致
+A3=[2022/3/5]          DateAdd("yyyy", 1, t)           C3 一致
+A4=[2021/3/4 23:00:00] DateAdd("h", -1, t)             C3 一致
+A5=[2021/3/4 23:59:00] DateAdd("n", -1, t)             C3 一致
+B1=[0]                 DateDiff("s", t, CDate(44260))  C3 一致
+B2=[0]                 DateDiff("d", t, CDate(44260))  C3 改前 1
+B3=[0] B4=[0] B5=[0]   DateDiff h/n/反向
+C1=[5]                 DatePart("d", t)                 C3 改前 4
+C2=[0] C3=[0] C4=[0]   DatePart h/n/s
+C5=[3] C6=[2021]       DatePart m/yyyy
+D2=[2021/3/4]          CStr(Int(t))                    C3 给 44259（另账，见七）
+```
+
+`P282.bas` 再把星期那一问补上（同一序列）：
+
+```
+W1=6     Weekday(t)                 C3 改前 5（3/4 周四）
+W2=5     Weekday(t, vbMonday)
+W3=6     Weekday(CDate(44260))
+W4=6     DatePart("w", t)
+W5=1     Weekday(CDate(-0.9999999))     1899-12-31 是周日
+W6=1     Weekday(CDate(0.9999999))
+W7=10    DatePart("ww", t)
+W8=7     DatePart("w", CDate(0))
+```
+
+一句话：**凡是「这一天是几号 / 星期几」的问句，都要在四入之后问**；凡是以「两天之差」为
+分子的问句（`s`/`n`/`h`、`w`/`ww`），走的是实数差，本来就不吃这一刀。
+
+### 二、改法（三处，同一句）
+
+`vb6rtl_date.c`：
+
+| 站点 | 改前 | 改后 |
+|---|---|---|
+| `vb6_DateDiff` 的 d1/d2 | `(int32_t)date1` / `(int32_t)date2` | `vb6_serial_day_half(date1/date2)` |
+| `vb6_DatePart` 的 d | `(int32_t)date` | `vb6_serial_day_half(date)` |
+| `vb6_Weekday` 的 d | `(int32_t)date` | `vb6_serial_day_half(date)` |
+
+`vb6_serial_day_half` 是账 #440（§B209）就立好的那一句——`Year/Month/Day` 一族已经在问它；
+`DateAdd` 上一刀刚搬过来；这三家是最后三个还在自己截的站。改完 `DateDiff("d", t, 44260)` 是
+`44260 - 44260 = 0`，`DatePart("d", t)` 是 `5`，`Weekday(t)` 是 `6`（周五）。`DatePart("w")`
+本来就转问 `vb6_Weekday`，于是自动跟着对（W4 从 5 变 6）。
+
+### 三、夹具与区域无关
+
+`tests/b227_part_diff_carry`（二十四格，x64/x86 各一份）。这一族格特别好钉 —— 读数**全是
+整数**，没有一处依赖 locale：
+
+- `A1..A6`：`DateAdd` 的 d/m/yyyy/h/n 五个间隔在进位序列上的落点；
+- `B1..B5`：`DateDiff` 的 s/d/h/n 与反向；
+- `C1..C6`：`DatePart` 的 d/h/n/s/m/yyyy；
+- `D1/D2`：`CStr(DateAdd("d",1,t))` 含 `/`、不含 `:`（形状）；
+- `E1..E4`：`Weekday` 两档与负零日序列、`DatePart("w")`。
+
+真机 `P281.bas` → `p281.txt`、`P282.bas` → `p282.txt` 逐格全同；C3 改后 x64/x86 同形。
+
+### 四、回归面
+
+- **b226**（上一刀的 DateAdd 夹具，19 格）/ **b225**(20) / **b222**(21) 本机复跑全 True；
+- **b419**（time split，17 格）/ **b432**（DateAdd 间隔，19 格）本机复跑全 True；
+- 发射面：RTL 改动不进 `--emit-c`，清单只有 b227 两行新增（inputs 946 → 948）。
+
+### 五、读数与针
+
+- 新增 **R38**：b227 两台在跑；`int32_t d1 = vb6_serial_day_half(date1), d2 = vb6_serial_day_half(date2);`
+  恰 1 处；`int32_t d = vb6_serial_day_half(date);` 恰 2 处（`DatePart` 与 `Weekday`）；
+  裸形 `int32_t d1 = (int32_t)date1, …` 与 `int32_t d = (int32_t)date;` 合计 0 处。
+- `check_time_split`（上一刀改过的 `vb6_SecondsOfDay` 站点 4）仍 PASS —— 这一刀没动那一问。
+- 本机闸门：`check_date_conv`（`pdiff227-cells=2`）、`check_time_split`、
+  `check_general_date_outlets`、`check_manifest_coverage`（inputs=948，sets equal）、
+  `check_select_carrier_authority`。
+- 神谕：`.temp/k220p/P280.bas`（十八行）、`P281.bas`（夹具二十格）、`P282.bas`（星期八行）。
+- 门：run `45951328269`（`dev`、head `3baa6129`）。
+
+### 六、记账
+
+- 代码：`3baa6129`（RTL 三站 + 夹具 + R38 + 清单两行）。
+- **号**：本节 = 第二百二十刀 / §11.203。
+- 背账：
+  1. **`Int` / `Fix` 对 `Date` 实参返回什么类型**：真机 `CStr(Int(t))` 给 `2021/3/4`
+     （日期文本），C3 给 `44259`（裸序列号）—— 这不是取整口径，是**静态类型**：VB6 的
+     `Int`/`Fix` 返回与实参同型，`Date` 进 `Date` 出，`CStr` 于是走日期那一档。下一刀的量尺。
+  2. `DateAdd` 撞上月末（`DateAdd("m",1,#2021-01-31#)`）与进位序列叠加未量。
+  3. `DatePart("q"/"ww")` 在进位序列上的答案未单独量（W7 量了 `ww`=10，正常）。
+- 教训：**同一句判据被「三族 getter」接手之后，剩下的散点最难找 —— 它们没有名字。**
+  `Year/Month/Day` 有 `vb6_serial_day_half` 这个名字，`DateAdd` 被上一刀抓到，而
+  `DateDiff`/`DatePart`/`Weekday` 只是三行裸 `(int32_t)date`，读代码时看着都「像截断整日」。
+  哨兵因此把「裸形 0 处」写成一条账：下次再有人写「取整日」，会先撞上这条规则而不是撞上
+  一个月末边界。
