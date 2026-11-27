@@ -586,6 +586,20 @@ float vb6_CSng(double v);
 double vb6_CDate(vb6_VARIANT v);
 BSTR vb6_Hex(int32_t n);
 BSTR vb6_Oct(int32_t n);
+// §11.210 (第二百二十七刀): 答案宽度跟载体档走 —— Byte 8 位、Integer/Boolean 16 位、
+// 其余 32 位（真机 .temp/k225p/P308：Hex(CByte(255))="FF"、Hex(CInt(-1))="FFFF"、
+// Hex(CLng(-1))="FFFFFFFF"；正值不补零，所以宽度只体现在负值的二补码上）。
+// 发码侧按**静态档**选名字；变体位按 VT 选（宽度表只在 vb6rtl_conv.c 一处）。
+BSTR vb6_HexInt(int32_t n);
+BSTR vb6_HexByte(int32_t n);
+BSTR vb6_OctInt(int32_t n);
+BSTR vb6_OctByte(int32_t n);
+// 整只变体槽那一形（发码里 `Hex(v)` 在**字符串上下文**落成
+// `vb6_Hex(vb6_VariantToLong(v))`，宽度信息在槽的 vt 上）：这两枚只读一次槽。
+BSTR vb6_HexW(int32_t n, int32_t vartype);
+BSTR vb6_OctW(int32_t n, int32_t vartype);
+BSTR vb6_HexSlot(vb6_VARIANT v);
+BSTR vb6_OctSlot(vb6_VARIANT v);
 
 // C30-11 第六十四刀: Int/Fix/Hex/Oct 的「Null 进、Null 出」变体位。
 // 读数 .temp/null/oracle_num.vbs：这四格真值都是 **Null**（不是 0，也不是 94）。

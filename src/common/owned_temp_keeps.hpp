@@ -294,6 +294,12 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_FormatPercent",
         "vb6_GetSetting",
         "vb6_Hex",
+        // §11.210 (第二百二十七刀): 宽度出口同一张"新造 BSTR"表 ——
+        // *Int / *Byte / *W / *Slot 都是 vb6_BSTR_FromStr 的产物。
+        "vb6_HexInt",
+        "vb6_HexByte",
+        "vb6_HexW",
+        "vb6_HexSlot",
         "vb6_InputB",
         "vb6_InputBox",
         "vb6_InputString",
@@ -313,6 +319,10 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_MonthName",
         "vb6_NumToBSTRDefault",
         "vb6_Oct",
+        "vb6_OctInt",
+        "vb6_OctByte",
+        "vb6_OctW",
+        "vb6_OctSlot",
         "vb6_PA_GetBSTR",
         "vb6_Partition",
         "vb6_Printer_DeviceName",

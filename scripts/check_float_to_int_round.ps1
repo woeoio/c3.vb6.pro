@@ -276,7 +276,7 @@ if (-not (Test-Path $argtype)) {
     $bad += "S10 cgen_expr_call_builtin_argtype.inc not found"
 } else {
     $atText = Get-CodeText $argtype
-    $nNarrow = @([regex]::Matches($atText, 'callee == "vb6_Hex" \|\| callee == "vb6_Oct"')).Count
+    $nNarrow = @([regex]::Matches($atText, 'const Vb6Type t209 = inferExprType')).Count
     if ($nNarrow -ne 1) { $bad += ("S10 the Hex/Oct narrowing station = " + $nNarrow + " (want 1)") }
     foreach ($t in @('Vb6Type::Single', 'Vb6Type::Double', 'Vb6Type::Date', 'Vb6Type::Currency', 'Vb6Type::String')) {
         if ($atText -notmatch [regex]::Escape($t)) { $bad += ("S10 the narrowing station no longer gates " + $t) }
@@ -298,8 +298,52 @@ if ($conv10 -notmatch 'BSTR vb6_Oct\(int32_t n\)') {
 $b233Cells = @([regex]::Matches($runnerText, 'b233_hex_oct_narrow\\B233Res\.vbp')).Count
 if ($b233Cells -ne 2) { $bad += ("S10 b233 hex/oct run cells = " + $b233Cells + " (want 2 = x64 + x86)") }
 
+# ---- S11: Hex/Oct 的答案宽度跟载体档走 (账 §11.210 第二百二十七刀) ----
+# 真机 .temp/k225p/P308/P310：Hex(CByte(255))="FF" / Hex(CInt(-1))="FFFF" /
+# Hex(True)="FFFF" / Hex(CLng(-1))="FFFFFFFF"；正值不补零 ⇒ 宽度只体现在负值的二补码上。
+# 三条规则：
+#  (a) 宽度表只许一张：vb6_HexMaskOf 定义 1 处，且它认 Byte/Integer/Boolean 三档；
+#      进制格式化（%X / %o）各只许 1 处 —— 多一处就是另一份答案。
+#  (b) 静态档由发码选名字（*Int/*Byte），变体档由 vt 选（vb6_HexW/Slot），两条共一张表。
+#  (c) 字符串上下文与变体上下文**同一个发射形状**（HexSlot），所以两个装箱站
+#      （mathNullFamilyV / boxToVariant 的 k64 表）都必须认得它 —— 否则 Null 会丢
+#      （真机 P310 Z2：IsNull(Hex(Null))=True，而 HexSlot 在串上下文必须给空串 Z1）。
+$conv11 = Get-CodeText $conv
+$maskDef = @([regex]::Matches($conv11, 'static uint32_t vb6_HexMaskOf\s*\(\s*int32_t vartype\s*\)')).Count
+if ($maskDef -ne 1) { $bad += ("S11 vb6_HexMaskOf definitions = " + $maskDef + " (want 1)") }
+foreach ($vt in @('vb6_vtByte', 'vb6_vtInteger', 'vb6_vtBoolean')) {
+    $m = [regex]::Match($conv11, 'static uint32_t vb6_HexMaskOf[\s\S]*?\n\}')
+    if (-not $m.Success -or $m.Value -notmatch [regex]::Escape($vt)) {
+        $bad += ("S11 the width table no longer gates " + $vt)
+    }
+}
+$nX = @([regex]::Matches($conv11, 'swprintf\(buf, 16, L"%X"')).Count
+$nO = @([regex]::Matches($conv11, 'swprintf\(buf, 16, L"%o"')).Count
+if ($nX -ne 1) { $bad += ("S11 %X formatters = " + $nX + " (want 1 = the only hex outlet)") }
+if ($nO -ne 1) { $bad += ("S11 %o formatters = " + $nO + " (want 1 = the only octal outlet)") }
+$slotNull = @([regex]::Matches($conv11, 'BSTR vb6_HexSlot\(vb6_VARIANT v\) \{[\s\S]{0,400}?vb6_vtNull')).Count
+if ($slotNull -lt 1) { $bad += "S11 vb6_HexSlot no longer maps Null to the empty string (oracle P310 Z1)" }
+if ($conv11 -notmatch 'vb6_VariantString\(vb6_HexSlot\(v\)\)') {
+    $bad += "S11 vb6_HexV no longer delegates to vb6_HexSlot (one width table, two consumers)"
+}
+$ctrl11 = Get-CodeText (Join-Path $root "src\backend\cgen_util_ctrl.cpp")
+$nSlotBox = @([regex]::Matches($ctrl11, 'splitOneArgSlotCall\(cExpr, "vb6_HexSlot\(')).Count
+if ($nSlotBox -ne 2) { $bad += ("S11 HexSlot recognised by boxing stations = " + $nSlotBox + " (want 2 = boxToVariant + mathNullFamilyV)") }
+$argtype11 = Get-CodeText $argtype
+if (@([regex]::Matches($argtype11, 'callee \+= "Byte"')).Count -ne 1) {
+    $bad += "S11 the Byte-width outlet selection is gone (Hex(CByte(255)) must answer FF)"
+}
+if (@([regex]::Matches($argtype11, 'callee \+= "Int"')).Count -ne 1) {
+    $bad += "S11 the Integer-width outlet selection is gone (Hex(CInt(-1)) must answer FFFF)"
+}
+if ($argtype11 -notmatch 'isNarrowIntExpr\(node\.positional\[0\]\.get\(\)\)') {
+    $bad += "S11 the Integer-width branch no longer asks isNarrowIntExpr (Integer vars answer Long in inferExprType)"
+}
+$b234Cells = @([regex]::Matches($runnerText, 'b234_hex_oct_width\\B234Res\.vbp')).Count
+if ($b234Cells -ne 2) { $bad += ("S11 b234 hex/oct width run cells = " + $b234Cells + " (want 2 = x64 + x86)") }
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier)"

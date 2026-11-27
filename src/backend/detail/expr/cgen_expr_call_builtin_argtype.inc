@@ -133,6 +133,49 @@
                 args[0] = narrowed209;
                 argsFixed108c = true;
             }
+            // §11.210 (第二百二十七刀): 答案宽度。真机 .temp/k225p/P308：
+            // Hex(CByte(255))="FF" / Hex(CInt(-1))="FFFF" / Hex(True)="FFFF" /
+            // Hex(CLng(-1))="FFFFFFFF"。正值不补零，所以宽度只体现在负值的二补码上。
+            // 宽度表只在 RTL 一处（vb6_HexMaskOf）——这里只选名字，不另立一张表。
+            //
+            // （1）整只变体槽那一形：字符串上下文里 `Hex(v)` 已经落成
+            //     `vb6_Hex(vb6_VariantToLong(v))`（装箱站还在后面，改不到它），
+            //     而宽度全在槽的 vt 上 ⇒ 整串换成只读一次槽的 vb6_HexSlot(v)。
+            //     判据是“这一串就是一层 VariantToLong”，不是猜来源。
+            {
+                static const std::string preV210 = "vb6_VariantToLong(";
+                const bool slotShaped = args[0].compare(0, preV210.size(), preV210) == 0
+                    && args[0].size() > preV210.size() + 1
+                    && args[0].back() == ')';
+                if (slotShaped) {
+                    // 括号配平：确认整串就是那一次提取（尾括号必须是它自己的）
+                    const size_t open210 = preV210.size() - 1;
+                    int depth210 = 0;
+                    size_t close210 = std::string::npos;
+                    for (size_t k210 = open210; k210 < args[0].size(); ++k210) {
+                        if (args[0][k210] == '(') depth210++;
+                        else if (args[0][k210] == ')') {
+                            if (--depth210 == 0) { close210 = k210; break; }
+                        }
+                    }
+                    if (close210 == args[0].size() - 1) {
+                        const std::string slot210 =
+                            args[0].substr(preV210.size(), args[0].size() - preV210.size() - 1);
+                        replaceInArgList108c(args[0], slot210);
+                        args[0] = slot210;
+                        callee = (callee == "vb6_Hex" ? "vb6_HexSlot" : "vb6_OctSlot");
+                        argsFixed108c = true;
+                    }
+                }
+            }
+            // （2）静态档：Byte → *Byte、Integer/Boolean → *Int。
+            //     Integer 变量在 inferExprType 里答 Long（C 侧 int32 口径），
+            //     所以那一档必须问 isNarrowIntExpr 这枚既有谓词（§C30-10 第三十四/四十五刀）。
+            if (callee == "vb6_Hex" || callee == "vb6_Oct") {
+                if (t209 == Vb6Type::Byte) callee += "Byte";
+                else if (t209 == Vb6Type::Integer || t209 == Vb6Type::Boolean
+                         || isNarrowIntExpr(node.positional[0].get())) callee += "Int";
+            }
         }
         // 账 #305 §B174 (第六十五刀): 原此处的「数值实参 → BSTR 形参」13 枚名单整段撤掉 ——
         // 同一条规则的唯一站点在 cgen_expr_call_arg_emit.inc 的 Fix 175, 位号/档位/形状三个问句

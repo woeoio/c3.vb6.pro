@@ -13755,6 +13755,30 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "Y4=0/80000000")
     Test-Vbp 'b233_hex_oct_narrow' "$Tests\b233_hex_oct_narrow\B233Res.vbp" $b233Needles
     Test-Vbp 'b233_hex_oct_narrow_x86' "$Tests\b233_hex_oct_narrow\B233Res.vbp" $b233Needles -Arch "x86"
+    # §11.210 第二百二十七刀: Hex/Oct 的**答案宽度**跟载体档走（Byte 2 位 / Integer 4 位 / 其余 8 位）。
+    # 真机 .temp/k225p/P308/P309/P310 全格一致。
+    $b234Needles = @(
+    "W1=FF FFFF FFFFFFFF FFFF",
+    "W2=377 177777 37777777777 177777",
+    "W3=10 10 10",
+    "W4=0 0 0",
+    "W5=80 8000 80000000",
+    "W6=200 100000 20000000000",
+    "W7=FFFE FF FFFFFFFE",
+    "V1=2/FFFF",
+    "V2=17/FF",
+    "V3=3/FFFFFFFF",
+    "V4=11/FFFF",
+    "V5=177777",
+    "V6=377",
+    "V7=37777777777",
+    "V8=2 5",
+    "V9=FFFFFFFF 7",
+    "V10=FFFFFFFF 4",
+    "L1=1 9C40",
+    "L2=1 116100")
+    Test-Vbp 'b234_hex_oct_width' "$Tests\b234_hex_oct_width\B234Res.vbp" $b234Needles
+    Test-Vbp 'b234_hex_oct_width_x86' "$Tests\b234_hex_oct_width\B234Res.vbp" $b234Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

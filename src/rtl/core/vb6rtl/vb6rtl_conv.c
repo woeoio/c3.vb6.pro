@@ -174,13 +174,15 @@ vb6_VARIANT vb6_RoundV(vb6_VARIANT v, int32_t decimals) {
     if (v.vt == vb6_vtEmpty) return vb6_VariantInt(0);
     return vb6_VariantNumSameKind(v, vb6_Round(vb6_VariantConvNum(v), decimals));
 }
+// §11.210: 变体位也跟着 VT 选宽度（真机 P308 的 V1..V7）。宽度表只在 vb6_HexMaskOf
+// 一处，静态档那一侧由发码选不同的名字（vb6_HexInt / vb6_HexByte，背后还是同一张表）。
 vb6_VARIANT vb6_HexV(vb6_VARIANT v) {
     if (v.vt == vb6_vtNull) return vb6_VariantNull();
-    return vb6_VariantString(vb6_Hex(vb6_VariantToLong(v)));
+    return vb6_VariantString(vb6_HexSlot(v));
 }
 vb6_VARIANT vb6_OctV(vb6_VARIANT v) {
     if (v.vt == vb6_vtNull) return vb6_VariantNull();
-    return vb6_VariantString(vb6_Oct(vb6_VariantToLong(v)));
+    return vb6_VariantString(vb6_OctSlot(v));
 }
 int32_t vb6_Sgn(double x) { return (x > 0) ? 1 : (x < 0) ? -1 : 0; }
 double vb6_Sqr(double x) { return sqrt(x); }
@@ -1256,15 +1258,56 @@ double vb6_CDate(vb6_VARIANT v) {
     return vb6_VariantToDouble(v);
 }
 
-BSTR vb6_Hex(int32_t n) {
+// §11.210 (第二百二十七刀): Hex/Oct 的**答案宽度跟着载体档走**。
+// 真机 .temp/k225p/P308 全表：
+//   Byte  255  → Hex "FF"   Oct "377"
+//   Integer -1 → Hex "FFFF"  Oct "177777"
+//   Boolean True(= Integer -1) → "FFFF" / "177777"
+//   Long   -1  → "FFFFFFFF" / "37777777777"
+// 正值不补零（Hex(CByte(16))="10" 与 Hex(CLng(16))="10" 同形），所以宽度只体现在
+// **负值的二补码被截到几位** —— 即一个掩码，而不是补零位数。
+// 三枚名字各自硬编码一个宽度（没有第二张表）：
+//   vb6_Hex / vb6_Oct        = Long 宽（也是浮点/日期/字符串载体收窄后那一档）
+//   vb6_HexInt / vb6_OctInt  = Integer/Boolean 宽（16 位）
+//   vb6_HexByte / vb6_OctByte= Byte 宽（8 位）
+static uint32_t vb6_HexMaskOf(int32_t vartype) {
+    switch (vartype) {
+        case vb6_vtByte:     return 0x000000FFu;   /* VT_UI1: 2 位 */
+        case vb6_vtInteger:  return 0x0000FFFFu;   /* VT_I2: 4 位 */
+        case vb6_vtBoolean:  return 0x0000FFFFu;   /* VT_BOOL: 4 位（真机 Hex(True)="FFFF"） */
+        default:             return 0xFFFFFFFFu;   /* Long / 浮点 / 日期 / 字符串载体 */
+    }
+}
+BSTR vb6_HexW(int32_t n, int32_t vartype) {
     wchar_t buf[16];
-    swprintf(buf, 16, L"%X", n);
+    swprintf(buf, 16, L"%X", (unsigned)((uint32_t)n & vb6_HexMaskOf(vartype)));
+    return vb6_BSTR_FromStr(buf);
+}
+BSTR vb6_OctW(int32_t n, int32_t vartype) {
+    wchar_t buf[16];
+    swprintf(buf, 16, L"%o", (unsigned)((uint32_t)n & vb6_HexMaskOf(vartype)));
     return vb6_BSTR_FromStr(buf);
 }
 
-BSTR vb6_Oct(int32_t n) {
-    wchar_t buf[16];
-    swprintf(buf, 16, L"%o", n);
-    return vb6_BSTR_FromStr(buf);
+BSTR vb6_Hex(int32_t n) { return vb6_HexW(n, vb6_vtLong); }
+BSTR vb6_HexInt(int32_t n) { return vb6_HexW(n, vb6_vtInteger); }
+BSTR vb6_HexByte(int32_t n) { return vb6_HexW(n, vb6_vtByte); }
+/* 整只变体槽：宽度按 vt，只读一次槽（不重求值） */
+BSTR vb6_HexSlot(vb6_VARIANT v) {
+    /* 真机 .temp/k225p/P310 Z1: 字符串上下文里 `"[" & Hex(Null) & "]"` 落成 `[]` ——
+       Null 在串拼接那一站就是空串。变体上下文不经过这里（装箱站会把这一形换成
+       vb6_HexV，那一枚把 Null 保成 Null，真机 Z2: IsNull(Hex(Null)) = True）。 */
+    const int32_t vt = (int32_t)v.vt;
+    if (vt == vb6_vtNull) return vb6_BSTR_FromStr(L"");
+    return vb6_HexW(vb6_VariantToLong(v), vt);
+}
+
+BSTR vb6_Oct(int32_t n) { return vb6_OctW(n, vb6_vtLong); }
+BSTR vb6_OctInt(int32_t n) { return vb6_OctW(n, vb6_vtInteger); }
+BSTR vb6_OctByte(int32_t n) { return vb6_OctW(n, vb6_vtByte); }
+BSTR vb6_OctSlot(vb6_VARIANT v) {
+    const int32_t vt = (int32_t)v.vt;
+    if (vt == vb6_vtNull) return vb6_BSTR_FromStr(L"");
+    return vb6_OctW(vb6_VariantToLong(v), vt);
 }
 

@@ -3933,6 +3933,31 @@ bool CCodeGen::isNarrowIntExpr(const Expr* e) const {
     return false;
 }
 
+// §11.210 (第二百二十七刀): 拆 `pre<inner>)` —— pre 自带左括号，右括号必须配平到串尾。
+// 两个装箱站（mathNullFamilyV / boxToVariant 那张 k64 表）共用：`Hex(<整只槽>)` 在
+// **字符串上下文**里发的是 `vb6_HexSlot(v)`（宽度按 vt，真机 P308），而在**变体上下文**
+// 里同一个调用必须换成 Null 保全的 `vb6_HexV(v)`（真机 P310：IsNull(Hex(Null))=True）。
+// 两种消费面同一个发射形状，所以判据要认两种形状 —— 但仍只在一个地方认。
+static bool splitOneArgSlotCall(const std::string& cExpr, const std::string& pre,
+                                std::string* inner) {
+    size_t s = 0;
+    while (s < cExpr.size() && (cExpr[s] == '(' || cExpr[s] == ' ')) s++;
+    if (cExpr.compare(s, pre.size(), pre) != 0) return false;
+    if (cExpr.size() < s + pre.size() + 2) return false;
+    int depth = 1;
+    for (size_t k = s + pre.size(); k < cExpr.size(); ++k) {
+        if (cExpr[k] == '(') depth++;
+        else if (cExpr[k] == ')') {
+            if (--depth == 0) {
+                if (k != cExpr.size() - 1) return false;
+                *inner = cExpr.substr(s + pre.size(), k - (s + pre.size()));
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // C30-11 第六十四刀: Abs/Int/Fix/Hex/Oct 的「Null 进、Null 出」变体位判据。
 //
 // 这两站（wrapVariantValue 存储站 / boxToVariant 实参站）都要先问这一句，且在**各自的
@@ -3977,6 +4002,15 @@ static std::string mathNullFamilyV(const ASTNode* node, const std::string& cExpr
         return std::string();
     }
     if (call.positional.size() != 1) return std::string();
+    // §11.210: 整只槽那一形（字符串上下文里宽度按 vt 发成 vb6_HexSlot）——
+    // 装箱时同样要换成 Null 保全的 vb6_HexV。
+    {
+        std::string innerSlot;
+        if (fn == "hex" && splitOneArgSlotCall(cExpr, "vb6_HexSlot(", &innerSlot))
+            return "vb6_HexV(" + innerSlot + ")";
+        if (fn == "oct" && splitOneArgSlotCall(cExpr, "vb6_OctSlot(", &innerSlot))
+            return "vb6_OctV(" + innerSlot + ")";
+    }
     static const struct { const char* vb; const char* pre; const char* out; } kTbl[] = {
         {"abs", "vb6_Abs(vb6_VariantToDouble(", "vb6_AbsV("},
         {"int", "vb6_Int(vb6_VariantToDouble(", "vb6_IntV("},
@@ -4807,6 +4841,15 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
                 {"hex", "vb6_Hex(vb6_VariantToLong(",   "vb6_HexV("},
                 {"oct", "vb6_Oct(vb6_VariantToLong(",   "vb6_OctV("},
             };
+            // §11.210: 字符串上下文里发出去的那一形（vb6_HexSlot）在这里也要换成
+            // Null 保全的 vb6_HexV —— 两个消费面（BSTR / VARIANT）同一个发射形状。
+            {
+                std::string innerSlot64;
+                if (fn64 == "hex" && splitOneArgSlotCall(cExpr, "vb6_HexSlot(", &innerSlot64))
+                    return "vb6_HexV(" + innerSlot64 + ")";
+                if (fn64 == "oct" && splitOneArgSlotCall(cExpr, "vb6_OctSlot(", &innerSlot64))
+                    return "vb6_OctV(" + innerSlot64 + ")";
+            }
             for (const auto& m64 : k64) {
                 if (fn64 != m64.vb) continue;
                 const std::string pre64 = m64.pre;

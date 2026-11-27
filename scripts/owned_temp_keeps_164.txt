@@ -99,6 +99,7 @@ vb6_GetSetting|0	0	handoff-reads:vb6_RegBuildKey	0	closed	BSTR
 vb6_GetSetting|1	0	handoff-reads:vb6_RegBuildKey	0	closed	BSTR
 vb6_GetSetting|2	0		0	closed	BSTR
 vb6_GetSetting|3	0		0	closed	BSTR
+vb6_HexSlot|0	0	handoff-to-plain:vb6_HexW	0	open	VARIANT
 vb6_HexV|0	1	store	0	open	VARIANT
 vb6_ho_setVariantBstr|1	1	store	0	open	BSTR
 vb6_IIfBSTR|1	0	handoff-reads:vb6_BSTR_Free	0	open	BSTR
@@ -167,6 +168,7 @@ vb6_Name|0	0	handoff-reads:vb6_path_from	0	open	BSTR
 vb6_Name|1	0	handoff-reads:vb6_path_from	0	open	BSTR
 vb6_NumTryParse|0	0		0	open	BSTR
 vb6_NumVal|0	0	handoff-reads:vb6_NumTryParse	0	open	BSTR
+vb6_OctSlot|0	0	handoff-to-plain:vb6_OctW	0	open	VARIANT
 vb6_OctV|0	1	store	0	open	VARIANT
 vb6_Open|0	0	handoff-reads:vb6_path_from	0	open	BSTR
 vb6_PA_SetBSTR|2	0		0	open	BSTR
@@ -327,6 +329,9 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_FormatPercent BSTR
 [own] vb6_GetSetting BSTR
 [own] vb6_Hex BSTR
+[own] vb6_HexByte BSTR
+[own] vb6_HexInt BSTR
+[own] vb6_HexW BSTR
 [own] vb6_InputB BSTR
 [own] vb6_InputBox BSTR
 [own] vb6_InputString BSTR
@@ -349,6 +354,9 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_MonthName BSTR
 [own] vb6_NumToBSTRDefault BSTR
 [own] vb6_Oct BSTR
+[own] vb6_OctByte BSTR
+[own] vb6_OctInt BSTR
+[own] vb6_OctW BSTR
 [own] vb6_PA_GetBSTR BSTR
 [own] vb6_Partition BSTR
 [own] vb6_Printer_DeviceName BSTR
@@ -407,6 +415,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [alias] vb6_CDec VARIANT
 [alias] vb6_ErrDescription BSTR
 [alias] vb6_ErrSource BSTR
+[alias] vb6_HexSlot BSTR
 [alias] vb6_HexV VARIANT
 [alias] vb6_IIfBSTR BSTR
 [alias] vb6_IIfVariant VARIANT
@@ -414,6 +423,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [alias] vb6_LoadResData VARIANT
 [alias] vb6_LoadResPicture VARIANT
 [alias] vb6_LTrimV VARIANT
+[alias] vb6_OctSlot BSTR
 [alias] vb6_OctV VARIANT
 [alias] vb6_RTrimV VARIANT
 [alias] vb6_TrimV VARIANT
