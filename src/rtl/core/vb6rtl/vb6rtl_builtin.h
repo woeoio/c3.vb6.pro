@@ -445,6 +445,8 @@ void vb6_fmtLocaleLongTime(const SYSTEMTIME* st, wchar_t* out, size_t cap);
 // §11.198 (第二百一十五刀): 第一参传**序列号** —— 「日期部分为零」那一档只给时间，
 // SYSTEMTIME 自己答不出这件事（序列 0..1 落在 1899-12-30，与真日期同形）。
 void vb6_fmtLocaleGeneralDate(const SYSTEMTIME* st, double serial, wchar_t* out, size_t cap);
+// §11.201: 「日期部分为零」(含四入进位) —— general date 与 Print # 两站问同一句。
+int vb6_fmtDatePartIsZero(double serial);
 double vb6_DateValue(BSTR dateStr);
 double vb6_TimeSerial(int32_t hour, int32_t minute, int32_t second);
 double vb6_TimeValue(BSTR timeStr);

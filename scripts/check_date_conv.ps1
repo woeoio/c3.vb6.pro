@@ -271,16 +271,16 @@ if ($r32ask -ne 1) { $fail += ('R32 inferExprType date-builtin ask = ' + $r32ask
 $r33cells = N '\$Tests\\b222_time_general_date\\B222Res\.vbp' $T
 if ($r33cells -ne 2) { $fail += ('R33 b222 run cells = ' + $r33cells + ' (want 2 = x64 + x86)') }
 $s222fmt = Get-Content -Raw (Join-Path $Root 'src\rtl\core\vb6rtl\vb6rtl_format.c')
-$r33rule = N 'serial > -1\.0 && serial < 1\.0' $s222fmt
-if ($r33rule -ne 1) { $fail += ('R33 general-date zero-date rule = ' + $r33rule + ' (want 1: date-part-zero => time only, decided on the serial)') }
+$r33rule = N 'if \(vb6_fmtDatePartIsZero\(serial\)\)' $s222fmt
+if ($r33rule -ne 1) { $fail += ('R33 general-date zero-date rule = ' + $r33rule + ' (want 1: date-part-zero => time only, asked through the shared predicate)') }
 # R34 (§11.199 第二百一十六刀): 「日期部分为零」的窗口是 (−1,1)（向零截断为 0），
 # 不是 [0,1) —— 真机 P271: CStr(CDate(-0.5)) = "12:00:00"、CDate(-1.5) 仍带日期。
 # Print # 那一站有自己的一份同规则窗口 (vb6rtl_file.c 的 vb6_FileDateText)，两处都要在。
 $r34cells = N '\$Tests\\b223_negative_serial_text\\B223Res\.vbp' $T
 if ($r34cells -ne 2) { $fail += ('R34 b223 run cells = ' + $r34cells + ' (want 2 = x64 + x86)') }
 $s222file = Get-Content -Raw (Join-Path $Root 'src\rtl\core\vb6rtl\vb6rtl_file.c')
-$r34file = N 'v > -1\.0 && v < 1\.0' $s222file
-if ($r34file -ne 1) { $fail += ('R34 Print # zero-date window = ' + $r34file + ' (want 1: the file station has its own window, same rule)') }
+$r34file = N 'if \(vb6_fmtDatePartIsZero\(v\)\)' $s222file
+if ($r34file -ne 1) { $fail += ('R34 Print # zero-date window = ' + $r34file + ' (want 1: the file station asks the same predicate)') }
 # R35 (§11.200 第二百一十七刀): Write # 的 #...# 文本 —— 时间部分为零就整段不写。
 # 真机 P273 p273w.txt: CDate(0) → "#1899-12-30#"、CDate(1) → "#1899-12-31#"、
 # CDate(0.0000001) → "#1899-12-30#"; 0.5 仍是 "#1899-12-30 12:00:00#"。
@@ -288,6 +288,17 @@ $r35cells = N '\$Tests\\b224_write_date_time_zero\\B224Res\.vbp' $T
 if ($r35cells -ne 2) { $fail += ('R35 b224 run cells = ' + $r35cells + ' (want 2 = x64 + x86)') }
 $r35arm = N 'L"#%04d-%02d-%02d#"' $s222file
 if ($r35arm -ne 1) { $fail += ('R35 Write # date-only arm = ' + $r35arm + ' (want 1: zero time omits the whole time segment)') }
+# R36 (§11.201 第二百一十八刀): 零日判据跟着四入走 —— 四入到 24:00 就进位一天,
+# 零日不再是零日。真机 P275: CStr(CDate(±0.9999999)) = "1899/12/31"、
+# Print #f, CDate(0.9999999) = "1899/12/31 "（改前 "23:59:59 "）。
+$r36cells = N '\$Tests\\b225_boundary_carry\\B225Res\.vbp' $T
+if ($r36cells -ne 2) { $fail += ('R36 b225 run cells = ' + $r36cells + ' (want 2 = x64 + x86)') }
+$r36def = N 'int vb6_fmtDatePartIsZero\(double serial\)' $s222fmt
+if ($r36def -ne 1) { $fail += ('R36 carry-aware predicate = ' + $r36def + ' (want 1: one definition in format.c)') }
+$r36decl = N 'int vb6_fmtDatePartIsZero\(double serial\);' (Get-Content -Raw (Join-Path $Root 'src\rtl\core\vb6rtl\vb6rtl_builtin.h'))
+if ($r36decl -ne 1) { $fail += ('R36 predicate declared = ' + $r36decl + ' (want 1: file.c asks it too)') }
+$r36carry = N '>= 86400\) ip \+= 1\.0;' $s222fmt
+if ($r36carry -ne 1) { $fail += ('R36 carry step = ' + $r36carry + ' (want 1: rounding to 24:00 advances one day)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -296,5 +307,5 @@ if ($fail.Count -gt 0) {
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
     ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells +
-    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells + ' bld220-cells=' + $r31sa + ' now221-cells=' + $r32cells + ' gen222-cells=' + $r33cells + ' neg223-cells=' + $r34cells + ' wr224-cells=' + $r35cells)
+    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells + ' bld220-cells=' + $r31sa + ' now221-cells=' + $r32cells + ' gen222-cells=' + $r33cells + ' neg223-cells=' + $r34cells + ' wr224-cells=' + $r35cells + ' carry225-cells=' + $r36cells)
 exit 0

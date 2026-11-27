@@ -13529,6 +13529,32 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "F2 colon=True")
     Test-Vbp 'b224_write_date_time_zero' "$Tests\b224_write_date_time_zero\B224Res.vbp" $b224Needles
     Test-Vbp 'b224_write_date_time_zero_x86' "$Tests\b224_write_date_time_zero\B224Res.vbp" $b224Needles -Arch "x86"
+    # §11.201 第二百一十八刀: 零日判据跟着四入走 —— 时间四入到 24:00 就进位一天。
+    # 真机 .temp/k218p/P275.bas -> p275{p,w,c}.txt / P276.bas -> p276.txt 二十格全 True;
+    # 改前 CStr(CDate(±0.9999999)) 给 "0:00:00"、Print # 给 "23:59:59 "。
+    $b225Needles = @(
+    "C1 slash=True",
+    "C2 nocolon=True",
+    "C3 slash=True",
+    "C4 noslash=True",
+    "C5 colon=True",
+    "C6 noslash=True",
+    "G1 slash=True",
+    "G2 nocolon=True",
+    "G3 slash=True",
+    "G4 nocolon=True",
+    "P1 noslash=True",
+    "P2 colon=True",
+    "P3 slash=True",
+    "P4 nocolon=True",
+    "P5 slash=True",
+    "W1 nocolon=True",
+    "W2 len=True",
+    "W3 nocolon=True",
+    "W4 colon=True",
+    "W5 len=True")
+    Test-Vbp 'b225_boundary_carry' "$Tests\b225_boundary_carry\B225Res.vbp" $b225Needles
+    Test-Vbp 'b225_boundary_carry_x86' "$Tests\b225_boundary_carry\B225Res.vbp" $b225Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

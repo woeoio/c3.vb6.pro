@@ -88,11 +88,14 @@ Want 'R4 extract asks outlet' (C $genCall $EX) 1 '无格式串那条兜底臂问
 # ---- R6 (§11.198 第二百一十五刀) 日期部分为零那一档: 判据走**序列号**, 只住一处 ----
 # 为什么不能再只靠 SYSTEMTIME: 序列 0..1 与真日期 1899-12-30 映射出同一组年月日。
 # 真机 P269: CStr(CDate(0.5)) = "12:00:00", CStr(CDate(1)) = "1899/12/31", CStr(CDate(-1)) = "1899/12/29"。
-Want 'R6 zero-date rule' (C 'serial > -1.0 && serial < 1.0' $FM) 1 '日期部分为零 ⇒ 只给时间, 恰好一处 (窗口是 (−1,1): 向零截断为 0)'
+Want 'R6 zero-date rule' (C 'if (vb6_fmtDatePartIsZero(serial))' $FM) 1 '日期部分为零 ⇒ 只给时间, 恰好一处 (判据含四入进位, 收在 vb6_fmtDatePartIsZero)'
 Want 'R6 outlet takes serial' (C 'void vb6_fmtLocaleGeneralDate(const SYSTEMTIME* st, double serial' $FM) 1 '零日与真日期不可区分 ⇒ 形参必须有序列号'
 Want 'R6 extract passes serial' (C 'vb6_fmtLocaleGeneralDate(&st, expr.dblVal,' $EX) 1 'Format 无格式串那臂交的是声明值 (不是转换后的 SYSTEMTIME)'
 # §11.199: 负数那一半 —— 真机 P271 N1/N3 的 -0.5 / -0.25 也只给时间, 而 -1.5 仍带日期。
 Want 'R6 no half-open window' (C 'serial >= 0.0 && serial < 1.0' $FM) 0 '旧的 [0,1) 窗口不许残留 (它把负数混成日期)'
+# §11.201: 判据还须**跟着四入走** —— CDate(±0.9999999) 进位到 1899-12-31, 不再是零日。
+Want 'R6 carry-aware' (C 'int vb6_fmtDatePartIsZero(double serial)' $FM) 1 '判据只住一处 (且含进位)'
+Want 'R6 file asks it' (C 'if (vb6_fmtDatePartIsZero(v))' (Get-Content -Raw (Join-Path $RepoRoot 'src\rtl\core\vb6rtl\vb6rtl_file.c'))) 1 'Print # 那一站问同一句'
 
 # ---- R5 判据两头都在 (定义了没被调用 = 静默不跑那一格) ----
 Want 'R5 b430 cells' (C ('Test-Vbp ' + $SQ + 'b431_general_date') $RT) 2 '两台各一行 (x64 + x86)'

@@ -109,6 +109,19 @@ void vb6_fmtLocaleLongTime(const SYSTEMTIME* st, wchar_t* out, size_t cap) {
 //   本体都不需要, 出口的形参跟着少一条。
 // 两条旧答案一起作废: Fix 175 留在 conv.c 的 1e-9 在 500 毫秒那一档答带时间; vb6rtl_system.c 那条
 //   「零头 != 0」在午夜前一毫秒那一档答带时间 —— 引擎两处都答「只给日期」。
+// §11.201 (第二百一十八刀): 「日期部分是否为零」的判据 —— 只在**四入到簿之后**问。
+// 真机 P275: `CDate(0.9999999)` 与 `CDate(-0.9999999)` 都是 "1899/12/31"（时间四入到
+// 24:00 就整整进一天，零日不再是零日）；而 `CDate(0.0000001)` 仍是 "0:00:00"。
+// 模型: 整数位 = 向零截断；小数位 = |serial - 整数位|；小数四入到 86400 就 i += 1。
+// 注意进位方向恒为 +1（负数也如此），否则 -0.9999999 会算成 1899/12/29。
+int vb6_fmtDatePartIsZero(double serial) {
+    double ip = (double)(int64_t)serial;   // 向零截断
+    double fpart = serial - ip;
+    if (fpart < 0) fpart = -fpart;
+    if ((int64_t)(fpart * 86400.0 + 0.5) >= 86400) ip += 1.0;
+    return ip == 0.0;
+}
+
 void vb6_fmtLocaleGeneralDate(const SYSTEMTIME* st, double serial, wchar_t* out, size_t cap) {
     size_t n;
     // §11.198 (第二百一十五刀): **日期部分为零** —— VB6 的序列 0..1（= 1899-12-30）那一档
@@ -121,7 +134,10 @@ void vb6_fmtLocaleGeneralDate(const SYSTEMTIME* st, double serial, wchar_t* out,
     // 截断后整数部分是 0）
     // 而 `CDate(-1.5)` = "1899/12/29 12:00:00"（整数部分 -1，仍给日期）。上一刀按
     // [0,1) 写，负数那一半在 P269 里没取样 —— 本刀把窗口改成 (−1,1)。
-    if (serial > -1.0 && serial < 1.0) {
+    // §11.201 (第二百一十八刀): 这一问还得**跟着四入走** —— `CDate(±0.9999999)` 的
+    // 时间四入到 24:00 就进位到 1899-12-31，不再是零日（真机 P275）。判据收进
+    // vb6_fmtDatePartIsZero, `Print #` 那一站问同一句。
+    if (vb6_fmtDatePartIsZero(serial)) {
         if (out && cap) out[0] = 0;
         vb6_fmtLocaleLongTime(st, out, cap);
         return;

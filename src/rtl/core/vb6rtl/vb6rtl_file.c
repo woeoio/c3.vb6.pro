@@ -523,7 +523,9 @@ BSTR vb6_FileDateText(double v, int32_t mode) {
     // `Print #f, CDate(-0.5)` 给 "12:00:00 "（只给时间）；N2 的 -1.5 仍带日期。
     // 负数的时间分量取**绝对值**（OLE 日期对负数就是「日期 = 向零截断 + 时间 = |小数|"）：
     // 真机 -0.5 → 12:00:00、-0.25 → 6:00:00。
-    if (v > -1.0 && v < 1.0) {
+    // §11.201 (第二百一十八刀): 判据改问 vb6_fmtDatePartIsZero —— 四入到 24:00 就整整
+    // 进一天，`Print #f, CDate(0.9999999)` 真机给 "1899/12/31 "（不是 "23:59:59 "）。
+    if (vb6_fmtDatePartIsZero(v)) {
         double frac = v < 0 ? -v : v;
         int32_t sec = (int32_t)(frac * 86400.0 + 0.5);
         if (sec >= 86400) sec = 86399;
