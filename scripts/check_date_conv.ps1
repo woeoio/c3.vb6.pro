@@ -226,6 +226,12 @@ if ($r26use -ne 4) { $fail += ('R26 strLabel193 sites = ' + $r26use + ' (want 4 
 # R27: b217 夹具两台在跑。
 $r27cells = N '\$Tests\\b217_string_select_date_label\\B217Res\.vbp' $T
 if ($r27cells -ne 2) { $fail += ('R27 b217 run cells = ' + $r27cells + ' (want 2 = x64 + x86)') }
+# R28 (§11.194 第二百一十一刀): Option Compare Text 与 Date 标签共存的夹具 —— 两台在跑，
+# 且那条用的是文本入口 (vb6_StrCmpT) 而不是二进制入口。
+$r28cells = N '\$Tests\\b218_octext_date_label\\B218Res\.vbp' $T
+if ($r28cells -ne 2) { $fail += ('R28 b218 run cells = ' + $r28cells + ' (want 2 = x64 + x86)') }
+$r28opt = N '(?m)^Option Compare Text\s*$' (Get-Content -Raw (Join-Path $Root 'tests\b218_octext_date_label\B218Main.bas'))
+if ($r28opt -ne 1) { $fail += ('R28 b218 Option Compare Text = ' + $r28opt + ' (want 1: the whole point of the cell)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -234,5 +240,5 @@ if ($fail.Count -gt 0) {
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
     ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells +
-    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells)
+    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells)
 exit 0

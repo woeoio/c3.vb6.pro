@@ -13399,6 +13399,16 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "U4 else err=0")
     Test-Vbp 'b217_string_select_date_label' "$Tests\b217_string_select_date_label\B217Res.vbp" $b217Needles
     Test-Vbp 'b217_string_select_date_label_x86' "$Tests\b217_string_select_date_label\B217Res.vbp" $b217Needles -Arch "x86"
+    # §11.194 第二百一十一刀: Option Compare Text 与 Date 标签共存 —— C3 本来就对, 入账守形。
+    # 真机 .temp/k211p/p256.txt 五行。
+    $b218Needles = @(
+    "V1 hit err=0",
+    "V2 else err=0",
+    "V3 hit err=0",
+    "V4 hit err=0",
+    "V5 else err=0")
+    Test-Vbp 'b218_octext_date_label' "$Tests\b218_octext_date_label\B218Res.vbp" $b218Needles
+    Test-Vbp 'b218_octext_date_label_x86' "$Tests\b218_octext_date_label\B218Res.vbp" $b218Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
