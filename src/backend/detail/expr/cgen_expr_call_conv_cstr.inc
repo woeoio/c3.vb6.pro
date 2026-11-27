@@ -183,6 +183,24 @@
             // (Charts 2020 柱图/面积图 Y 轴数字大 100 倍; ferock 0.10.6 同修复,
             //  此处合并为并集: 含 ComCallByDispid/ComGetObjectProp)。
             const std::string& a0 = args[0];
+            // §11.215 (第二百三十二刀): CStr(<整只 Variant 槽>) / CStr(Null) 一律走**严格**出口。
+            // 真机 .temp/k225p/P327 的十八格说的是一句话：CStr 收到 Null（不论消费者是谁）
+            // 都是 **94**，值消费得一个字不剩：
+            //   V1/V5 (变体目标) keep/94、D1/D4 (Double 目标) -99/94、N1 (Long 目标) -99/94、
+            //   C1 (拼接进 String) keep/94、C2 (Len 实参) keep/94、C3 (拼接进变体) keep/94。
+            // 改前只有 String 目标那一面（vb6_BSTR_AssignFromVariant）报 94；其余面走
+            // vb6_CStr 宽松口径（Null ⇒ ""）⇒ 号不报、值被清、或者被后一步的 13 盖掉。
+            // 判据用既有的 cExprIsVariantCarrier（槽位 / vb6_VariantFromValue(...) 包装都命中），
+            // 不另立名单: 非变体实参已在上面的类型分诊里各自进了 CStrXxx 档。
+            if (cExprIsVariantCarrier(a0)
+                // §11.215: 上面那一句只认 C 文本前缀（vb6_Variant… / me-> 一类），普通局部
+                // 变体词的名字就是它自己（`v`）—— P327 的 V1/D1/N1/C... 全是这一形，落
+                // 不进前缀表。所以再用 AST 那一问（§11.70 的同一枚判据）认一遍；数组本体
+                // 不算（isArr ⇒ false），与 §11.212 那一刀同口径。
+                || (firstArg && isDefinitelyVariantExpr(*firstArg))) {
+                lastExpr_ = "vb6_CStrStrict(" + a0 + ")";
+                return;
+            }
             bool comRes121 = (a0.compare(0, 12, "vb6_ComCall(") == 0)
                 || (a0.compare(0, 20, "vb6_ComCallByDispid(") == 0)
                 || (a0.compare(0, 15, "vb6_ComGetProp(") == 0)

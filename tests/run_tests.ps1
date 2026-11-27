@@ -13857,6 +13857,30 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "Q14=[-99]/13")
     Test-Vbp 'b238_variant_store_abort' "$Tests\b238_variant_store_abort\B238Res.vbp" $b238Needles
     Test-Vbp 'b238_variant_store_abort_x86' "$Tests\b238_variant_store_abort\B238Res.vbp" $b238Needles -Arch "x86"
+    # §11.215 第二百三十二刀: CStr(<整只 Variant 槽>) 的 Null 面 —— 不论消费者是谁都是 94。
+    # 真机 .temp/k225p/P327（十七格）：V1/V5 变体目标 keep/94、D1/D4 Double 目标 -99/94、
+    # N1 Long 目标 -99/94、C1 拼接进 String keep/94、C2 Len 实参 keep/94、C3 拼接进变体
+    # keep/94；Empty/文本/数值那一批照旧（V2/V3/V4/D2/D3/N2/N3/S2）。
+    $b239Needles = @(
+    "V1=[keep]/94/False",
+    "V2=[]/0/False",
+    "V3=[x]/0",
+    "V4=[1.5]/0",
+    "V5=[keep]/94",
+    "D1=[-99]/94",
+    "D2=[-99]/13",
+    "D3=[2.5]/0",
+    "D4=[-99]/94",
+    "S1=[keep]/94",
+    "S2=[]/0",
+    "N1=[-99]/94",
+    "N2=[-99]/13",
+    "N3=[7]/0",
+    "C1=[keep]/94",
+    "C2=[keep]/94",
+    "C3=[keep]/94")
+    Test-Vbp 'b239_cstr_null_face' "$Tests\b239_cstr_null_face\B239Res.vbp" $b239Needles
+    Test-Vbp 'b239_cstr_null_face_x86' "$Tests\b239_cstr_null_face\B239Res.vbp" $b239Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

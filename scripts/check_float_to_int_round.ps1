@@ -459,8 +459,29 @@ else {
 $b238Cells = @([regex]::Matches($runnerText, 'b238_variant_store_abort\\B238Res\.vbp')).Count
 if ($b238Cells -ne 2) { $bad += ("S15 b238 run cells = " + $b238Cells + " (want 2 = x64 + x86)") }
 
+# ---- S16: CStr(<整只 Variant 槽>) 的 Null 面 (账 §11.215 第二百三十二刀) ----
+# 真机 .temp/k225p/P327 十七格：V1/V5 变体目标 keep/94、D1/D4 Double 目标 -99/94、N1 Long
+# 目标 -99/94、C1 拼接进 String keep/94、C2 Len 实参 keep/94、C3 拼接进变体 keep/94；
+# Empty/文本/数值那些格照旧。三条判据：
+#  (a) CStr 那一站把整只槽交给 vb6_CStrStrict（不是宽松的 vb6_CStr）；
+#  (b) 认槽的两条路都在：C 文本前缀（vb6_Variant… / me->）与 AST 那一问
+#      （isDefinitelyVariantExpr —— 普通局部变体在 C 里就是它自己，前缀表认不出）；
+#  (c) 夹具 b239 两套。
+$cstr215 = Get-CodeText (Join-Path $root "src\backend\detail\expr\cgen_expr_call_conv_cstr.inc")
+if ($cstr215 -notmatch 'vb6_CStrStrict\(" \+ a0 \+') {
+    $bad += "S16 the whole-slot CStr station no longer routes to vb6_CStrStrict"
+}
+if ($cstr215 -notmatch 'cExprIsVariantCarrier\(a0\)') {
+    $bad += "S16 the C-text carrier branch was dropped from the CStr station"
+}
+if ($cstr215 -notmatch 'isDefinitelyVariantExpr\(\*firstArg\)') {
+    $bad += "S16 the AST carrier branch (plain local Variant) was dropped from the CStr station"
+}
+$b239Cells = @([regex]::Matches($runnerText, 'b239_cstr_null_face\\B239Res\.vbp')).Count
+if ($b239Cells -ne 2) { $bad += ("S16 b239 run cells = " + $b239Cells + " (want 2 = x64 + x86)") }
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face)"
