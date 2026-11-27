@@ -14913,3 +14913,108 @@ VB6 的隐式收窄整个交给了 C 的隐式转换，而 C 的隐式转换是*
 - 教训：一个内置函数「看着只是格式化」，底下却是一次**隐式类型转换**。这类转换的判据面
   在发码的**实参站**，不在 RTL 里那枚函数身上 —— 只读 RTL 会得出「它已经对了」的错觉，
   而真机与 C3 差的不在函数体，在调用约定。
+
+## §11.210 Hex/Oct 的答案宽度：一个掩码，两个消费面（第二百二十七刀）
+
+背账第二条是「`Hex`/`Oct` 的答案宽度 —— 真机 `Hex(-1)` = `FFFF`、`Hex(True)` = `FFFF`，
+C3 一律八位」。量下来它不只是"少个掩码"，而是**同一个决定被两种消费面劈开之后，宽度信息
+只在其中一条路上活着**。
+
+### 一、现象（真机 `.temp/k225p/P308`，22 格）
+
+```
+Hex(CByte(255))      VB6 FF            C3 FFFFFFFF
+Hex(CInt(-1))        VB6 FFFF          C3 FFFFFFFF
+Hex(True)            VB6 FFFF          C3 FFFFFFFF
+Hex(CLng(-1))        VB6 FFFFFFFF      C3 FFFFFFFF      ✓
+Oct(CInt(-32768))    VB6 100000        C3 37777700000
+v = CInt(-1): Hex(v) VB6 FFFF (VT_I2)  C3 FFFFFFFF
+```
+
+规则一句话：**宽度 = 载体的二补码宽度**（Byte 8 位、Integer/Boolean 16 位、其余 32 位），
+而**正值不补零** —— 所以宽度只在负值上看得见，等于一个掩码，不是补零位数。
+
+### 二、病根：宽度死在"取数"那一层
+
+`Hex` 在 VB6 是隐式窄化到该档，再按该档宽度取反码。C3 有两条路：
+
+| 消费面 | 发码 | 宽度信息 |
+|---|---|---|
+| 变体上下文（结果要装箱） | `vb6_Hex(vb6_VariantToLong(v))` → 装箱站换成 `vb6_HexV(v)` | 槽还在，`vt` 可读 |
+| 字符串上下文（`&`、`Print`） | `vb6_Hex(vb6_VariantToLong(v))` | **只剩 Long**，`vt` 已丢 |
+
+上一刀补的"实参收窄"解决的是 `Hex(<double>)` 那一族；它把值收窄对了，但宽度仍按 Long
+—— 因为**宽度不是值的一部分，是载体的一部分**。字符串那条路在取数时就把载体扔了。
+
+### 三、改法：一张宽度表，两条路各自带得动
+
+RTL（唯一一张表，也只留一处进制格式化）：
+
+- `vb6_HexMaskOf(vartype)`：VT_UI1 → `0xFF`、VT_I2 / VT_BOOL → `0xFFFF`、其余 `0xFFFFFFFF`；
+- `vb6_HexW(n, vartype)` / `vb6_OctW(...)`：`%X` / `%o` 各只出现一次；
+- `vb6_Hex` = `HexW(n, VT_I4)`、`vb6_HexInt` = `HexW(n, VT_I2)`、`vb6_HexByte` = `HexW(n, VT_UI1)`
+  —— 静态档只是三个常量入口，不是三张表；
+- `vb6_HexSlot(v)` / `vb6_OctSlot(v)`：整只槽那一形，**只读一次槽**；
+- `vb6_HexV` 委托 `*Slot`：Null → Null。
+
+cgen（与上一刀同一个站）：
+
+- 静态档选名字：Byte → `*Byte`；Integer/Boolean → `*Int`。Integer 那一档必须问
+  `isNarrowIntExpr` —— `inferExprType` 对 `Dim i As Integer` 答的是 **Long**（C 侧 int32 口径），
+  这是本仓量过多次的老坑；第一版就是漏了它，`Hex(i)` 仍发八位。
+- 整只槽那一形（串上下文里已落成 `vb6_Hex(vb6_VariantToLong(v))`）→ `vb6_HexSlot(v)`。
+
+### 四、两个消费面必须都认同一个形状
+
+改成 `HexSlot(v)` 之后，变体上下文那条路看不见它了 —— 装箱站的判据是
+`vb6_Hex(vb6_VariantToLong(` 前缀。于是 `IsNull(Hex(Null))` 从 True 变成报 94（实测复跑
+b233 当场红）。这不是小尾巴，是真机把两件事同时钉住了：
+
+```
+真机 P310：`"[" & Hex(Null) & "]"` → `[]`        （串上下文：Null 落成空串）
+           `IsNull(Hex(Null))`     → True        （变体上下文：Null 保成 Null）
+```
+
+所以：`HexSlot` 对 Null 给空串，而**两个装箱站**（`boxToVariant` 的 k64 表、`mathNullFamilyV`）
+都要把 `vb6_HexSlot(` 认成"整只槽"、换成 Null 保全的 `vb6_HexV(`。判据抽成一枚
+`splitOneArgSlotCall`（括号必须配平到串尾），两个人共用。
+
+### 五、夹具
+
+`tests/b234_hex_oct_width` 十九格（x64/x86 各一份、全 `Debug.Print`、区域无关）：
+
+- `W1/W2` 静态四档（Byte/Integer/Long/Boolean，Hex 与 Oct）；
+- `W3/W4` 正值不补零（`16`/`0` 三档同形）；
+- `W5/W6` 各档上下界（`CByte(128)`、`CInt(-32768)`、`CLng(-2147483648)`）；
+- `W7` `CInt(-2)` / `CByte(255)` / `CLng(-2)` 三档并排；
+- `V1..V7` 变体七格（`VT_I2`/`VT_UI1`/`VT_I4`/`VT_BOOL` 的 Hex 与 Oct）；
+- `V8..V10` 浮点 / 日期 / 单精度载体（收窄到 Long，宽度 8）；
+- `L1/L2` 字面量档。
+
+真机 `P309` 与 C3 x64/x86 十九行逐行相同；上一刀的 `b233` 三十七格复跑仍逐行相同
+（含 `Hex(Null)` 的变体路、`Hex(Empty)`、越界 Y1..Y4）。
+
+### 六、读数与针
+
+- `check_float_to_int_round` 新增 **S11**：宽度表恰 1 处且三档齐全、`%X`/`%o` 各恰 1 处、
+  `HexSlot` 的 Null 分支在、`HexV` 委托 `HexSlot`、**两个装箱站**都认 `HexSlot(`、
+  发码侧 Byte/Int 两档选名字各 1 处、Integer 档必须问 `isNarrowIntExpr`、b234 两台在跑。
+- `check_owned_temp_keeps`：新六枚出口登记进 `kOwned` 并 `-Bless`（260 行）。
+  ⚠ `vb6_HexSlot` 的第一版把 `(int32_t)v.vt` 直接写在 `return` 里，owned 派生把它读成
+  "字段别名" ⇒ K13 双向对账当场红；把 `vt` 先取进局部量才正。生成物那侧仍是
+  **只许派生/ Bless**，不手改。
+- 发码清单：这一刀真改了 10 份语料的形状（`Hex$(255)` / `Hex(nv)` / `AscW(...)` 那几族，
+  256→`FF`、变体槽→`HexSlot`），经 CI 交回的清单逐行登记；inputs 960 → 962。
+- 本机 13 条门禁全绿。
+- 门：run `46027042384`（`dev`、head `9da5d8ae`；23/23 success）。
+
+### 七、记账
+
+- 代码：`f41adb9a`（RTL 宽度表 + 发码站 + 夹具 + S11 + 清单两行）+ `9da5d8ae`（登记 10 份形状）。
+- **号**：本节 = 第二百二十七刀 / §11.210。
+- 教训：**宽度是载体的属性，不是值的属性。** 只要在某一站把载体折成值（`VariantToLong`），
+  宽度就没了 —— 补值补不回来，只能让那一条路重新带上载体。同一条教训在 §11.207/§11.208
+  已经以"子类型随载体"的形状出现过一次；这次是它的宽度版。
+- 背账：`Hex`/`Oct` 的 `LongLong` 档（C3 的 `CLngLng` 载体，VB6 没有这一档，待定）；
+  `Hex(<整枚数组>)`；`Abs`/`Sgn` 在 `Empty`/`Null` 的传播（读数对、夹具未钉）；
+  `Err.Source`/`Err.Description` 空串。
