@@ -13475,3 +13475,99 @@ E5 hit err=0   Select Case u.d   Case "2021-03-04"
   主语侧看起来「应该也跟着好」，其实它读的是另一个判据（`inferExprType` 的第一处）。
   这一族里凡是「某形状算不算 Date」的答案，都必须**只有一处**，并且每个新站点都要
   **显式接过去问** —— 判据复用不会自动发生。
+---
+
+## §11.196 日期内建当 Select Case 的主语：按 Variant 承载（第二百一十三刀）
+
+### 一、问题
+
+§11.195 把「主语是 Date 数组元素 / UDT 成员」接上了三处权威。剩下的最后一形是
+**主语本身是一次日期内建调用**：`Select Case Now`、`Select Case DateSerial(2021,3,4)`、
+`Select Case DateValue(s)`。
+
+真机读数说明这一形**不是** Date 档：VB6 里这些函数的返回类型是 **Variant (Date)**，
+不是 `Date`；`CDate` 才是真 `Date`。差别在 `Select Case` 上立刻可见 —— 串标签按**文本**比，
+而不是把标签解成日期。
+
+### 二、真机读数（VB6Mini `/make`，`.temp/k213p`）
+
+```
+F1..F4 hit    UDT 成员数组里的 Date 元素当主语（定长/动态）—— 改前就对
+G1 G2 G5 hit  With 块成员 / With 块数组元素 —— 改前就对
+G3 hit        CDate(s) 主语（真 Date）
+G4 else       DateValue(s) 主语 vs Case "2021-03-04"   ← 改前答 hit
+H1 else       DateSerial(2021,3,4) vs Case "2021-03-04" ← 改前答 hit
+H2 hit        DateSerial(2021,3,4) vs Case #3/4/2021#
+H3 hit        CDate(...) vs Case Is > #1/1/2000#
+H5 hit        Now vs Case Is > #1/1/2000#
+H6 hit        Date vs Case CStr(Date)
+H4 hit        Now vs Case CStr(Now)  ← 本刀**未修好**（见下）
+```
+
+`G4` 与 `H1` 是同一件事：主语是 Variant 日期，串标签 **"2021-03-04"** 与它折出来的
+**"2021/3/4"** 文本不同 ⇒ 不命中。改前 C3 把主语当 Date，串标签被 `vb6_DateVal` 解成
+44259 ⇒ 命中，两格都答反。
+
+### 三、判据与改法
+
+在 `visit(SelectCaseStmt)` 里加一处**站点内**的降档：
+
+```cpp
+bool dateBuiltinSubj196 = /* 主语是 Now/Date/Time/DateSerial/DateValue/TimeValue/
+                              DateAdd/DateDiff/DatePart/TimeSerial 之一 */;
+if (dateBuiltinSubj196) { testType = Vb6Type::Variant; isDateSelect = false; }
+```
+
+并把这条判据接进三处已有的闸：
+
+1. `wantVariantCarrier` 加 `|| dateBuiltinSubj196`（承载档走整枚槽）；
+2. `isVariantSelect` 加 `|| dateBuiltinSubj196`（它也要算「槽那一档」）；
+3. 「AllString 翻串档」那条闸加 `&& !dateBuiltinSubj196` —— 否则刚降成 Variant 又被
+   串承载抢走（实测两条 `BSTR _vb6_select = vb6_DateSerial(...)`，C2440）。
+
+装箱仍然只走 §11.191 那枚 `wrapVariantValue`（Date 形 ⇒ `vb6_VariantDate`，VT_DATE）。
+
+**为什么不在 `builtin_funcs.inc` 里把这几个函数改成 `Vb6Type::Variant`**：那张表同时决定
+**装箱形状**（§B205 的账就是「DateSerial 交进 Variant 槽必须是 VT_DATE，不许是 VT_R8」），
+全局改成 Variant 会把那条已经对的口径一起翻掉。本刀只需要 `Select Case` 这一个站点的
+**承载档判断**不同 —— 差别留在站点里，形状仍是同一份。
+
+### 四、为什么这样改（以及一条新欠账）
+
+- `H4`（`Select Case Now: Case CStr(Now)`）本该命中，改后 C3 仍答 else。查下去是**另一个缺陷**：
+  `CStr(Now)` 在 C3 打出的是裸序列号 `46353.4167824074`，真机给 `2026/11/27 9:59:29`
+  （`P263`：`N1=[2026/11/27 9:59:29] N2=[2026/11/27] N4 colon=13`；C3 `N1=[46353.4167824074]
+  N2=[46353] N4 colon=0`）。也就是说 `CStr` 没把 `Now`/`Date` 认成日期档，而是按数值格式化。
+  这一格**不钉进本刀夹具**，留给下一刀（它有自己的神谕与自己的消费方）。
+
+### 五、读数与随刀改的针
+
+- 新夹具 `tests/b220_date_builtin_subject`（F1–F4 + G1–G5 + H1/H2/H3/H5/H6 十四行），
+  x64/x86 逐行相同。
+- 新哨兵 R31（b220 两台在跑、`dateBuiltinSubj196` 恰 6 处读、名单表 `kVariantDate196` 恰 2 处、
+  AllString 闸上的 `!dateBuiltinSubj196` 恰 1 处）。
+- 旧哨兵语义迁移：R29 的闸正则改成 `!isDateSelect && !dateBuiltinSubj196`；
+  `check_select_carrier_authority` 的 R2 正则（三条件 + 标签权威）与 R7 的
+  `isVariantSelect` 正则各补第三个准入。
+- 回归：`b214`–`b219` 六份夹具逐行不变（7 + 8 + 13 + 12 + 5 + 5 格）。
+- 闸门（本机全 PASS）：`check_date_conv`（`bld220-cells=2`）、`check_manifest_coverage`（inputs=934）、
+  `check_static_sentinel_registration`、`check_owned_temp_keeps`、`check_ispred_text`、`check_sa_access`、
+  `check_caseis_shape`、`check_select_carrier_authority`、`check_select_label_owner`。
+
+### 六、神谕与清单
+
+- 真机神谕：`.temp/k213p/P260.bas`（四行）、`P261.bas`（五行）、`P262.bas`（六行）、`P263.bas`（四行诊断）。
+- 改前取证：`.temp/k213p/c3a/c3b`（G4/H1 答 hit）、`dP261/dP262`（两条 C2440）、`f263`（CStr(Now) 打数字）。
+- 门：run `45926602233`（`dev`、head `8ef9f059`）**23/23 全绿**。
+- 背账：`CStr(Now)` / `CStr(Date)` 的文本形状（下一刀）；`VBA.Now` 这种**限定名**调用当主语时的
+  识别（本判据只认裸标识符）；类实例成员当主语仍按「不猜」挂着。
+
+### 七、记账
+
+- 探针：`.temp/k213p/P260.bas`、`P261.bas`、`P262.bas`、`P263.bas`、`c3a/c3b/dP261/dP262/eP261/eP262/f263`、`rows220.ps1`。
+- 夹具：`tests/b220_date_builtin_subject`，注册在 `tests/run_tests.ps1`（x64 + x86）。
+- 代码：`8ef9f059`（站点内降档 + 三处闸 + 夹具 + R31 + R29/R2/R7 迁移 + 清单两行）。
+- **号**：本节 = 第二百一十三刀 / §11.196。
+- 教训：**「静态类型」与「运行期装箱档」不是一回事。** `DateSerial` 的**值**必须是 VT_DATE
+  （折档正确），但它的**返回类型**在 VB6 里是 Variant（比较规则不同）。这两件事在同一条链上
+  同时成立，谁替谁做决定都会错 —— 所以本刀把差别关在站点里，而不是改那张全局表。
