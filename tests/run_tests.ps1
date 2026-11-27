@@ -13419,6 +13419,25 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "E5 hit err=0")
     Test-Vbp 'b219_date_subject_elem' "$Tests\b219_date_subject_elem\B219Res.vbp" $b219Needles
     Test-Vbp 'b219_date_subject_elem_x86' "$Tests\b219_date_subject_elem\B219Res.vbp" $b219Needles -Arch "x86"
+    # §11.196 第二百一十三刀: Select Case 的主语是日期内建 (Now/Date/DateSerial/DateValue/...)。
+    # 真机 .temp/k213p/p260.txt + p261.txt + p262.txt 十四行 (H4 因 CStr(Now) 另欠，不钉)。
+    $b220Needles = @(
+    "F1 hit err=0",
+    "F2 hit err=0",
+    "F3 hit err=0",
+    "F4 hit err=0",
+    "G1 hit err=0",
+    "G2 hit err=0",
+    "G3 hit err=0",
+    "G4 else err=0",
+    "G5 hit err=0",
+    "H1 else err=0",
+    "H2 hit err=0",
+    "H3 hit err=0",
+    "H5 hit err=0",
+    "H6 hit err=0")
+    Test-Vbp 'b220_date_builtin_subject' "$Tests\b220_date_builtin_subject\B220Res.vbp" $b220Needles
+    Test-Vbp 'b220_date_builtin_subject_x86' "$Tests\b220_date_builtin_subject\B220Res.vbp" $b220Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

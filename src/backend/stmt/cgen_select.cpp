@@ -78,7 +78,29 @@ void CCodeGen::visit(SelectCaseStmt& node) {
         }
     }
 
-    // 账 #305 第311刀「实施」= 主语静态答 **Variant** 时，承载档改由 Case 标签回答。
+    // §11.196 (第二百一十三刀): VB6 的 `Now` / `Date` / `Time` / `DateSerial` / `DateValue` /
+    // `TimeValue` / `DateAdd` / `DateDiff` / `DatePart` / `TimeSerial` 返回值是 **Variant (Date)**,
+    // 不是 Date —— 真机 P262 的两格只有「按 Variant 比」才答得对：
+    //   H1 `Select Case DateSerial(2021,3,4): Case "2021-03-04"` ⇒ **不命中** (按文本比),
+    //   H4 `Select Case Now: Case CStr(Now)` ⇒ **命中** (文本相等; 带时刻的串解不成日期)。
+    // 只在本站点降成 Variant：形状仍走 §11.191 那枚 wrapVariantValue (VT_DATE 装箱),
+    // `inferExprType` 与其它站的答案一个字节都不动。
+    bool dateBuiltinSubj196 = false;
+    if (node.testExpr && node.testExpr->kind == ASTNodeKind::IndexOrCallExpr) {
+        const auto& ic196 = static_cast<const IndexOrCallExpr&>(*node.testExpr);
+        if (ic196.callee && ic196.callee->kind == ASTNodeKind::IdentifierExpr) {
+            const std::string n196 = Symbol::toLower(
+                static_cast<const IdentifierExpr&>(*ic196.callee).name);
+            static const char* kVariantDate196[] = {
+                "now", "date", "time", "dateserial", "datevalue", "timevalue",
+                "dateadd", "datediff", "datepart", "timeserial"};
+            for (const char* cand196 : kVariantDate196) {
+                if (n196 == cand196) { dateBuiltinSubj196 = true; break; }
+            }
+        }
+    }
+    if (dateBuiltinSubj196) { testType = Vb6Type::Variant; isDateSelect = false; }
+
     // VB6 对 Variant 主语的 Select Case 是按 Case 项的类型逐项做 VarCmp；我方以前只问
     // inferExprType 一档 ⇒ 答 Variant 就落 int32_t 档 + vb6_VariantToLong 解包，而标签
     // 是串 ⇒ 发成 `int32_t == vb6_BSTR_FromStr(L"…")`（C 模式只警告不报红），**每一档都
@@ -101,7 +123,8 @@ void CCodeGen::visit(SelectCaseStmt& node) {
         }
         if (dateLabelPresent) break;
     }
-    if (!isStringSelect && !isFloatSelect && !isDateSelect && testType == Vb6Type::Variant
+    if (!isStringSelect && !isFloatSelect && !isDateSelect && !dateBuiltinSubj196
+        && testType == Vb6Type::Variant
         && labelClass == SelectCaseLabelClass::AllString) {
         isStringSelect = true;
     }
@@ -118,7 +141,7 @@ void CCodeGen::visit(SelectCaseStmt& node) {
     // 只放开「主语**真是**槽」这一形（下面 testIsVariant 那一道闸），类型化 getter
     // （inferExprType 答 Variant 而 C 侧是 int32_t 的那档）仍走 ToLong。
     const bool wantVariantCarrier = !isStringSelect && !isFloatSelect
-        && (slotLabel
+        && (slotLabel || dateBuiltinSubj196
             || (testType == Vb6Type::Variant
                 && (labelClass == SelectCaseLabelClass::Mixed || dateLabelPresent)));
 
@@ -167,7 +190,7 @@ void CCodeGen::visit(SelectCaseStmt& node) {
     // 不满足 testIsVariant ⇒ 退回 ToLong，与第311刀以前的行为一致。
     // 第324刀放宽一处：槽标签那一档不要求主语是槽 —— 主语不是槽就**装箱**（下面那处
     // wrapVariantValue 唯一出口），因为要迁就的是标签的档，不是主语的档。
-    const bool isVariantSelect = wantVariantCarrier && (testIsVariant || slotLabel);
+    const bool isVariantSelect = wantVariantCarrier && (testIsVariant || slotLabel || dateBuiltinSubj196);
 
     // 根据测试表达式类型选择临时变量类型
     std::string tempType;

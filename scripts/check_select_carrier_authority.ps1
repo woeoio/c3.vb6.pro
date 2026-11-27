@@ -85,7 +85,8 @@ if ($allN -ne 3) { $bad += ('R1 bare-name census across src = ' + $allN + ' (wan
 $flipN = @([regex]::Matches($select, 'isStringSelect\s*=\s*true')).Count
 if ($flipN -ne 1) { $bad += ('R2 the carrier flip isStringSelect = true = ' + $flipN + ' (want exactly 1)') }
 # §11.195: 主语是 Date 数组元素/UDT 成员时 inferExprType 答 Variant, 这一闸必须让路 (!\)。
-$guard = [regex]::Match($select, '(?s)if \(!isStringSelect && !isFloatSelect && !isDateSelect && testType == Vb6Type::Variant\s*\r?\n\s*&& labelClass == SelectCaseLabelClass::AllString\) \{\s*\r?\n\s*isStringSelect = true;')
+# §11.196: 日期内建主语也要让路 (!\)。
+$guard = [regex]::Match($select, '(?s)if \(!isStringSelect && !isFloatSelect && !isDateSelect && !dateBuiltinSubj196\s*\r?\n\s*&& testType == Vb6Type::Variant\s*\r?\n\s*&& labelClass == SelectCaseLabelClass::AllString\) \{\s*\r?\n\s*isStringSelect = true;')
 if (-not $guard.Success) {
     $bad += 'R2 flip is not inside the single if that asks BOTH testType == Vb6Type::Variant AND the label authority (AllString) (want that exact guard)'
 }
@@ -168,7 +169,8 @@ if ($wantN -ne 3) { $bad += ('R6 wantVariantCarrier sites = ' + $wantN + ' (want
 $slotOutN  = @([regex]::Matches($select, 'bool\* outSlotLabel')).Count
 $slotDecN  = @([regex]::Matches($helpers, 'bool\* outSlotLabel')).Count
 $slotFlipN = @([regex]::Matches($select, 'if \(slotLabel\) \{ isStringSelect = false; isFloatSelect = false; \}')).Count
-$slotGateN = @([regex]::Matches($select, 'isVariantSelect = wantVariantCarrier && \(testIsVariant \|\| slotLabel\)')).Count
+# §11.196: 第三个准入是日期内建主语 (|| dateBuiltinSubj196) —— 它同样走整枚槽。
+$slotGateN = @([regex]::Matches($select, 'isVariantSelect = wantVariantCarrier && \(testIsVariant \|\| slotLabel \|\| dateBuiltinSubj196\)')).Count
 $slotBoxN  = @([regex]::Matches($select, 'wrapVariantValue\(node\.testExpr\.get\(\), testVar\)')).Count
 $slotOwnN  = @([regex]::Matches($select, 'subjectBoxOwned')).Count
 if ($slotOutN -ne 1) { $bad += ('R7 outSlotLabel in the master definition = ' + $slotOutN + ' (want exactly 1)') }

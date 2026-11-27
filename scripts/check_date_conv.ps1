@@ -237,13 +237,23 @@ if ($r28opt -ne 1) { $fail += ('R28 b218 Option Compare Text = ' + $r28opt + ' (
 # 而且 AllString 那条强制改走串承载的闸要带 !isDateSelect。
 $r29elem = N 'arrayElemTypes_' $s26
 $r29udt = N 'inferUdtFieldVb6Type' $s26
-$r29gate = N '!isDateSelect && testType == Vb6Type::Variant' $s26
+$r29gate = N '!isDateSelect && !dateBuiltinSubj196' $s26
 if ($r29elem -lt 4) { $fail += ('R29 cgen_select arrayElemTypes_ reads = ' + $r29elem + ' (want >= 4: label side + subject side)') }
 if ($r29udt -ne 2) { $fail += ('R29 cgen_select inferUdtFieldVb6Type reads = ' + $r29udt + ' (want 2: UDT field + UDT field array)') }
 if ($r29gate -ne 1) { $fail += ('R29 AllString string-carrier gate = ' + $r29gate + ' (want 1: must not hijack a Date subject)') }
 # R30: b219 夹具两台在跑。
 $r30cells = N '\$Tests\\b219_date_subject_elem\\B219Res\.vbp' $T
 if ($r30cells -ne 2) { $fail += ('R30 b219 run cells = ' + $r30cells + ' (want 2 = x64 + x86)') }
+# R31 (§11.196 第二百一十三刀): 日期内建当主语 —— 那条 Variant 档的判据只许一处
+# (名单表 kVariantDate196 恰 2 处读: 声明 + 循环), 降档与两条闸各必须显式引用它。
+$r31sa = N '\$Tests\\b220_date_builtin_subject\\B220Res\.vbp' $T
+if ($r31sa -ne 2) { $fail += ('R31 b220 run cells = ' + $r31sa + ' (want 2 = x64 + x86)') }
+$r31name = N 'dateBuiltinSubj196' $s26
+if ($r31name -ne 6) { $fail += ('R31 dateBuiltinSubj196 reads = ' + $r31name + ' (want 6 = decl + set + downgrade + AllString gate + carrier + isVariantSelect)') }
+$r31list = N 'kVariantDate196' $s26
+if ($r31list -ne 2) { $fail += ('R31 kVariantDate196 = ' + $r31list + ' (want 2 = the one name table + its loop)') }
+$r31gate = N '!dateBuiltinSubj196' $s26
+if ($r31gate -ne 1) { $fail += ('R31 AllString gate must exclude date builtins = ' + $r31gate + ' (want 1)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -252,5 +262,5 @@ if ($fail.Count -gt 0) {
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
     ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells +
-    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells)
+    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells + ' bld220-cells=' + $r31sa)
 exit 0
