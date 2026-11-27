@@ -13571,3 +13571,98 @@ if (dateBuiltinSubj196) { testType = Vb6Type::Variant; isDateSelect = false; }
 - 教训：**「静态类型」与「运行期装箱档」不是一回事。** `DateSerial` 的**值**必须是 VT_DATE
   （折档正确），但它的**返回类型**在 VB6 里是 Variant（比较规则不同）。这两件事在同一条链上
   同时成立，谁替谁做决定都会错 —— 所以本刀把差别关在站点里，而不是改那张全局表。
+## §11.197 CStr(Now / Date / Time) 的文本形状（第二百一十四刀）
+
+上一刀收尾时留了一句欠账：`CStr(Now)` 在 C3 打出的是裸序列号 `46353.4167824074`，
+真机给的是 `2026/11/27 9:59:29`。本刀把它关上。
+
+### 一、现象与两个缺陷
+
+真机神谕 `.temp/k214p/P264.bas` → `p264.txt`：
+
+```
+N1=[2026/11/27 10:22:18]   CStr(Now)
+N2=[2026/11/27]            CStr(Date)
+N5=[2024/11/27 9:59:29]    CStr(CDate("2024-11-27 9:59:29"))
+N6=[2021/3/4]              CStr(CDate("2021-03-04 00:00:00"))
+N8=[2021/3/4 12:30:00]     装着日期的 Variant
+```
+
+改前 C3 只有 N1/N2 不同（`46353.4325925926` / `46353`），N5–NA 逐行同 —— 也就是说
+**带时间的真日期值是好的，坏的是「零参日期内建」这一档的承载**。
+
+拆开是两个缺陷，必须两个都改：
+
+1. **推断权威不认裸名。** `inferExprType` 对裸写的 `Now` / `Date` / `Time` 不给 `Date`
+   （标识符那一支落到栈底答 Variant，零参调用那一支答符号表里那份登记）。
+   这一问加在 `inferExprTypeImpl` 的**最前面**：两种解析形状都接，`knownLocalVars_`
+   否决同名局部变量/形参（它们真有自己的类型）。
+2. **CStr 站点不看那一问。** `cgen_expr_call_conv_cstr.inc` 对标识符实参只查
+   `knownBstrVars_` / `knownDateVars_` / `knownSingleVars_` / `knownLongVars_` … 那一排
+   **登记表**；`Now` 不在任何一张表里 ⇒ 落到 Fix 056b 的
+   `vb6_CStr(vb6_VariantFromValue(vb6_Now()))`（VT_R8）⇒ 按数值格式化。
+   这一排表后面本来就有一次 `inferExprType(*firstArg)` 的分诊（原先只分 ULong/ULongLong/
+   SByte/UInteger），本刀在同一处分诊里补上 `Date ⇒ vb6_CStrDate` —— 与 Fix 175 的
+   Date 那一臂同一个出口，不新开形状。
+
+改后发码（`--emit-c`，P265/P266）：
+
+```c
+vb6_BSTR_AssignMove(&s, vb6_CStrDate(vb6_Now()));
+vb6_BSTR_AssignMove(&t, vb6_CStrDate(vb6_Date()));
+```
+
+**为什么不去改 `builtin_funcs.inc`**：那张表同时决定 `Select Case` 的承载档与装箱形状；
+上一刀刚把「日期内建当主语要降成 Variant」（§11.196）关在站点里，这里若把全局表翻成
+Date，会把那条已经对的口径一起翻掉。差别仍留在站点，形状只一份。
+
+### 二、夹具：只钉区域无关的事实
+
+`tests/b221_cstr_now_date`（十二格，x64/x86 各一份）。CI 在 en-US、真机神谕在 zh-CN，
+短日期文本会翻面（`2021/3/4` vs `3/4/2021`）—— 所以这一份**一个字符文本都不钉**，
+只钉两边都成立的事实：
+
+```
+W1 len=True      CStr(Now) 长度 > 10
+W2 slash=True    含 "/"
+W3 colon=True    含 ":"
+W4 isdate=True   IsDate 可解析
+W5 str=True      VarType = vbString
+W6 round=True    CDate(CStr(Now)) 与 Now 同一瞬时 (< 0.01 天)
+X1..X3           CStr(Date)：可解析 / 长度 >= 6 / 不含 ":"
+Y1..Y3           CStr(Time)：含 ":" / 长度 >= 4 / 与日期串不同
+```
+
+改前 W2/W3/W4/W6 全 False（裸序列号里没有 `/`、没有 `:`，也不是可解析日期）。
+
+一条坑记在这里：夹具最初用 `Open ... For Output` 写文件，本地读文件当读数，
+但 `run_tests.ps1` 的 VBP 腿读的是**进程 stdout** —— CI 上 `Got:` 为空，红了两个作业
+（`45931159172`）。改成 `Debug.Print`（与 b220/b216 同一形状）后重算清单两行。
+
+### 三、清单的两处移动
+
+- 新增 `tests/b221_cstr_now_date/B221Main.bas`、`B221Res.vbp` 两行（inputs 934 → 936）。
+- **b220 两行重祝福**：`B220Main.bas` / `B220Res.vbp` 的发射**故意变了 18 字节** ——
+  正是 H4 那一格 `Case CStr(Now)` 从 `vb6_CStr(vb6_VariantFromValue(vb6_Now()))`（43 字符）
+  变成 `vb6_CStrDate(vb6_Now())`（25 字符）。上一刀注明 H4 不钉是因为这个缺陷；本刀之后
+  H4 的形状对了，但 `Now` 的秒可能跨过读取时刻，仍**不钉**（不稳的格不进门）。
+- 其余 80 份含 `Now`/`Date`/`Time` 字样的输入逐份复算：全部 OK（diff=0），没有别的产物移动。
+
+### 四、读数与针
+
+- 新哨兵 **R32**：b221 两台在跑；`conv_cstr` 里 `Date ⇒ vb6_CStrDate` 那一臂恰 1 处；
+  `cgen_util_type.cpp` 里 `lb197 == "now"` 那一问恰 1 处 —— 两处缺一就退回裸序列号。
+- 本机闸门：`check_date_conv`（`now221-cells=2`）、`check_select_carrier_authority`、
+  `check_manifest_coverage`（inputs=936，sets equal）。
+- 门：run `45932590989`（`dev`、head `e17a8afb`）**23/23 全绿**。
+- 神谕：`.temp/k214p/P264.bas`（九行）、`P267.bas`（十二格）。
+
+### 五、记账
+
+- 代码：`b4a82174`（两处站点 + 夹具 + R32 + 清单两行）、`e17a8afb`（夹具改 Debug.Print + 清单重算）。
+- **号**：本节 = 第二百一十四刀 / §11.197。
+- 背账：`VBA.Now` 这种**限定名**主语 / 比较操作数；类实例成员当主语；`CStr(DateSerial(...))`
+  这一族（返回 Variant 的日期函数，文本形状与真机是否一致尚未取样）。
+- 教训：**「某形状算不算 Date」只有一个出口，但每个消费点都要显式去问。** 本刀第一版只改了
+  `inferExprType`，发码一个字没动 —— 因为 CStr 那一站压根没问它，而是自己维护了一排
+  `known*Vars_` 登记表。推断对了不等于消费点用了。
