@@ -4011,24 +4011,31 @@ static std::string mathNullFamilyV(const ASTNode* node, const std::string& cExpr
         if (fn == "oct" && splitOneArgSlotCall(cExpr, "vb6_OctSlot(", &innerSlot))
             return "vb6_OctV(" + innerSlot + ")";
     }
-    static const struct { const char* vb; const char* pre; const char* out; } kTbl[] = {
-        {"abs", "vb6_Abs(vb6_VariantToDouble(", "vb6_AbsV("},
-        {"int", "vb6_Int(vb6_VariantToDouble(", "vb6_IntV("},
-        {"fix", "vb6_Fix(vb6_VariantToDouble(", "vb6_FixV("},
-        {"hex", "vb6_Hex(vb6_VariantToLong(",   "vb6_HexV("},
-        {"oct", "vb6_Oct(vb6_VariantToLong(",   "vb6_OctV("},
+    static const struct { const char* vb; const char* pre; const char* pre2; const char* out; } kTbl[] = {
+        {"abs", "vb6_Abs(vb6_VariantToDouble(", "vb6_Abs(vb6_DblStrict(", "vb6_AbsV("},
+        {"int", "vb6_Int(vb6_VariantToDouble(", "vb6_Int(vb6_DblStrict(", "vb6_IntV("},
+        {"fix", "vb6_Fix(vb6_VariantToDouble(", "vb6_Fix(vb6_DblStrict(", "vb6_FixV("},
+        {"hex", "vb6_Hex(vb6_VariantToLong(",   nullptr,                  "vb6_HexV("},
+        {"oct", "vb6_Oct(vb6_VariantToLong(",   nullptr,                  "vb6_OctV("},
     };
     for (const auto& m : kTbl) {
         if (fn != m.vb) continue;
-        const std::string pre = m.pre;
-        size_t s = 0;
-        while (s < cExpr.size() && (cExpr[s] == '(' || cExpr[s] == ' ')) s++;
-        if (cExpr.compare(s, pre.size(), pre) == 0
-            && cExpr.size() >= s + pre.size() + 2 && cExpr.back() == ')') {
-            // 尾部两层右括号（一层提取、一层调用）一并剥掉。
-            std::string inner = cExpr.substr(s + pre.size(),
-                                             cExpr.size() - s - pre.size() - 2);
-            return std::string(m.out) + inner + ")";
+        // §11.213 (第二百三十刀): 发码站现在把整只槽的数值提取换成 vb6_DblStrict
+        // （字符串/拼接/数值面严格：Null ⇒ 94、文本 ⇒ 13），变体面上那同一形
+        // 必须先改道到 *V 出口（真机 P323 W1：`w = Abs(Null)` 仍是 Null）——
+        // 所以同一枚出口认两个前缀。所有行都不许只剩一个前缀可认。
+        for (const char* preRaw : {m.pre, m.pre2}) {
+            if (!preRaw) continue;
+            const std::string pre = preRaw;
+            size_t s = 0;
+            while (s < cExpr.size() && (cExpr[s] == '(' || cExpr[s] == ' ')) s++;
+            if (cExpr.compare(s, pre.size(), pre) == 0
+                && cExpr.size() >= s + pre.size() + 2 && cExpr.back() == ')') {
+                // 尾部两层右括号（一层提取、一层调用）一并剥掉。
+                std::string inner = cExpr.substr(s + pre.size(),
+                                                 cExpr.size() - s - pre.size() - 2);
+                return std::string(m.out) + inner + ")";
+            }
         }
     }
     return std::string();
@@ -4834,12 +4841,12 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
             //   还要再问一句 inferExprType(实参)==Variant，而这个推断对 `Dim nv As Variant`
             //   的局部答不出 Variant ⇒ 整条路根本没走到（本刀实测：改前发码仍是
             //   vb6_VariantDouble(vb6_Abs(vb6_VariantToDouble(nv)))，Abs(Null) 给 0）。
-            static const struct { const char* vb; const char* pre; const char* out; } k64[] = {
-                {"abs", "vb6_Abs(vb6_VariantToDouble(", "vb6_AbsV("},
-                {"int", "vb6_Int(vb6_VariantToDouble(", "vb6_IntV("},
-                {"fix", "vb6_Fix(vb6_VariantToDouble(", "vb6_FixV("},
-                {"hex", "vb6_Hex(vb6_VariantToLong(",   "vb6_HexV("},
-                {"oct", "vb6_Oct(vb6_VariantToLong(",   "vb6_OctV("},
+            static const struct { const char* vb; const char* pre; const char* pre2; const char* out; } k64[] = {
+                {"abs", "vb6_Abs(vb6_VariantToDouble(", "vb6_Abs(vb6_DblStrict(", "vb6_AbsV("},
+                {"int", "vb6_Int(vb6_VariantToDouble(", "vb6_Int(vb6_DblStrict(", "vb6_IntV("},
+                {"fix", "vb6_Fix(vb6_VariantToDouble(", "vb6_Fix(vb6_DblStrict(", "vb6_FixV("},
+                {"hex", "vb6_Hex(vb6_VariantToLong(",   nullptr,                  "vb6_HexV("},
+                {"oct", "vb6_Oct(vb6_VariantToLong(",   nullptr,                  "vb6_OctV("},
             };
             // §11.210: 字符串上下文里发出去的那一形（vb6_HexSlot）在这里也要换成
             // Null 保全的 vb6_HexV —— 两个消费面（BSTR / VARIANT）同一个发射形状。
@@ -4852,15 +4859,20 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
             }
             for (const auto& m64 : k64) {
                 if (fn64 != m64.vb) continue;
-                const std::string pre64 = m64.pre;
-                size_t s64 = 0;
-                while (s64 < cExpr.size() && (cExpr[s64] == '(' || cExpr[s64] == ' ')) s64++;
-                if (cExpr.compare(s64, pre64.size(), pre64) == 0
-                    && cExpr.size() >= s64 + pre64.size() + 2 && cExpr.back() == ')') {
-                    // 尾部两层右括号（一层提取、一层调用）一并剥掉。
-                    std::string inner64 = cExpr.substr(s64 + pre64.size(),
-                                                       cExpr.size() - s64 - pre64.size() - 2);
-                    return std::string(m64.out) + inner64 + ")";
+                // §11.213: 与 mathNullFamilyV 那张表同一形（两个消费面一个出口，
+                // 两个前缀都认 —— 见那一处的说明）。
+                for (const char* pre64Raw : {m64.pre, m64.pre2}) {
+                    if (!pre64Raw) continue;
+                    const std::string pre64 = pre64Raw;
+                    size_t s64 = 0;
+                    while (s64 < cExpr.size() && (cExpr[s64] == '(' || cExpr[s64] == ' ')) s64++;
+                    if (cExpr.compare(s64, pre64.size(), pre64) == 0
+                        && cExpr.size() >= s64 + pre64.size() + 2 && cExpr.back() == ')') {
+                        // 尾部两层右括号（一层提取、一层调用）一并剥掉。
+                        std::string inner64 = cExpr.substr(s64 + pre64.size(),
+                                                           cExpr.size() - s64 - pre64.size() - 2);
+                        return std::string(m64.out) + inner64 + ")";
+                    }
                 }
             }
             // §11.208 (第二百二十五刀): Round 有 0..1 个位数实参，上面那张单参表接不住

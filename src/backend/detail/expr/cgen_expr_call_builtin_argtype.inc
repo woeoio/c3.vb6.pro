@@ -194,16 +194,20 @@
                          || isNarrowIntExpr(node.positional[0].get())) callee += "Int";
             }
         }
-        // §11.211 (第二百二十八刀): Sgn 没有变体位。
-        // 真机 .temp/k225p/P313：Sgn(Null) = **94**（目标不动）、Sgn("")/Sgn("x") = **13**、
-        // Sgn("2.5") = 1、Sgn(Empty) = 0。这与 Abs/Int/Fix 正好相反 —— 那三枚 Null 进 Null 出
-        // （P314 K2/K3：VarType=1），Sgn 却直接报 94，所以它没有 *V 出口。
-        // 改前发码是 `vb6_Sgn(vb6_VariantToDouble(v))`：VariantToDouble 必须保持宽松
-        // （Val 那一族靠它）⇒ Null 给 0、文本给 0，两格都错。
-        // 判据只认「整只槽被 VariantToDouble 折了」这一形（本仓所有数值位提取都是它），
-        // 换成 vb6_DblStrict（Null ⇒ 94、文本非数字 ⇒ 13）；Sgn 无变体消费面，所以
-        // 不会像 Hex/Oct 那样劈成两条路。
-        if (callee == "vb6_Sgn" && args.size() == 1) {
+        // §11.213 (第二百三十刀): 这一族在**非变体消费面**上都要严格。
+        // 真机 .temp/k225p/P323（VB6Mini）：
+        //   S1/S2 `s = CStr(Abs(v))`（v=""/"x"）= [keep]/13；S3 "2.5" = [2.5]/0；
+        //   S4 `CStr(Abs(Null))` = [keep]/94；S5 Empty = [0]/0；
+        //   T1/T2 `CStr(Int(""))/CStr(Fix("x"))` = 13；T3 `CStr(Int(Null))` = 94；
+        //   U1..U3 `s = Abs(v)`（直接字符串赋值）同形；V1..V3 `s = "n=" & Abs(v)` 同形；
+        //   W1 `w = Abs(Null)`（Variant 目标）= **Null**（IsNull=True）—— 只有变体那一面保 Null。
+        // 改前这些格子全发 `vb6_Abs(vb6_VariantToDouble(v))`：Null 与文本都落 0。
+        // 处置与 §11.211 的 Sgn 同一形（整只槽 + VariantToDouble ⇒ vb6_DblStrict），
+        // 只是 Abs/Int/Fix 有 *V 出口，所以两条装箱表必须同步认新前缀
+        // （cgen_util_ctrl.cpp 的 mathNullFamilyV / boxToVariant），变体消费面才能仍拿到
+        // vb6_AbsV/IntV/FixV（否则 W1 会从 Null 变成 94）。
+        if ((callee == "vb6_Abs" || callee == "vb6_Sgn" || callee == "vb6_Int"
+             || callee == "vb6_Fix") && args.size() == 1 && !args[0].empty()) {
             static const std::string preS211 = "vb6_VariantToDouble(";
             if (args[0].compare(0, preS211.size(), preS211) == 0 && args[0].back() == ')') {
                 int depthS211 = 0;

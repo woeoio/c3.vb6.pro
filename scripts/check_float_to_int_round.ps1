@@ -397,8 +397,42 @@ foreach ($slot212 in @('vb6_HexSlot', 'vb6_OctSlot')) {
 $b236Cells = @([regex]::Matches($runnerText, 'b236_hex_oct_array_arg\\B236Res\.vbp')).Count
 if ($b236Cells -ne 2) { $bad += ("S13 b236 run cells = " + $b236Cells + " (want 2 = x64 + x86)") }
 
+# ---- S14: Abs/Int/Fix 的非变体面一律严格 (账 §11.213 第二百三十刀) ----
+# 真机 .temp/k225p/P323/P324：`s = CStr(Abs(v))` (v=""/"x") = [keep]/13、v=Null = [keep]/94、
+# Empty = [0]/0、"2.5" = [2.5]/0；直接字符串赋值与 `"n=" & Abs(v)` 同形。
+# 但 **Variant 目标仍保 Null**（W1 = IsNull True）⇒ 两条装箱表必须同时认新前缀，
+# 少了那一半，Abs(Null) 就会从 Null 变成 94。四条判据：
+#  (a) 发码站的严格族恰一处，且四枚名字都在里面；
+#  (b) 两个装箱站都带 pre2（DblStrict）那一列，三枚 Abs/Int/Fix 都有；
+#  (c) 两个站的表逐字相同（两个消费面一个权威）；
+#  (d) 夹具 b237 两套。
+$mFam213 = [regex]::Match($argtype11, 'if \(\(callee == "vb6_Abs"[\s\S]{0,200}?\{', 'Singleline')
+if (-not $mFam213.Success) { $bad += "S14 the strict family gate in the argtype station is gone" }
+else {
+    foreach ($nm213 in @('vb6_Abs', 'vb6_Sgn', 'vb6_Int', 'vb6_Fix')) {
+        if ($mFam213.Value -notmatch ('callee == "' + $nm213 + '"')) {
+            $bad += ("S14 " + $nm213 + " dropped out of the strict family")
+        }
+    }
+}
+$nPre2 = @([regex]::Matches($ctrl11, 'vb6_DblStrict\(')).Count
+if ($nPre2 -lt 6) { $bad += ("S14 DblStrict prefixes in the two boxing tables = " + $nPre2 + " (want >= 6 = 3 rows x 2 stations)") }
+$mT1 = [regex]::Match($ctrl11, 'const char\* out; \} kTbl\[\] = \{([\s\S]*?)\};')
+$mT2 = [regex]::Match($ctrl11, 'const char\* out; \} k64\[\] = \{([\s\S]*?)\};')
+if (-not $mT1.Success -or -not $mT2.Success) { $bad += "S14 one of the two boxing tables is not in the expected shape" }
+elseif (((($mT1.Groups[1].Value -split "\r?\n") | ForEach-Object { $_.Trim() } | Where-Object { $_ }) -join "`n") -ne ((($mT2.Groups[1].Value -split "\r?\n") | ForEach-Object { $_.Trim() } | Where-Object { $_ }) -join "`n")) {
+    $bad += "S14 the two boxing tables diverged (BSTR and VARIANT consumers must share one table)"
+}
+foreach ($nm213 in @('abs', 'int', 'fix')) {
+    if ($mT1.Success -and $mT1.Groups[1].Value -notmatch ('\{"' + $nm213 + '", "vb6_\w+\(vb6_VariantToDouble\(", "vb6_\w+\(vb6_DblStrict\("')) {
+        $bad += ("S14 " + $nm213 + " has no DblStrict prefix column in the boxing table")
+    }
+}
+$b237Cells = @([regex]::Matches($runnerText, 'b237_abs_string_face\\B237Res\.vbp')).Count
+if ($b237Cells -ne 2) { $bad += ("S14 b237 run cells = " + $b237Cells + " (want 2 = x64 + x86)") }
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face)"

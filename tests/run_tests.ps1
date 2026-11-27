@@ -13815,6 +13815,29 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "H12=[FFFFFFFB]/0")
     Test-Vbp 'b236_hex_oct_array_arg' "$Tests\b236_hex_oct_array_arg\B236Res.vbp" $b236Needles
     Test-Vbp 'b236_hex_oct_array_arg_x86' "$Tests\b236_hex_oct_array_arg\B236Res.vbp" $b236Needles -Arch "x86"
+    # §11.213 第二百三十刀: Abs/Int/Fix 的整只槽实参在非变体面上一律严格
+    # （Null ⇒ 94、文本非数值 ⇒ 13），变体面仍保 Null。真机 .temp/k225p/P324 十八格。
+    $b237Needles = @(
+    "S1=[keep]/13",
+    "S2=[keep]/13",
+    "S3=[2.5]/0",
+    "S4=[keep]/94",
+    "S5=[0]/0",
+    "T1=[keep]/13",
+    "T2=[keep]/13",
+    "T3=[keep]/94",
+    "T4=[-2]/0",
+    "U1=[keep]/13",
+    "U2=[keep]/13",
+    "U3=[2.5]/0",
+    "U4=[keep]/94",
+    "V1=[keep]/13",
+    "V2=[keep]/13",
+    "V3=[n=2.5]/0",
+    "W1=[]/0/True",
+    "X1=[keep]/13")
+    Test-Vbp 'b237_abs_string_face' "$Tests\b237_abs_string_face\B237Res.vbp" $b237Needles
+    Test-Vbp 'b237_abs_string_face_x86' "$Tests\b237_abs_string_face\B237Res.vbp" $b237Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
