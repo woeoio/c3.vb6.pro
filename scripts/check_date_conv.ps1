@@ -309,6 +309,18 @@ $r37split = N 'vb6_split_serial\(date, &datePart, &sod\);' $s202date
 if ($r37split -ne 1) { $fail += ('R37 DateAdd asks splitter = ' + $r37split + ' (want 1)') }
 $r37raw = N 'int32_t datePart = \(int32_t\)date;' $s202date
 if ($r37raw -ne 0) { $fail += ('R37 raw day half = ' + $r37raw + ' (want 0: the raw truncation must not come back)') }
+# R38 (§11.203 第二百二十刀): DateDiff / DatePart 的「哪一天」也要走同一句 splitter。
+# 真机 P280: DateDiff("d", CDate(44259.9999999), CDate(44260)) = 0、
+# DatePart("d", CDate(44259.9999999)) = 5（裸截断分别给 1 与 4）。
+$r38cells = N '\$Tests\\b227_part_diff_carry\\B227Res\.vbp' $T
+if ($r38cells -ne 2) { $fail += ('R38 b227 run cells = ' + $r38cells + ' (want 2 = x64 + x86)') }
+$r38diff = N 'int32_t d1 = vb6_serial_day_half\(date1\), d2 = vb6_serial_day_half\(date2\);' $s202date
+if ($r38diff -ne 1) { $fail += ('R38 DateDiff day half = ' + $r38diff + ' (want 1)') }
+$r38part = N 'int32_t d = vb6_serial_day_half\(date\);' $s202date
+if ($r38part -ne 2) { $fail += ('R38 DatePart + Weekday day half = ' + $r38part + ' (want 2: P282 Weekday(CDate(44259.9999999)) = 6)') }
+$r38raw1 = N 'int32_t d1 = \(int32_t\)date1, d2 = \(int32_t\)date2;' $s202date
+$r38raw2 = N 'int32_t d = \(int32_t\)date;' $s202date
+if (($r38raw1 + $r38raw2) -ne 0) { $fail += ('R38 raw day halves = ' + ($r38raw1 + $r38raw2) + ' (want 0)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -317,5 +329,5 @@ if ($fail.Count -gt 0) {
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
     ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells +
-    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells + ' bld220-cells=' + $r31sa + ' now221-cells=' + $r32cells + ' gen222-cells=' + $r33cells + ' neg223-cells=' + $r34cells + ' wr224-cells=' + $r35cells + ' carry225-cells=' + $r36cells + ' dadd226-cells=' + $r37cells)
+    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells + ' bld220-cells=' + $r31sa + ' now221-cells=' + $r32cells + ' gen222-cells=' + $r33cells + ' neg223-cells=' + $r34cells + ' wr224-cells=' + $r35cells + ' carry225-cells=' + $r36cells + ' dadd226-cells=' + $r37cells + ' pdiff227-cells=' + $r38cells)
 exit 0

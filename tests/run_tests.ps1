@@ -13581,6 +13581,35 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "C3 slash=True")
     Test-Vbp 'b226_dateadd_carry' "$Tests\b226_dateadd_carry\B226Res.vbp" $b226Needles
     Test-Vbp 'b226_dateadd_carry_x86' "$Tests\b226_dateadd_carry\B226Res.vbp" $b226Needles -Arch "x86"
+    # §11.203 第二百二十刀: DateDiff / DatePart 的「哪一天」走同一句 splitter。
+    # 真机 .temp/k220p/P280.bas -> p280.txt / P281.bas -> p281.txt 二十格全同;
+    # 改前 DateDiff("d",…)=1、DatePart("d",…)=4（裸截断落在前一天）。
+    $b227Needles = @(
+    "A1 day=6",
+    "A2 month=4",
+    "A3 day=5",
+    "A4 year=2022",
+    "A5 hour=23",
+    "A6 min=59",
+    "B1 diff=0",
+    "B2 diff=0",
+    "B3 diff=0",
+    "B4 diff=0",
+    "B5 diff=0",
+    "C1 d=5",
+    "C2 h=0",
+    "C3 n=0",
+    "C4 s=0",
+    "C5 m=3",
+    "C6 y=2021",
+    "D1 slash=True",
+    "D2 nocolon=True",
+    "E1 wd=6",
+    "E2 wd=5",
+    "E3 wd=1",
+    "E4 wd=6")
+    Test-Vbp 'b227_part_diff_carry' "$Tests\b227_part_diff_carry\B227Res.vbp" $b227Needles
+    Test-Vbp 'b227_part_diff_carry_x86' "$Tests\b227_part_diff_carry\B227Res.vbp" $b227Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

@@ -334,7 +334,9 @@ int64_t vb6_DateDiff(BSTR interval, double date1, double date2, int32_t firstDay
           interval && vb6_BSTR_Len(interval) >= 1 && (interval[0] == L'w' || interval[0] == L'W')
           && !(vb6_BSTR_Len(interval) >= 2 && (interval[1] == L'w' || interval[1] == L'W'));
 
-      int32_t d1 = (int32_t)date1, d2 = (int32_t)date2;
+      // §11.203 (第二百二十刀): 「哪一天」这一问也要跟着四入走 —— `t = CDate(44259.9999999)`
+      // 真机是 2021-03-05（P280），而裸截断给 3/4。DateDiff("d", t, CDate(44260)) 真机 0。
+      int32_t d1 = vb6_serial_day_half(date1), d2 = vb6_serial_day_half(date2);
 
       // ② "w": 整段七天，trunc 向零，与 firstDayOfWeek **无关** —— 先答，两条形参都不看。
       if (ivIsW423) {
@@ -446,7 +448,9 @@ int32_t vb6_WeekOfYear(int32_t serial, int32_t fdow, int32_t fwoy) {
 
 int32_t vb6_DatePart(BSTR interval, double date, int32_t firstDayOfWeek, int32_t firstWeekOfYear) {
     vb6_date_interval di = vb6_parse_interval(interval);
-    int32_t d = (int32_t)date;
+    // §11.203: 与 DateAdd/DateDiff 同一句 —— 进位到 24:00 的序列按「进完那一天」算。
+    // 真机 P280: DatePart("d", CDate(44259.9999999)) = 5（改前 4）。
+    int32_t d = vb6_serial_day_half(date);
     
     switch (di) {
         case vb6_di_year: {
@@ -501,7 +505,9 @@ int32_t vb6_Weekday(double date, int32_t firstDayOfWeek) {
        firstDayOfWeek: 1=vbSunday(default), 2=vbMonday, ..., 7=vbSaturday
        Return: 1-based relative to firstDayOfWeek.
        For default (vbSunday=1): Sunday=1, Monday=2, ..., Saturday=7 */
-    int32_t d = (int32_t)date;
+    // §11.203 (第二百二十刀): 星期也问同一句 —— 真机 P282: Weekday(CDate(44259.9999999)) = 6
+    // （3/5 星期五），裸截断给 5（3/4 星期四）；Weekday(CDate(-0.9999999)) = 1（1899-12-31 周日）。
+    int32_t d = vb6_serial_day_half(date);
     /* 1899-12-30 (serial 0) was a Saturday */
     int32_t wd = (d % 7 + 7) % 7;  /* 0=Sat,1=Sun,2=Mon,3=Tue,4=Wed,5=Thu,6=Fri */
     /* Convert to Sunday=1,Monday=2,...,Saturday=7 */
