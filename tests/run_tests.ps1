@@ -13779,6 +13779,25 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "L2=1 116100")
     Test-Vbp 'b234_hex_oct_width' "$Tests\b234_hex_oct_width\B234Res.vbp" $b234Needles
     Test-Vbp 'b234_hex_oct_width_x86' "$Tests\b234_hex_oct_width\B234Res.vbp" $b234Needles -Arch "x86"
+    # §11.211 第二百二十八刀: Sgn 没有变体位 —— Null ⇒ 94、文本非数值 ⇒ 13。
+    # 真机 .temp/k225p/P313/P314/P315 全格一致。
+    $b235Needles = @(
+    "G1=-99/94",
+    "G2=-99/94",
+    "G3=-99/94",
+    "G4=-99/94",
+    "G5=-99/13",
+    "G6=-99/13",
+    "G7=1/0",
+    "G8=-99/13",
+    "G9=-99/94",
+    "G10=1/0",
+    "G11=-1/0",
+    "N1=TrueTrueTrue",
+    "N2=0000",
+    "N3=-101/0")
+    Test-Vbp 'b235_sgn_null_gate' "$Tests\b235_sgn_null_gate\B235Res.vbp" $b235Needles
+    Test-Vbp 'b235_sgn_null_gate_x86' "$Tests\b235_sgn_null_gate\B235Res.vbp" $b235Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

@@ -342,8 +342,31 @@ if ($argtype11 -notmatch 'isNarrowIntExpr\(node\.positional\[0\]\.get\(\)\)') {
 $b234Cells = @([regex]::Matches($runnerText, 'b234_hex_oct_width\\B234Res\.vbp')).Count
 if ($b234Cells -ne 2) { $bad += ("S11 b234 hex/oct width run cells = " + $b234Cells + " (want 2 = x64 + x86)") }
 
+# ---- S12: Sgn 的变体门是严格入口 (账 §11.211 第二百二十八刀) ----
+# 真机 .temp/k225p/P313：Sgn(Null) = 94（目标不动）、Sgn("")/Sgn("x") = 13、Sgn("2.5") = 1、
+# Sgn(Empty) = 0；而 Abs/Int/Fix(Null) = **Null**（P314 K2/K3）—— 两族口径相反，
+# 所以 Sgn 没有 *V 出口，发码位上也不许再出现宽松的 VariantToDouble。
+# 判据三条：
+#  (a) 发码站必须把 Sgn 整只槽那一形改道到 vb6_DblStrict 恰 1 处；
+#  (b) Sgn 不许出现在 nullFamilyVExit 的 *V 名单里（无变体位）；
+#  (c) vb6_DblStrict 仍是唯一严格入口（Null ⇒ 94、文本 ⇒ 13），且 Sgn 的 RTL 仍是平滑函数。
+$nSgnGate = @([regex]::Matches($argtype11, 'callee == "vb6_Sgn"')).Count
+if ($nSgnGate -ne 1) { $bad += ("S12 Sgn strict gate = " + $nSgnGate + " (want 1)") }
+if ($argtype11 -notmatch 'vb6_DblStrict\(') { $bad += "S12 the Sgn gate no longer routes to vb6_DblStrict" }
+$pre95 = Get-CodeText (Join-Path $root "src\backend\detail\expr\cgen_expr_call_builtin_pre.inc")
+if ($pre95 -match 'fn95 == "sgn"') {
+    $bad += "S12 Sgn got a Null-propagating outlet -- the real machine answers 94, not Null (P313 G1)"
+}
+$bodySgn = [regex]::Match($conv11, 'int32_t vb6_Sgn\(double x\)\s*\{[^\}]*\}')
+if (-not $bodySgn.Success) { $bad += "S12 vb6_Sgn body not found" }
+elseif ($bodySgn.Value -match 'vb6_ErrRaise|vb6_RaiseError') {
+    $bad += "S12 vb6_Sgn raises on its own -- the strict gate belongs at the call site (one authority)"
+}
+$b235Cells = @([regex]::Matches($runnerText, 'b235_sgn_null_gate\\B235Res\.vbp')).Count
+if ($b235Cells -ne 2) { $bad += ("S12 b235 run cells = " + $b235Cells + " (want 2 = x64 + x86)") }
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract)"

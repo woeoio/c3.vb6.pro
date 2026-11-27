@@ -177,6 +177,37 @@
                          || isNarrowIntExpr(node.positional[0].get())) callee += "Int";
             }
         }
+        // §11.211 (第二百二十八刀): Sgn 没有变体位。
+        // 真机 .temp/k225p/P313：Sgn(Null) = **94**（目标不动）、Sgn("")/Sgn("x") = **13**、
+        // Sgn("2.5") = 1、Sgn(Empty) = 0。这与 Abs/Int/Fix 正好相反 —— 那三枚 Null 进 Null 出
+        // （P314 K2/K3：VarType=1），Sgn 却直接报 94，所以它没有 *V 出口。
+        // 改前发码是 `vb6_Sgn(vb6_VariantToDouble(v))`：VariantToDouble 必须保持宽松
+        // （Val 那一族靠它）⇒ Null 给 0、文本给 0，两格都错。
+        // 判据只认「整只槽被 VariantToDouble 折了」这一形（本仓所有数值位提取都是它），
+        // 换成 vb6_DblStrict（Null ⇒ 94、文本非数字 ⇒ 13）；Sgn 无变体消费面，所以
+        // 不会像 Hex/Oct 那样劈成两条路。
+        if (callee == "vb6_Sgn" && args.size() == 1) {
+            static const std::string preS211 = "vb6_VariantToDouble(";
+            if (args[0].compare(0, preS211.size(), preS211) == 0 && args[0].back() == ')') {
+                int depthS211 = 0;
+                size_t closeS211 = std::string::npos;
+                for (size_t kS211 = preS211.size() - 1; kS211 < args[0].size(); ++kS211) {
+                    if (args[0][kS211] == '(') depthS211++;
+                    else if (args[0][kS211] == ')') {
+                        if (--depthS211 == 0) { closeS211 = kS211; break; }
+                    }
+                }
+                if (closeS211 == args[0].size() - 1) {
+                    const std::string slotS211 = args[0].substr(
+                        preS211.size(), args[0].size() - preS211.size() - 1);
+                    const std::string strictS211 = "vb6_DblStrict(" + slotS211 + ")";
+                    args[0] = strictS211;
+                    replaceInArgList108c(std::string("vb6_VariantToDouble(") + slotS211 + ")",
+                                         strictS211);
+                    argsFixed108c = true;
+                }
+            }
+        }
         // 账 #305 §B174 (第六十五刀): 原此处的「数值实参 → BSTR 形参」13 枚名单整段撤掉 ——
         // 同一条规则的唯一站点在 cgen_expr_call_arg_emit.inc 的 Fix 175, 位号/档位/形状三个问句
         // 分别收在形参表(+ builtinNoParamTableStringSlot) / typeTakesImplicitCStr / wrapToBSTR。
