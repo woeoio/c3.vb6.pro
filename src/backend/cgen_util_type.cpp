@@ -567,6 +567,15 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
                         return Vb6Type::Currency;
                     }
                 }
+                // §11.204 (第二百二十一刀): Int/Fix 在 **Date 实参**上保持 Date —— 真机 P283:
+                // VarType(Int(t)) = 7、CStr(Int(t)) = "2021/3/4"、IsDate(Int(t)) = True，
+                // 而 Int(2.5) 仍是 5|Double。取整本身不变（序列号的 floor / 向零截断），
+                // 缺的只是身份；CStr 那个站点会据此走 vb6_CStrDate。
+                if ((Symbol::toLower(id.name) == "int" || Symbol::toLower(id.name) == "fix")
+                    && !call.positional.empty() && call.positional[0]
+                    && inferExprType(*call.positional[0]) == Vb6Type::Date) {
+                    return Vb6Type::Date;
+                }
                 if (sym) return sym->type;
                 // 语义层 builtin_funcs.inc 没登记、但 cgen 发射表里有名字的那一族
                 // (LenB / InStrB / LeftB / TypeOf / LoadRes* …)。没有这一问时它们一律

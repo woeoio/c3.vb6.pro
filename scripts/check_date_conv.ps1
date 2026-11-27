@@ -321,6 +321,13 @@ if ($r38part -ne 2) { $fail += ('R38 DatePart + Weekday day half = ' + $r38part 
 $r38raw1 = N 'int32_t d1 = \(int32_t\)date1, d2 = \(int32_t\)date2;' $s202date
 $r38raw2 = N 'int32_t d = \(int32_t\)date;' $s202date
 if (($r38raw1 + $r38raw2) -ne 0) { $fail += ('R38 raw day halves = ' + ($r38raw1 + $r38raw2) + ' (want 0)') }
+# R39 (§11.204 第二百二十一刀): Int/Fix 在 Date 实参上保持 Date 身份（VarType=7、
+# CStr 走日期文本、IsDate=True）；数值实参仍是 Double。真机 P283/P284/P285。
+$r39cells = N '\$Tests\\b228_int_fix_date\\B228Res\.vbp' $T
+if ($r39cells -ne 2) { $fail += ('R39 b228 run cells = ' + $r39cells + ' (want 2 = x64 + x86)') }
+$s204type = Get-Content -Raw (Join-Path $Root 'src\backend\cgen_util_type.cpp')
+$r39rule = N 'if \(\(Symbol::toLower\(id\.name\) == "int" \|\| Symbol::toLower\(id\.name\) == "fix"\)' $s204type
+if ($r39rule -ne 1) { $fail += ('R39 Int/Fix date identity = ' + $r39rule + ' (want 1)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -329,5 +336,5 @@ if ($fail.Count -gt 0) {
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
     ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells +
-    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells + ' bld220-cells=' + $r31sa + ' now221-cells=' + $r32cells + ' gen222-cells=' + $r33cells + ' neg223-cells=' + $r34cells + ' wr224-cells=' + $r35cells + ' carry225-cells=' + $r36cells + ' dadd226-cells=' + $r37cells + ' pdiff227-cells=' + $r38cells)
+    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells + ' bld220-cells=' + $r31sa + ' now221-cells=' + $r32cells + ' gen222-cells=' + $r33cells + ' neg223-cells=' + $r34cells + ' wr224-cells=' + $r35cells + ' carry225-cells=' + $r36cells + ' dadd226-cells=' + $r37cells + ' pdiff227-cells=' + $r38cells + ' intfix228-cells=' + $r39cells)
 exit 0

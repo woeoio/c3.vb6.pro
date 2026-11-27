@@ -13610,6 +13610,34 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "E4 wd=6")
     Test-Vbp 'b227_part_diff_carry' "$Tests\b227_part_diff_carry\B227Res.vbp" $b227Needles
     Test-Vbp 'b227_part_diff_carry_x86' "$Tests\b227_part_diff_carry\B227Res.vbp" $b227Needles -Arch "x86"
+    # §11.204 第二百二十一刀: Int/Fix 在 Date 实参上保持 Date 身份。
+    # 真机 .temp/k221p/P283/P284/P285/P286 全格一致; 改前 VarType(Int(t))=5、
+    # CStr(Int(t))="44259"、IsDate(Int(t))=False。
+    $b228Needles = @(
+    "F1=7",
+    "F2=7",
+    "F3=5",
+    "F4=7",
+    "G1 slash=True",
+    "G2 nocolon=True",
+    "G3 day=29",
+    "G4 day=29",
+    "G5 day=28",
+    "H1=[2]",
+    "H2=[-3]",
+    "H3=[-2]",
+    "H4=[44259]",
+    "H5 slash=True",
+    "I1=True",
+    "I2=False",
+    "J1=4",
+    "J2=0",
+    "K1 slash=True",
+    "K2 nocolon=True",
+    "K3=[88518]",
+    "K4 colon=True")
+    Test-Vbp 'b228_int_fix_date' "$Tests\b228_int_fix_date\B228Res.vbp" $b228Needles
+    Test-Vbp 'b228_int_fix_date_x86' "$Tests\b228_int_fix_date\B228Res.vbp" $b228Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
