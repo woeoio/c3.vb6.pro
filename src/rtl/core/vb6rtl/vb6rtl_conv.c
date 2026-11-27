@@ -1292,6 +1292,20 @@ BSTR vb6_OctW(int32_t n, int32_t vartype) {
 BSTR vb6_Hex(int32_t n) { return vb6_HexW(n, vb6_vtLong); }
 BSTR vb6_HexInt(int32_t n) { return vb6_HexW(n, vb6_vtInteger); }
 BSTR vb6_HexByte(int32_t n) { return vb6_HexW(n, vb6_vtByte); }
+
+// §11.212 (第二百二十九刀): 整枚数组进 Hex/Oct 的实参位 —— 真机报 13 (Type mismatch),
+// 且目标不动。读数 .temp/k225p/P320/P321 (VB6Mini 真机):
+//   A1 `s = "keep": s = Hex(a)`  ⇒ [keep]/13（a() As Long, 已 ReDim）
+//   A2 `Oct(a)` / A3 `Hex(a())` / A4 `Hex(b)`（String 元素）/ A5 `Hex(c)`（未 ReDim）全 13
+//   A6 `Hex(a(1))` 仍是 FFFFFFFB（元素不是整枚数组，不许误伤）
+// 判据（是不是整枚数组）由发码站问 isWholeArrayRef；这里只管 raise 并交出一个可用的 0 ——
+// 表达式位不能调 void 的 vb6_ErrRaise，而错误号口径只能有一位主人，所以不把 raise 拼进 cgen。
+double vb6_ArrayArgMismatch(void) {
+    vb6_ErrRaise(13, vb6_BSTR_FromStr(L"VBA.Information"),
+                 vb6_BSTR_FromStr(L"Type mismatch"));
+    return 0.0;
+}
+
 /* 整只变体槽：宽度按 vt，只读一次槽（不重求值） */
 BSTR vb6_HexSlot(vb6_VARIANT v) {
     /* 真机 .temp/k225p/P310 Z1: 字符串上下文里 `"[" & Hex(Null) & "]"` 落成 `[]` ——
@@ -1299,15 +1313,27 @@ BSTR vb6_HexSlot(vb6_VARIANT v) {
        vb6_HexV，那一枚把 Null 保成 Null，真机 Z2: IsNull(Hex(Null)) = True）。 */
     const int32_t vt = (int32_t)v.vt;
     if (vt == vb6_vtNull) return vb6_BSTR_FromStr(L"");
+    /* §11.212: 槽里装着数组也是 13（真机 P321 A8 `v = a: s = Hex(v)` = [keep]/13）。
+       vt 是位掩码（vtArray|vtLong），所以按位问；这一条必须在宽度表之前 ——
+       vb6_HexMaskOf 对数组位只会给 0xFFFFFFFF，把载体指针打成 7F242650。 */
+    if (vt & vb6_vtArray) {
+        vb6_ErrRaise(13, vb6_BSTR_FromStr(L"VBA.Information"),
+                     vb6_BSTR_FromStr(L"Type mismatch"));
+        return vb6_BSTR_FromStr(L"");
+    }
     return vb6_HexW(vb6_VariantToLong(v), vt);
 }
-
 BSTR vb6_Oct(int32_t n) { return vb6_OctW(n, vb6_vtLong); }
 BSTR vb6_OctInt(int32_t n) { return vb6_OctW(n, vb6_vtInteger); }
 BSTR vb6_OctByte(int32_t n) { return vb6_OctW(n, vb6_vtByte); }
 BSTR vb6_OctSlot(vb6_VARIANT v) {
     const int32_t vt = (int32_t)v.vt;
     if (vt == vb6_vtNull) return vb6_BSTR_FromStr(L"");
+    if (vt & vb6_vtArray) {   /* §11.212: 与 HexSlot 同一口径（真机 P321 A9 = [keep]/13） */
+        vb6_ErrRaise(13, vb6_BSTR_FromStr(L"VBA.Information"),
+                     vb6_BSTR_FromStr(L"Type mismatch"));
+        return vb6_BSTR_FromStr(L"");
+    }
     return vb6_OctW(vb6_VariantToLong(v), vt);
 }
 

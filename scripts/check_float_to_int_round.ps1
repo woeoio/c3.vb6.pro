@@ -365,8 +365,40 @@ elseif ($bodySgn.Value -match 'vb6_ErrRaise|vb6_RaiseError') {
 $b235Cells = @([regex]::Matches($runnerText, 'b235_sgn_null_gate\\B235Res\.vbp')).Count
 if ($b235Cells -ne 2) { $bad += ("S12 b235 run cells = " + $b235Cells + " (want 2 = x64 + x86)") }
 
+# ---- S13: 整枚数组进 Hex/Oct ⇒ 13 (账 §11.212 第二百二十九刀) ----
+# 真机 .temp/k225p/P320/P321/P322：`Hex(a)`/`Oct(a)`/`Hex(a())`/`Hex(b)`（String 元素）/
+# `Hex(c)`（未 ReDim）/ `v = a: Hex(v)` 全部是 [keep]/13；`Hex(a(1))` 仍是 FFFFFFFB。
+# 四个判据：
+#  (a) 发码站按 isWholeArrayRef 换实参恰 1 处，且只换 Hex/Oct（不许波及别的内建）；
+#  (b) 报错本体只有一位主人：vb6_ArrayArgMismatch 的 ErrRaise 恰 1 处、号是 13；
+#  (c) 两条 Slot 都要按位问数组（vt & vb6_vtArray），且必须排在宽度表之前；
+#  (d) 夹具 b236 两套（x64 + x86）。
+$nArr212 = @([regex]::Matches($argtype11, 'vb6_ArrayArgMismatch\(\)')).Count
+if ($nArr212 -ne 2) { $bad += ("S13 array-arg rewrite sites = " + $nArr212 + " (want 2: the assignment + the guard compare)") }
+if ($argtype11 -notmatch 'callee == "vb6_Hex" \|\| callee == "vb6_Oct"\)\s*\r?\n\s*&&\s*isWholeArrayRef') {
+    $bad += "S13 the array branch no longer gates on isWholeArrayRef + Hex/Oct only"
+}
+$mHelp = [regex]::Match($conv11, 'double vb6_ArrayArgMismatch\(void\)\s*\{[\s\S]*?\n\}')
+if (-not $mHelp.Success) { $bad += "S13 vb6_ArrayArgMismatch body not found" }
+else {
+    $nR212 = @([regex]::Matches($mHelp.Value, 'vb6_ErrRaise\(')).Count
+    if ($nR212 -ne 1 -or $mHelp.Value -notmatch 'vb6_ErrRaise\(13,') {
+        $bad += ("S13 vb6_ArrayArgMismatch raises " + $nR212 + " times (want exactly one, err 13)")
+    }
+}
+foreach ($slot212 in @('vb6_HexSlot', 'vb6_OctSlot')) {
+    $mSlot = [regex]::Match($conv11, 'BSTR ' + $slot212 + '\(vb6_VARIANT v\)\s*\{[\s\S]*?\n\}')
+    if (-not $mSlot.Success) { $bad += ("S13 " + $slot212 + " body not found"); continue }
+    $iArr = $mSlot.Value.IndexOf('vt & vb6_vtArray')
+    $iW = $mSlot.Value.IndexOf('vb6_HexW(') ; if ($iW -lt 0) { $iW = $mSlot.Value.IndexOf('vb6_OctW(') }
+    if ($iArr -lt 0) { $bad += ("S13 " + $slot212 + " does not reject a Variant carrying an array") }
+    elseif ($iW -ge 0 -and $iArr -gt $iW) { $bad += ("S13 " + $slot212 + " checks the array bit after the width table") }
+}
+$b236Cells = @([regex]::Matches($runnerText, 'b236_hex_oct_array_arg\\B236Res\.vbp')).Count
+if ($b236Cells -ne 2) { $bad += ("S13 b236 run cells = " + $b236Cells + " (want 2 = x64 + x86)") }
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13)"

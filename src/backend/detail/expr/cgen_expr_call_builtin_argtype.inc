@@ -168,10 +168,27 @@
                     }
                 }
             }
-            // （2）静态档：Byte → *Byte、Integer/Boolean → *Int。
+            // §11.212 (第二百二十九刀): 整枚数组进 Hex/Oct 的实参位 ⇒ 13。
+        // 真机 .temp/k225p/P320/P321：`Hex(a)`/`Oct(a)`/`Hex(a())`/`Hex(b)`（String 元素）/
+        // `Hex(c)`（未 ReDim）全部是 [keep]/13（目标一字不动）；`Hex(a(1))` 仍是 FFFFFFFB。
+        // 改前本站把数组名当数值交给 vb6_Hex(double)：x64 上截的是描述符指针
+        // （P312 的 A3 打出 EA921860），错误号也没有。
+        // 判据只问 isWholeArrayRef（裸名与 `A()` 两形都算，见 cgen_util_type.cpp），
+        // 报错本体在 RTL 那一位（vb6_ArrayArgMismatch）—— 本站只换实参，不拼 ErrRaise。
+        // 必须放在宽度那一块之前：数组没有「宽度」，增宽只会把元素档误折进去。
+        if (args.size() == 1 && node.positional.size() == 1 && node.positional[0]
+            && (callee == "vb6_Hex" || callee == "vb6_Oct")
+            && isWholeArrayRef(node.positional[0].get())) {
+            const std::string oldA212 = args[0];
+            args[0] = "vb6_ArrayArgMismatch()";
+            replaceInArgList108c(oldA212, args[0]);
+            argsFixed108c = true;
+        }
+        // （2）静态档：Byte → *Byte、Integer/Boolean → *Int。
             //     Integer 变量在 inferExprType 里答 Long（C 侧 int32 口径），
             //     所以那一档必须问 isNarrowIntExpr 这枚既有谓词（§C30-10 第三十四/四十五刀）。
-            if (callee == "vb6_Hex" || callee == "vb6_Oct") {
+            if ((callee == "vb6_Hex" || callee == "vb6_Oct")
+                && args[0] != "vb6_ArrayArgMismatch()") {
                 if (t209 == Vb6Type::Byte) callee += "Byte";
                 else if (t209 == Vb6Type::Integer || t209 == Vb6Type::Boolean
                          || isNarrowIntExpr(node.positional[0].get())) callee += "Int";

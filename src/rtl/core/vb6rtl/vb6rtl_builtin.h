@@ -600,6 +600,8 @@ BSTR vb6_HexW(int32_t n, int32_t vartype);
 BSTR vb6_OctW(int32_t n, int32_t vartype);
 BSTR vb6_HexSlot(vb6_VARIANT v);
 BSTR vb6_OctSlot(vb6_VARIANT v);
+// §11.212 (第二百二十九刀): 整枚数组进数值实参位的表达式位出口 （raise 13，交回 0）。
+double vb6_ArrayArgMismatch(void);
 
 // C30-11 第六十四刀: Int/Fix/Hex/Oct 的「Null 进、Null 出」变体位。
 // 读数 .temp/null/oracle_num.vbs：这四格真值都是 **Null**（不是 0，也不是 94）。

@@ -13798,6 +13798,23 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "N3=-101/0")
     Test-Vbp 'b235_sgn_null_gate' "$Tests\b235_sgn_null_gate\B235Res.vbp" $b235Needles
     Test-Vbp 'b235_sgn_null_gate_x86' "$Tests\b235_sgn_null_gate\B235Res.vbp" $b235Needles -Arch "x86"
+    # §11.212 第二百二十九刀: 整枚数组进 Hex/Oct 的实参位 ⇒ 13，目标一字不动。
+    # 真机 .temp/k225p/P322 十二格逐行相同（x64 / x86）。
+    $b236Needles = @(
+    "H1=[keep]/13",
+    "H2=[keep]/13",
+    "H3=[keep]/13",
+    "H4=[keep]/13",
+    "H5=[keep]/13",
+    "H6=[FFFFFFFB]/0",
+    "H7=[FF]/0",
+    "H8=[keep]/13",
+    "H9=[keep]/13",
+    "H10=[177773]/0",
+    "H11=[FF]/0",
+    "H12=[FFFFFFFB]/0")
+    Test-Vbp 'b236_hex_oct_array_arg' "$Tests\b236_hex_oct_array_arg\B236Res.vbp" $b236Needles
+    Test-Vbp 'b236_hex_oct_array_arg_x86' "$Tests\b236_hex_oct_array_arg\B236Res.vbp" $b236Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
