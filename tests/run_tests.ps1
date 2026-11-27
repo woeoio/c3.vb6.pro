@@ -13724,6 +13724,37 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "K1=236")
     Test-Vbp 'b232_round_carrier' "$Tests\b232_round_carrier\B232Res.vbp" $b232Needles
     Test-Vbp 'b232_round_carrier_x86' "$Tests\b232_round_carrier\B232Res.vbp" $b232Needles -Arch "x86"
+    # §11.209 第二百二十六刀: Hex/Oct 的实参收窄 = CLng 那一档（先四入后进制 + 越界报 6）。
+    # 真机 .temp/k225p/P305/P306/P307 全格一致。
+    $b233Needles = @(
+    "H1=ACE4",
+    "H3=ACE4",
+    "H5=ACE0",
+    "H7=2",
+    "H8=2",
+    "H10=4",
+    "H11=FFFFFFFE",
+    "H12=2",
+    "H13=2",
+    "H15=ACE4",
+    "H16=2",
+    "H17=2",
+    "H18=10",
+    "H19=0",
+    "H20=True",
+    "H21=FFFFFFFE",
+    "H22=FFFFFFFF",
+    "H23=7FFFFFFF",
+    "O1=126344",
+    "O2=126343",
+    "O6=37777777776",
+    "O9=126340",
+    "Y1=6/x",
+    "Y2=6/x",
+    "Y3=6/x",
+    "Y4=0/80000000")
+    Test-Vbp 'b233_hex_oct_narrow' "$Tests\b233_hex_oct_narrow\B233Res.vbp" $b233Needles
+    Test-Vbp 'b233_hex_oct_narrow_x86' "$Tests\b233_hex_oct_narrow\B233Res.vbp" $b233Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

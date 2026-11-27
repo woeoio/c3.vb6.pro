@@ -109,6 +109,31 @@
                 }
             }
         }
+        // §11.209 (第二百二十六刀): Hex/Oct 的实参收窄 = CLng 那一档。
+        // 真机 .temp/k225p/P305：Hex(44259.62)=ACE4 / Hex(44259.5)=ACE4 / Hex(1.5)=2 /
+        // Hex(3.5)=4 / Hex(-2.5)=FFFFFFFE / Oct 同族，即**先四入后进制**（半到偶），
+        // 越界报 6（Hex(2147483647.6) 真机直接 Error 6）。改前这里让 C 隐式截断 ⇒
+        // ACE3 / 1 / 3，且越界静默饱和。
+        // 判据 = 实参的**静态档位**（inferExprType），不是文本：只有 C 隐式转换会
+        // 走样那几档（Single/Double/Date/Currency 是浮点形，String 是 BSTR 指针）
+        // 才加一层收窄；Integer/Long/Byte/Boolean 的 C 隐式加宽与 VB6 同值，不动。
+        // 与 vb6rtl_com.c 的 `~` 那一站同口径（同一枚 vb6_CLng 主人）。
+        if ((callee == "vb6_Hex" || callee == "vb6_Oct")
+            && args.size() == 1 && !node.positional.empty() && node.positional[0]) {
+            const Vb6Type t209 = inferExprType(*node.positional[0]);
+            std::string narrowed209;
+            if (t209 == Vb6Type::String) {
+                narrowed209 = "vb6_CLng(vb6_NumVal(" + args[0] + "))";
+            } else if (t209 == Vb6Type::Single || t209 == Vb6Type::Double
+                       || t209 == Vb6Type::Date || t209 == Vb6Type::Currency) {
+                narrowed209 = "vb6_CLng(" + args[0] + ")";
+            }
+            if (!narrowed209.empty()) {
+                replaceInArgList108c(args[0], narrowed209);
+                args[0] = narrowed209;
+                argsFixed108c = true;
+            }
+        }
         // 账 #305 §B174 (第六十五刀): 原此处的「数值实参 → BSTR 形参」13 枚名单整段撤掉 ——
         // 同一条规则的唯一站点在 cgen_expr_call_arg_emit.inc 的 Fix 175, 位号/档位/形状三个问句
         // 分别收在形参表(+ builtinNoParamTableStringSlot) / typeTakesImplicitCStr / wrapToBSTR。

@@ -261,8 +261,45 @@ $runnerText = [System.IO.File]::ReadAllText((Join-Path $root "tests\run_tests.ps
 $b230Cells = @([regex]::Matches($runnerText, 'b230_round_banker\\B230Res\.vbp')).Count
 if ($b230Cells -ne 2) { $bad += ("S9 b230 round-banker run cells = " + $b230Cells + " (want 2 = x64 + x86)") }
 
+# ---- S10: Hex/Oct 的实参收窄 = CLng 那一档 (账 §11.209 第二百二十六刀) ----
+# 真机 .temp/k225p/P305+306: Hex(44259.62)=ACE4 / Hex(1.5)=2 / Hex("2.5")=2 /
+# Hex(2147483647.6)=Error 6。改前 C 在 int32_t 边界上隐式截断 ⇒ ACE3 / 1 / 指针值 / 饱和值。
+# 判据两条：
+#  (a) 收窄住**调用站**恰一处，且问的是静态档位 (inferExprType) 而不是文本前缀 ——
+#      文本判据在 §11.208 刚量过一次失效（包一层 Borrow 就永远对不上）；
+#      四个浮点形档 (Single/Double/Date/Currency) + String 五档都得在。
+#  (b) RTL 那边不许另开一条路：vb6_Hex / vb6_Oct 的形参仍是 int32_t（收窄是调用方的事），
+#      而取整那一份答案仍只有 vb6_FltToLng → vb6_RoundHalfEven 一条链（S1/S2/S3 已钉）。
+$argtypeRel = "src\backend\detail\expr\cgen_expr_call_builtin_argtype.inc"
+$argtype = Join-Path $root $argtypeRel
+if (-not (Test-Path $argtype)) {
+    $bad += "S10 cgen_expr_call_builtin_argtype.inc not found"
+} else {
+    $atText = Get-CodeText $argtype
+    $nNarrow = @([regex]::Matches($atText, 'callee == "vb6_Hex" \|\| callee == "vb6_Oct"')).Count
+    if ($nNarrow -ne 1) { $bad += ("S10 the Hex/Oct narrowing station = " + $nNarrow + " (want 1)") }
+    foreach ($t in @('Vb6Type::Single', 'Vb6Type::Double', 'Vb6Type::Date', 'Vb6Type::Currency', 'Vb6Type::String')) {
+        if ($atText -notmatch [regex]::Escape($t)) { $bad += ("S10 the narrowing station no longer gates " + $t) }
+    }
+    if ($atText -notmatch 'inferExprType\(\*node\.positional\[0\]\)') {
+        $bad += "S10 the narrowing station no longer asks inferExprType (text matching is the §11.208 failure mode)"
+    }
+    if (@([regex]::Matches($atText, 'vb6_CLng\(')).Count -ne 2) {
+        $bad += "S10 the narrowing station must ship exactly two vb6_CLng outlets (String via vb6_NumVal, float via direct)"
+    }
+}
+$conv10 = Get-CodeText $conv
+if ($conv10 -notmatch 'BSTR vb6_Hex\(int32_t n\)') {
+    $bad += "S10 vb6_Hex no longer takes int32_t -- the narrow must stay at the call site"
+}
+if ($conv10 -notmatch 'BSTR vb6_Oct\(int32_t n\)') {
+    $bad += "S10 vb6_Oct no longer takes int32_t -- the narrow must stay at the call site"
+}
+$b233Cells = @([regex]::Matches($runnerText, 'b233_hex_oct_narrow\\B233Res\.vbp')).Count
+if ($b233Cells -ne 2) { $bad += ("S10 b233 hex/oct run cells = " + $b233Cells + " (want 2 = x64 + x86)") }
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site)"
