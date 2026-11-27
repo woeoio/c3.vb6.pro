@@ -3,7 +3,8 @@ Option Explicit
 
 ' B599: Write # 是**另一套**语义, 不能与 Print # 共用格式化:
 '   - 数值去 Str 前导空格, |x|<1 去前导 0 (.25 / -.25)
-'   - Date 恒 "#YYYY-MM-DD HH:MM:SS#" (只有时间时是 1899-12-30)
+'   - Date "#YYYY-MM-DD HH:MM:SS#" (只有时间时是 1899-12-30); 时间部分为零时
+'     整段不写 → "#YYYY-MM-DD#" (§11.200 第二百一十七刀, 真机 P273)
 '   - Boolean #TRUE#/#FALSE#, Null #NULL#, Empty 写空
 '   - 字符串加引号且内部 " 双写; 项间恒逗号; 语句末一个 CRLF
 ' 修复前实测: `Write #f, 3.25` 写盘为 "3", —— 带引号、逗号, 且没有 CRLF。

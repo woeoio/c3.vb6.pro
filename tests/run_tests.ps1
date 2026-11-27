@@ -13508,6 +13508,27 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "G3 colon=True")
     Test-Vbp 'b223_negative_serial_text' "$Tests\b223_negative_serial_text\B223Res.vbp" $b223Needles
     Test-Vbp 'b223_negative_serial_text_x86' "$Tests\b223_negative_serial_text\B223Res.vbp" $b223Needles -Arch "x86"
+    # §11.200 第二百一十七刀: Write # 的 #...# 文本 —— 时间部分为零就整段不写。
+    # 真机 .temp/k217p/P273.bas -> p273w.txt / P274.bas -> p274.txt 十四格全 True;
+    # 改前 CDate(0) 写成 "#1899-12-30 00:00:00#" (无谓的 " 00:00:00")。
+    # Write # 是 ISO 形状, 格本身与区域无关 (只钉含 ":" / 长度 / 两端 #)。
+    $b224Needles = @(
+    "A1 nocolon=True",
+    "A2 len=True",
+    "A3 hash=True",
+    "B1 colon=True",
+    "B2 len=True",
+    "B3 hash=True",
+    "C1 nocolon=True",
+    "C2 len=True",
+    "D1 colon=True",
+    "D2 hash=True",
+    "E1 nocolon=True",
+    "E2 len=True",
+    "F1 noslash=True",
+    "F2 colon=True")
+    Test-Vbp 'b224_write_date_time_zero' "$Tests\b224_write_date_time_zero\B224Res.vbp" $b224Needles
+    Test-Vbp 'b224_write_date_time_zero_x86' "$Tests\b224_write_date_time_zero\B224Res.vbp" $b224Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

@@ -505,6 +505,14 @@ BSTR vb6_FileDateText(double v, int32_t mode) {
     if (mode == 1) {
         SYSTEMTIME st;
         if (!VariantTimeToSystemTime(v, &st)) return vb6_BSTR_FromStr(L"#1899-12-30 00:00:00#");
+        // §11.200 (第二百一十七刀): Write # 的时间部分为零就**整段不写**。真机 P273
+        // (p273w.txt): CDate(0) → "#1899-12-30#"、CDate(1) → "#1899-12-31#"、
+        // CDate(0.0000001) → "#1899-12-30#"; 而 0.5 仍是 "#1899-12-30 12:00:00#"、
+        // -1.5 是 "#1899-12-29 12:00:00#"。改前一律带上 " 00:00:00"。
+        if (st.wHour == 0 && st.wMinute == 0 && st.wSecond == 0) {
+            swprintf(wbuf, 96, L"#%04d-%02d-%02d#", st.wYear, st.wMonth, st.wDay);
+            return vb6_BSTR_FromStr(wbuf);
+        }
         swprintf(wbuf, 96, L"#%04d-%02d-%02d %02d:%02d:%02d#",
                  st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
         return vb6_BSTR_FromStr(wbuf);
