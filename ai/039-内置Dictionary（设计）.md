@@ -15237,3 +15237,62 @@ b233 当场红）。这不是小尾巴，是真机把两件事同时钉住了：
 2. `d = CStr(v)`（`v = Null`）：真机 `[-99]/94`，C3 `[-99]/13` —— 号错了（13 而不是 94）。
 3. `w = Hex(v)`（`v = "x"`）：真机 `[keep]/13`，C3 `[0]/0` —— `HexSlot` 对 BSTR 走宽松提取，文本非数值没有报 13。
 4. 另有 `Hex/Oct` 的 `LongLong` 档与 `Err.Source`/`Err.Description` 空串在册。
+
+### §11.215 第二百三十二刀：`CStr(<整只 Variant 槽>)` 的 Null 面
+
+**读数（真机 `.temp/k225p/P327`，十七格，Variant 槽先置 `"keep"` 或 `-99`）**
+
+| 格 | 表达式 | 真机 | 改前 C3 |
+| --- | --- | --- | --- |
+| V1 | `v = Null: w = CStr(v)` | `[keep]/94/False` | `[]/0/False` |
+| V2 | `v = Empty: w = CStr(v)` | `[]/0/False` | 同 |
+| V3 | `v = "x": w = CStr(v)` | `[x]/0` | 同 |
+| V4 | `v = 1.5: w = CStr(v)` | `[1.5]/0` | 同 |
+| V5 | `w = CStr(Null)` | `[keep]/94` | `[]/0` |
+| D1 | `v = Null: d = CStr(v)` | `[-99]/94` | `[-99]/13` |
+| D2 | `v = Empty: d = CStr(v)` | `[-99]/13` | 同 |
+| D3 | `v = "2.5": d = CStr(v)` | `[2.5]/0` | 同 |
+| D4 | `d = CStr(Null)` | `[-99]/94` | `[-99]/13` |
+| S1 | `v = Null: s = CStr(v)` | `[keep]/94` | 同 |
+| S2 | `v = Empty: s = CStr(v)` | `[]/0` | 同 |
+| N1 | `v = Null: n = CStr(v)` | `[-99]/94` | `[-99]/13` |
+| N2/N3 | `v = Empty` / `v = "7"` | `[-99]/13` / `[7]/0` | 同 |
+| C1 | `s = "a" & CStr(v)`（`v = Null`） | `[keep]/94` | `[a]/0` |
+| C2 | `s = Len(CStr(v))` | `[keep]/94` | `[0]/0` |
+| C3 | `w = CStr(v) & ""` | `[keep]/94` | `[]/0` |
+
+十七格说的是同一句话：**`CStr` 收到 Null，不论消费者是谁，都是 94，值被消费得一个字不剩**。改前只有 S1/S2 那一面（String 目标的 `vb6_BSTR_AssignFromVariant`）是对的 —— 那是 C30-11 第七十三/七十四刀补的严格出口；其余面走的都是宽松的 `vb6_CStr`（`Null ⇒ ""`），于是出现三种错：号不报（V1/V5/C1/C2/C3）、值被清、或者被后一步的 13 盖掉（D1/D4/N1 都报 13 而不是 94）。
+
+**改法：一站换出口，判据两条并用**
+
+`cgen_expr_call_conv_cstr.inc` 的 Fix 056b 在把实参包进 `vb6_VariantFromValue` 之前先问一句「这是不是整只 Variant 槽」，命中就把整个出口换成 `vb6_CStrStrict(<槽>)` —— **不是**再包一层，因为 `vb6_CStrStrict` 的形参本来就是 `vb6_VARIANT`。
+
+判据必须两条并用，理由是这一站手上只有 C 文本，而两种槽的文本长得很不一样：
+
+1. `cExprIsVariantCarrier(a0)` —— 认 C 文本前缀（`vb6_Variant…` / `vb6_VARIANT{`，`isVariantSlot` 兜住 `me->` 一类）。`CStr(Null)` 的实参是 `vb6_VariantNull()`、COM 读是 `vb6_VariantFromComResult(...)`，都由这一条认出来；
+2. `isDefinitelyVariantExpr(*firstArg)` —— **普通局部变体在 C 里就是它自己的名字**（`v`），前缀表一个字也认不出。第一版只写了第 1 条，实测 V1/D1/N1/C 五格全没动（只有 `CStr(Null)` 那两格变对），就是缺了这一问。数组本体不算（`isDefinitelyVariantExpr` 的 `isArr` 出口），与 §11.212 第二百二十九刀同口径。
+
+**为什么不必再造守卫**
+
+raise 一旦发生，`On Error Resume Next` 的 longjmp 就把整条语句抛掉，赋值那一步根本不执行 —— 所以 `d = CStr(v)`（`v = Null`）现在直接停在 94，后一步 `vb6_Dbl_AssignFromBSTR("")` 的 13 没机会发生。这也解释了为什么改完 D1/N1/C1/C2/C3 全对而不需要额外补「第二次 raise 不许盖第一次」：语句级中止是既有机制（第七十九/八十三/八十九大刀那几套），本刀只是**让第一次 raise 真的发生**。
+
+非 Null 档逐字节等价（`vb6_CStrStrict` 的剩余路径就是 `vb6_CStr`），所以 `V2/V3/V4/D2/D3/N2/N3/S2` 一格不动。
+
+**夹具与哨兵**
+
+- 新夹具 `tests/b239_cstr_null_face`（17 格，与 P327 逐格同文本），x64 + x86。
+- `scripts/check_float_to_int_round.ps1` 新增 **S16**（现 S1..S16）：(a) 那一站仍把整只槽交给 `vb6_CStrStrict`；(b) 两条判据都在（C 文本前缀 + AST 那一问）；(c) b239 两套在跑。
+- 形状针脚两枚跟上（b170_member_read_slot_arm / ga_emitc_handle_value_compare）：钉的是「哪一格交给槽档」，形从 `vb6_CStr(vb6_VariantFromValue(h->PV))` 变成 `vb6_CStrStrict(h->PV)`；判定一字未动。
+- 清单：本机 94 份语料哈希移动（每处 +6 字节），按 CI 清单登记 **92 行**（含 2 行新增），inputs 970 → 972。
+
+**验证**
+
+- 夹具 x64 / x86 各 17 格与真机 P327 逐行 `IDENTICAL`。
+- 本机 13 条门禁全绿；b231..b238、b599 复跑不变。
+- CI：head `609a7bca` 时 18/23（三格是形状针脚本体、两格是清单面）；补针脚（`80b03c54`）→ 21/23（只剩清单）；按 CI 清单登记（`c559bef4`，92 行）→ head `36d55ce3` → GA **46066247556 = 23/23 success**。
+
+**背账**
+
+1. `w = Hex(v)`（`v = "x"`）：真机 `[keep]/13`，C3 `[0]/0` —— `vb6_HexSlot` 对 BSTR 走宽松提取，文本非数值没有报 13。
+2. `Hex/Oct` 的 `LongLong` 16 位宽那一档。
+3. `Err.Source` / `Err.Description` 的空串。
