@@ -555,31 +555,36 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
                 if (!nullFamilyVExitCName(call).empty()) return Vb6Type::Variant;
                 // 账 #305 §11.166 (第一百八十三刀): Abs/Int/Fix/Round 在 **Currency 实参**上
                 // 保持 Currency（真机 P191: M1..M4/M6/M7/M9/M10 全部 6|Currency）。
-                // 以前这四枚落到 sym->type (Double) ⇒ 装箱答 VT_R8 (5)、TypeName 答 Double；
-                // 值本身已经是对的 (§11.159 的圈法/整数截取)，缺的只是**身份**。
-                // 语料里没有人重定义这四个名字 (门 R19 钉着)，所以这一问不看符号种类。
+                // §11.204 (第二百二十一刀): Date 实参保持 Date（真机 P283: VarType(Int(t)) = 7、
+                // CStr(Int(t)) = "2021/3/4"、IsDate(Int(t)) = True）；§11.205 把 Abs/Round 也接进来。
+                // §11.207 (第二百二十四刀): 把这两条前账**合并成一条**——「返回子类型 = 实参子类型」
+                // 本来就是一个决定，继续按名字长名单只会越接越碎。真机 .temp/k224p/P298 十档矩阵：
+                //   Integer→2  Long→3  Single→4  Currency→6  Byte→17  Double→5  Date→7
+                //   Boolean→2（值为 -1），Int(2.5)/Round(2.5) 这种字面量仍是 5|Double。
+                // 语料里没有人重定义这四个名字（门 §R19 钉着），所以这一问不看符号种类。
                 {
-                    std::string lb183 = Symbol::toLower(id.name);
+                    const std::string lb183 = Symbol::toLower(id.name);
                     if ((lb183 == "abs" || lb183 == "int" || lb183 == "fix" || lb183 == "round")
                         && !call.positional.empty() && call.positional[0]
-                        && call.positional.size() <= 2
-                        && inferExprType(*call.positional[0]) == Vb6Type::Currency) {
-                        return Vb6Type::Currency;
-                    }
-                }
-                // §11.204 (第二百二十一刀): Int/Fix 在 **Date 实参**上保持 Date —— 真机 P283:
-                // VarType(Int(t)) = 7、CStr(Int(t)) = "2021/3/4"、IsDate(Int(t)) = True，
-                // 而 Int(2.5) 仍是 5|Double。取整本身不变（序列号的 floor / 向零截断），
-                // 缺的只是身份；CStr 那个站点会据此走 vb6_CStrDate。
-                // §11.205 (第二百二十二刀): Abs / Round 同族 —— 真机 P288: VarType(Abs(t)) = 7、
-                // VarType(Round(t,0)) = 7、CStr(Round(t,0)) = "2021/3/5"、
-                // Abs(CDate(-0.5)) = "12:00:00"（vt 7）。CInt/CLng/CCur/CSng/CDbl 不在此列。
-                {
-                    const std::string idn = Symbol::toLower(id.name);
-                    if ((idn == "int" || idn == "fix" || idn == "abs" || idn == "round")
-                        && !call.positional.empty() && call.positional[0]
-                        && inferExprType(*call.positional[0]) == Vb6Type::Date) {
-                        return Vb6Type::Date;
+                        && call.positional.size() <= 2) {
+                        // `Dim i As Integer` 在符号表里记成 Long（C 侧 int32_t），真正的
+                        // Integer 身份住在 knownIntVars_（与 isNarrowIntExpr 同一枚尺）——
+                        // 先问它，否则 Round(i) 会答 3|Long（真机 K5 = 2）。
+                        if (isNarrowIntExpr(call.positional[0].get())) return Vb6Type::Integer;
+                        switch (inferExprType(*call.positional[0])) {
+                        case Vb6Type::Integer:
+                        case Vb6Type::Long:
+                        case Vb6Type::Single:
+                        case Vb6Type::Double:
+                        case Vb6Type::Currency:
+                        case Vb6Type::Date:
+                        case Vb6Type::Byte:
+                            return inferExprType(*call.positional[0]);
+                        case Vb6Type::Boolean:
+                            return Vb6Type::Integer;   /* VB6: Int(CBool(True)) = 2|Integer */
+                        default:
+                            break;
+                        }
                     }
                 }
                 if (sym) return sym->type;

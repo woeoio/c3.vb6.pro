@@ -134,17 +134,45 @@ vb6_VARIANT vb6_AbsV(vb6_VARIANT v) {
 //   1. check_conv_strict_parse 的 R2 把 head 里 vb6_VariantToDouble(v) /
 //      vb6_VariantConvNum 的出现数钉成常数，写进头会多出站点；
 //   2. check_builtin_slot_returns 与 owned-temp 表都从 RTL 头派生，原型在头里就够了。
+// §11.207 (第二百二十四刀): Abs/Int/Fix/Round 在 **Variant 载体**上也要保子类型。
+// 真机 .temp/k224p/P298 / P300（四函数 × 十档，全部同一答案）：
+//   CByte→17  CInt→2  CLng→3  CSng→4  CDbl→5  CCur→6  CDate→7
+//   CBool(True)→2|Integer（Int(CBool(True)) = -1）  "2.9"→5  Empty→2|Integer 0  Null→1
+// 以前 IntV/FixV 只开了 Currency 一格、其余全部堆成 VT_R8（实测 iL/iB/iS 全是 5）。
+// 本函数不重算值：调用方先按载体算出 double，这里只负责「装回哪一档」——
+// 三枚（Int/Fix/Round）同问这一处，免得下次只改一处。
+static vb6_VARIANT vb6_VariantNumSameKind(vb6_VARIANT v, double d) {
+    switch (v.vt) {
+    case vb6_vtByte:     return vb6_VariantByte((uint8_t)d);
+    case vb6_vtInteger:  return vb6_VariantInt((int16_t)d);
+    case vb6_vtLong:     return vb6_VariantLong((int32_t)d);
+    case vb6_vtSingle:   return vb6_VariantSingle((float)d);
+    case vb6_vtDouble:   return vb6_VariantDouble(d);
+    case vb6_vtCurrency: return vb6_VariantCur(d);
+    case vb6_vtDate:     return vb6_VariantDate(d);
+    case vb6_vtBoolean:  return vb6_VariantInt((int16_t)d);   /* VB6: Boolean 载体答 Integer */
+    /* 数值文本按 Double（真机 V3: "2.9" → 5|Double）；非数值文本由 ConvNum 自己抛 13。
+       其余档同一条权威换算。 */
+    case vb6_vtBSTR:
+    default:             return vb6_VariantDouble(d);
+    }
+}
 vb6_VARIANT vb6_IntV(vb6_VARIANT v) {
     if (v.vt == vb6_vtNull) return vb6_VariantNull();
-    // §11.166 (第一百八十三刀): Currency 进 ⇒ Currency 出（真机 P191 M11: 6|Currency|10）。
-    // 与 §11.19 的 vb6_AbsV / vb6_VarNegV 同一口径：先按本子类型算，再装回同一子类型。
-    if (v.vt == vb6_vtCurrency) return vb6_VariantCur(vb6_Int((double)v.cyVal / 10000.0));
-    return vb6_VariantDouble(vb6_Int(vb6_VariantConvNum(v)));
+    if (v.vt == vb6_vtEmpty) return vb6_VariantInt(0);   /* 真机 vE: 2|Integer 0 */
+    return vb6_VariantNumSameKind(v, vb6_Int(vb6_VariantConvNum(v)));
 }
 vb6_VARIANT vb6_FixV(vb6_VARIANT v) {
     if (v.vt == vb6_vtNull) return vb6_VariantNull();
-    if (v.vt == vb6_vtCurrency) return vb6_VariantCur(vb6_Fix((double)v.cyVal / 10000.0));
-    return vb6_VariantDouble(vb6_Fix(vb6_VariantConvNum(v)));
+    if (v.vt == vb6_vtEmpty) return vb6_VariantInt(0);
+    return vb6_VariantNumSameKind(v, vb6_Fix(vb6_VariantConvNum(v)));
+}
+// §11.207: Round 的变体位 —— 值仍走 §11.206 的 vb6_Round（半到偶 + 位域），
+// 这里只负责保载体档（真机 vI..vN 七格）。
+vb6_VARIANT vb6_RoundV(vb6_VARIANT v, int32_t decimals) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    if (v.vt == vb6_vtEmpty) return vb6_VariantInt(0);
+    return vb6_VariantNumSameKind(v, vb6_Round(vb6_VariantConvNum(v), decimals));
 }
 vb6_VARIANT vb6_HexV(vb6_VARIANT v) {
     if (v.vt == vb6_vtNull) return vb6_VariantNull();

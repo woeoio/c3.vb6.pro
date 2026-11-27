@@ -530,7 +530,7 @@ else {
     $i19 = $ty19.IndexOf('§11.166')
     if ($i19 -lt 0) { $bad += 'R19 the Abs/Int/Fix/Round Currency branch is missing' }
     else {
-        $w19 = $ty19.Substring($i19, [Math]::Min(1400, $ty19.Length - $i19))
+        $w19 = $ty19.Substring($i19, [Math]::Min(3000, $ty19.Length - $i19))
         foreach ($nm in @('"abs"', '"int"', '"fix"', '"round"', 'Vb6Type::Currency')) {
             if ($w19 -notmatch [regex]::Escape($nm)) {
                 $bad += ('R19 the branch must name ' + $nm)
@@ -541,13 +541,26 @@ else {
 $conv19 = Read-File 'src/rtl/core/vb6rtl/vb6rtl_conv.c'
 if ($null -eq $conv19) { $bad += 'R19 vb6rtl_conv.c not found' }
 else {
+    # §11.207 (第二百二十四刀): Currency 那一格的身子提到共享的 vb6_VariantNumSameKind，
+    # IntV/FixV 只负责传值 —— 所以「保 Currency」的判据跟着搬到新主人身上，
+    # 同时仍钉住 IntV/FixV 自己不再另写一份（体内必须只有这一枚出口）。
     foreach ($fn in @('vb6_IntV', 'vb6_FixV')) {
         $j19 = $conv19.IndexOf('vb6_VARIANT ' + $fn + '(vb6_VARIANT v)')
         if ($j19 -lt 0) { $bad += ('R19 ' + $fn + ' not found') }
         else {
-            $b19 = $conv19.Substring($j19, [Math]::Min(700, $conv19.Length - $j19))
-            if ($b19 -notmatch 'vb6_vtCurrency') {
-                $bad += ('R19 ' + $fn + ' must keep the Currency subtype')
+            $b19 = $conv19.Substring($j19, [Math]::Min(400, $conv19.Length - $j19))
+            if ($b19 -notmatch 'vb6_VariantNumSameKind\(') {
+                $bad += ('R19 ' + $fn + ' must route through vb6_VariantNumSameKind')
+            }
+        }
+    }
+    $k19 = $conv19.IndexOf('vb6_VariantNumSameKind(vb6_VARIANT v, double d)')
+    if ($k19 -lt 0) { $bad += 'R19 vb6_VariantNumSameKind not found' }
+    else {
+        $c19 = $conv19.Substring($k19, [Math]::Min(900, $conv19.Length - $k19))
+        foreach ($nm19 in @('vb6_vtCurrency', 'vb6_VariantCur')) {
+            if ($c19 -notmatch [regex]::Escape($nm19)) {
+                $bad += ('R19 the carrier wrapper must name ' + $nm19)
             }
         }
     }
@@ -569,6 +582,43 @@ else {
         }
     }
 }
+# ---- R20 (§11.207 第二百二十四刀): 返回子类型 = 实参子类型（不只 Currency/Date）----
+# 真机 .temp/k224p/P298/P300/P302: Integer 2 / Long 3 / Single 4 / Currency 6 /
+# Byte 17 / Double 5 / Date 7 / Boolean→2，Int/Fix 的 Variant 载体同一条。
+$ty20 = Read-File 'src/backend/cgen_util_type.cpp'
+if ($null -eq $ty20) { $bad += 'R20 cgen_util_type.cpp not found' }
+else {
+    if ($ty20 -notmatch 'isNarrowIntExpr\(call\.positional\[0\]\.get\(\)\)') {
+        $bad += 'R20 the numeric-kind branch no longer asks isNarrowIntExpr first (Round(i) would answer Long)'
+    }
+    foreach ($nm in @('Vb6Type::Byte', 'Vb6Type::Single', 'Vb6Type::Long')) {
+        if ($ty20 -notmatch [regex]::Escape($nm)) { $bad += ('R20 the branch must name ' + $nm) }
+    }
+}
+$ct20 = Read-File 'src/backend/cgen_util_ctrl.cpp'
+if ($null -eq $ct20) { $bad += 'R20 cgen_util_ctrl.cpp not found' }
+else {
+    if ($ct20 -notmatch 'case Vb6Type::Integer:') {
+        $bad += 'R20 boxToVariant lost its Integer arm (Int(i) would box as VT_R8)'
+    }
+}
+$conv20 = Read-File 'src/rtl/core/vb6rtl/vb6rtl_conv.c'
+if ($null -eq $conv20) { $bad += 'R20 vb6rtl_conv.c not found' }
+else {
+    if ($conv20 -notmatch 'vb6_VARIANT vb6_RoundV\(') { $bad += 'R20 vb6_RoundV definition missing' }
+    $n20 = @([regex]::Matches($conv20, 'vb6_VariantNumSameKind\(')).Count
+    if ($n20 -ne 4) { $bad += ('R20 vb6_VariantNumSameKind sites = ' + $n20 + ' (want 4 = def + Int/Fix/Round)') }
+    if ($conv20 -notmatch 'vb6_vtByte:\s+return vb6_VariantByte') {
+        $bad += 'R20 the carrier-kind wrapper lost its Byte arm'
+    }
+}
+$runner20 = Read-File 'tests/run_tests.ps1'
+if ($null -eq $runner20) { $bad += 'R20 run_tests.ps1 not found' }
+else {
+    $n20b = @([regex]::Matches($runner20, 'b231_num_kind\\B231Res\.vbp')).Count
+    if ($n20b -ne 2) { $bad += ('R20 b231 run cells = ' + $n20b + ' (want 2 = x64 + x86)') }
+}
+
 if ($bad.Count -gt 0) {
     Write-Host ('FAIL currency_round_station: ' + ($bad -join ' | '))
     exit 1
@@ -580,5 +630,6 @@ Write-Host '  R16 Currency intermediate rounds at every step (single fold exit) 
 Write-Host '  R17 Currency array elements are doubles with the same identity (store/read/ByRef) OK'
 Write-Host '  R18 Currency range gate raises Error 6 on overflow (no UB wrap) OK'
 Write-Host '  R19 Abs/Int/Fix/Round keep the Currency identity (typed + Variant carrier) OK'
-Write-Host 'PASS currency_round_station (R1..R19)'
+Write-Host '  R20 Abs/Int/Fix/Round answer the argument numeric kind (Integer/Long/Single/Byte/Date/Boolean) OK'
+Write-Host 'PASS currency_round_station (R1..R20)'
 exit 0

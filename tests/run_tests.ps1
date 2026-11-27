@@ -13684,6 +13684,26 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "S3 err=0 v=[1.5]")
     Test-Vbp 'b230_round_banker' "$Tests\b230_round_banker\B230Res.vbp" $b230Needles
     Test-Vbp 'b230_round_banker_x86' "$Tests\b230_round_banker\B230Res.vbp" $b230Needles -Arch "x86"
+    # §11.207 第二百二十四刀: Abs/Int/Fix/Round 的返回子类型 = 实参子类型。
+    # 真机 .temp/k224p/P298/P300/P302 全格一致。变体载体那一列只钉 Int/Fix
+    # （Round 的载体出口是下一刀的账，本轮不钉）。
+    $b231Needles = @(
+    "S1=2346175",
+    "S2=2346175",
+    "S3=2346175",
+    "S4=2346175",
+    "T1=222",
+    "T2=[-1]",
+    "U1=77",
+    "V1=33",
+    "V2=1717",
+    "V3=22",
+    "V4=11",
+    "V5=44",
+    "W1=[-5][-5]",
+    "W2=[70000][2]")
+    Test-Vbp 'b231_num_kind' "$Tests\b231_num_kind\B231Res.vbp" $b231Needles
+    Test-Vbp 'b231_num_kind_x86' "$Tests\b231_num_kind\B231Res.vbp" $b231Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

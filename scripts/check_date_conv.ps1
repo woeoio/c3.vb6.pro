@@ -326,13 +326,13 @@ if (($r38raw1 + $r38raw2) -ne 0) { $fail += ('R38 raw day halves = ' + ($r38raw1
 $r39cells = N '\$Tests\\b228_int_fix_date\\B228Res\.vbp' $T
 if ($r39cells -ne 2) { $fail += ('R39 b228 run cells = ' + $r39cells + ' (want 2 = x64 + x86)') }
 $s204type = Get-Content -Raw (Join-Path $Root 'src\backend\cgen_util_type.cpp')
-$r39rule = N 'if \(\(idn == "int" \|\| idn == "fix" \|\| idn == "abs" \|\| idn == "round"\)' $s204type
+$r39rule = N 'if \(\(lb183 == "abs" \|\| lb183 == "int" \|\| lb183 == "fix" \|\| lb183 == "round"\)' $s204type
 if ($r39rule -ne 1) { $fail += ('R39 Int/Fix (+Abs/Round) date identity = ' + $r39rule + ' (want 1)') }
 # R40 (§11.205 第二百二十二刀): Abs / Round 也在 Date 实参上保持 Date；
 # CInt/CLng/CCur/CSng/CDbl 不在此列。真机 P288/P289。
 $r40cells = N '\$Tests\\b229_abs_round_date\\B229Res\.vbp' $T
 if ($r40cells -ne 2) { $fail += ('R40 b229 run cells = ' + $r40cells + ' (want 2 = x64 + x86)') }
-$r40set = N 'idn == "abs" \|\| idn == "round"' $s204type
+$r40set = N 'lb183 == "abs" \|\| lb183 == "int"' $s204type
 if ($r40set -ne 1) { $fail += ('R40 Abs/Round in the date set = ' + $r40set + ' (want 1)') }
 
 if ($fail.Count -gt 0) {

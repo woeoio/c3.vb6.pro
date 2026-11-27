@@ -3947,10 +3947,36 @@ bool CCodeGen::isNarrowIntExpr(const Expr* e) const {
 static std::string mathNullFamilyV(const ASTNode* node, const std::string& cExpr) {
     if (!node || node->kind != ASTNodeKind::IndexOrCallExpr) return std::string();
     const auto& call = static_cast<const IndexOrCallExpr&>(*node);
-    if (call.positional.size() != 1 || !call.callee
-        || call.callee->kind != ASTNodeKind::IdentifierExpr) return std::string();
+    if (!call.callee || call.callee->kind != ASTNodeKind::IdentifierExpr) return std::string();
     const std::string fn = Symbol::toLower(
         static_cast<const IdentifierExpr&>(*call.callee).name);
+    // §11.207 (第二百二十四刀): Round 带 0..1 个位数实参，下面那张单参表接不住。
+    // 真机 .temp/k224p/P298 / P300 的 vI..vN 七格：变体载体上的 Round 也保子类型。
+    // 作法：从 `vb6_Round(vb6_VariantToDouble(` 之后按括号配平取出第一实参正文，
+    // 剩下尾巴是 ")" 位数就缺省为 0，是 ", n)" 就照抄——与表里那四枚同一个出口。
+    if (fn == "round" && call.positional.size() <= 2) {
+        static const std::string preR = "vb6_Round(vb6_VariantToDouble(";
+        size_t sR = 0;
+        while (sR < cExpr.size() && (cExpr[sR] == '(' || cExpr[sR] == ' ')) sR++;
+        if (cExpr.compare(sR, preR.size(), preR) == 0) {
+            const size_t pR = sR + preR.size();
+            int depthR = 1;
+            size_t kR = pR;
+            for (; kR < cExpr.size(); ++kR) {
+                if (cExpr[kR] == '(') depthR++;
+                else if (cExpr[kR] == ')') { if (--depthR == 0) break; }
+            }
+            if (kR < cExpr.size()) {
+                std::string innerR = cExpr.substr(pR, kR - pR);
+                std::string tailR = cExpr.substr(kR + 1);
+                if (!tailR.empty() && tailR.back() == ')') tailR.pop_back();
+                if (tailR.empty()) tailR = ", 0";
+                return "vb6_RoundV(" + innerR + tailR + ")";
+            }
+        }
+        return std::string();
+    }
+    if (call.positional.size() != 1) return std::string();
     static const struct { const char* vb; const char* pre; const char* out; } kTbl[] = {
         {"abs", "vb6_Abs(vb6_VariantToDouble(", "vb6_AbsV("},
         {"int", "vb6_Int(vb6_VariantToDouble(", "vb6_IntV("},
@@ -4570,7 +4596,9 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
                 // `As Integer` 变量符号表记成 Long), 不在这一站抢装 VT_I4 —— 交给末尾那个
                 // 唯一权威 boxToVariant (判据 = isNarrowIntExpr, 两位共用一处)。
                 if (isNarrowIntExpr(static_cast<const Expr*>(valueNode))) break;
-                return "vb6_VariantLong(" + cExpr + ")";
+                // §11.207: 显式收窄 —— `vb6_Abs(l)` 这类 C 侧返回 double 的调用，不 cast
+                // 就会让 _Generic 猜成 VT_R8（真机 AL/IL/FL/RL 全要求 3|Long）。
+                return "vb6_VariantLong((int32_t)(" + cExpr + "))";
             // `Dim i As Integer` / CInt(...) 这一族以前也装成 VT_I4 (同一行 d121 的
             // int=3)。VB6 对 Integer 就是 VT_I2 —— 显式收窄, 不靠 _Generic 猜 short。
             case Vb6Type::Integer:   return "vb6_VariantInt((int16_t)(" + cExpr + "))";
@@ -4820,8 +4848,17 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
         }
     }
     switch (inferExprType(*expr)) {
-    case Vb6Type::Boolean:
-        // 形参是 int16_t: 显式收窄, 兼容 _Bool/int 两种 C 侧布尔表示.
+    case Vb6Type::Integer:
+        // §11.207 (第二百二十四刀): 与存储站 `case Integer` 同一行 —— 这里以前**没有**
+        // Integer 臂，于是 `Int(i)` / `Int(CBool(True))` 这类 C 侧返回 double 的调用落
+        // default ⇒ VT_R8（真机 II/RI/D1 全要求 2|Integer）。
+        return "vb6_VariantInt((int16_t)(" + cExpr + "))";
+    case Vb6Type::Long:
+        // §11.207 (第二百二十四刀): 与存储站同一条 —— `vb6_Abs(l)` / `vb6_Int(l)` 这类
+        // C 侧返回 double 的调用，不 cast 就被 _Generic 猜成 VT_R8（真机 AL/IL/FL/RL = 3）。
+        // 窄档（Integer 值）已在上面被 isNarrowIntExpr 接走，不会走到这里。
+        return "vb6_VariantLong((int32_t)(" + cExpr + "))";
+    case Vb6Type::Boolean:        // 形参是 int16_t: 显式收窄, 兼容 _Bool/int 两种 C 侧布尔表示.
         return "vb6_VariantBool((int16_t)(" + cExpr + "))";
     case Vb6Type::Byte:
         return "vb6_VariantByte((uint8_t)(" + cExpr + "))";
