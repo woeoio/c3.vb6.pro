@@ -849,10 +849,58 @@ int vb6_ArgConvertFailed(void) {
     return (vb6_conv_fail_serial >= 0 && vb6_conv_fail_serial == vb6_err_serial) ? 1 : 0;
 }
 
+// §11.217: Err.Source 的运行期真值（工程名）与内部占位符的判别都住这一处。
+// 播种由生成的入口点做（`vb6_SetErrSourceSeed(L"<.vbp Name>")`，见
+// cgen_base_generate_entry.inc 的 emitErrSourceSeed）；单文件编译不播种 ⇒ seed 为空，
+// 行为仍是旧口径（空串），不做任何猜测。
+// 所有权: **必须是真 BSTR** —— Err.Source 的读取侧按 BSTR 取长度前缀，直接存宽字符
+// 字面量会读到长度为 0（本刀实测：指针非空、打印却是空串）。所以 setter 当场拷一份，
+// 播种只发生在入口点一次，进程生命期不释放。
+static BSTR vb6_err_source_seed = NULL;
+
+void vb6_SetErrSourceSeed(const wchar_t* name) {
+    vb6_err_source_seed = (name && *name) ? vb6_BSTR_FromStr(name) : NULL;
+}
+
+// 两枚内部占位符（"VBA.Information" / "VBA.Conversion"）不是 VB6 的 Err.Source —— 比对只住这里。
+int vb6_ErrSourceIsInternal(BSTR src) {
+    if (!src) return 1;
+    return wcscmp(src, L"VBA.Information") == 0 || wcscmp(src, L"VBA.Conversion") == 0;
+}
+
+// 号 → 默认描述: 只在调用方没给描述时用（真机 E9 = 11/"Division by zero"）。
+// 表只登记**已经量过**的那几枚，没量的宁可留空 —— 编一句没读数的文本比空串更坏。
+BSTR vb6_ErrDefaultDescription(int32_t errNum) {
+    switch (errNum) {
+        case 5:   return vb6_BSTR_FromStr(L"Invalid procedure call or argument");
+        case 6:   return vb6_BSTR_FromStr(L"Overflow");
+        case 9:   return vb6_BSTR_FromStr(L"Subscript out of range");
+        case 11:  return vb6_BSTR_FromStr(L"Division by zero");
+        case 13:  return vb6_BSTR_FromStr(L"Type mismatch");
+        case 20:  return vb6_BSTR_FromStr(L"Resume without error");
+        case 94:  return vb6_BSTR_FromStr(L"Invalid use of Null");
+        case 438: return vb6_BSTR_FromStr(L"Object doesn't support this property or method");
+        case 450: return vb6_BSTR_FromStr(L"Wrong number of arguments or invalid property assignment");
+        case 457: return vb6_BSTR_FromStr(L"This key is already associated with an element of this collection");
+        case 481: return vb6_BSTR_FromStr(L"Invalid picture");
+        default:  return NULL;
+    }
+}
+
 void vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description) {
     ++vb6_err_serial;
     vb6_err.number = errNum;
+    // §11.217 (第二百三十四刀): 真机 .temp/k225p/P329 的 E7/E9 —— `n = CLng(v)`（13）与
+    // `d = 1 / 0`（11）之后 `Err.Source` 都是 **工程名**（"P329"），而不是 C3 内部那两枚
+    // "VBA.Information"/"VBA.Conversion" 占位符（那是写给人看的位置标签，从来不是 VB6 的
+    // Err.Source）。口径：NULL 与那两枚内部串都算「运行期错误」⇒ 用播种的工程名；
+    // 用户 `Err.Raise n, src, desc` 给的 src 一律原样保留（E3 = [mySrc]）。
+    if (!source || vb6_ErrSourceIsInternal(source)) source = vb6_err_source_seed;
     vb6_err.source = source;
+    // §11.217 第二半: 真机 E9 的 Description 是 "Division by zero"，而
+    // vb6_ErrRaiseNumber(11) 以前交的是 NULL ⇒ Err.Description 空串。号与描述属于同一个
+    // 权威，所以描述表也住这一处: 调用方给了就一字不改，没给才查表（表里没有就留空）。
+    if (!description) description = vb6_ErrDefaultDescription(errNum);
     vb6_err.description = description;
     // 第一百九十三刀 (§11.176): Resume Next 不再「就地返回」。
     //   真机的 A5 读数（.temp/k191p/p217.txt）是 `Call PEscape` 之后 `hits` **不动** ——
@@ -1115,6 +1163,10 @@ void vb6_RaiseError(int32_t errNum, BSTR description) {
     // 语句级守卫那里**一律不可见** ⇒ 语句照样把 0 写进目标。真机口径一成不变：报错即中止语句。
     ++vb6_err_serial;
     vb6_err.number = errNum;
+    // §11.217 (第二百三十四刀): 与 vb6_ErrRaise 同一口径 —— 运行期报错的 Err.Source 是
+    // **工程名**（真机 .temp/k225p/P329 的 E7 `n = CLng("x")` = 13/[P329]、
+    // E9 `d = 1 / 0` = 11/[P329]）。这一枚以前根本不碰 source ⇒ 读回空串。
+    vb6_err.source = vb6_err_source_seed;
     vb6_err.description = description;
     // 第一百九十五刀 (§11.178): 与 vb6_ErrRaise 同口径 —— **有帧就先 longjmp**。
     //   以前这里先问 resume_next、答 yes 就就地 return，于是溢出这种走本函数报的错误

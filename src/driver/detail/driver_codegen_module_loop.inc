@@ -135,6 +135,7 @@
         // 参考二进制 (Codejock GUISample.exe) 的 SaveSetting(App.Title, ...) 键就是
         // exe 名, 编译产物要与参考运行的持久化状态同键才能表现一致。
         cgen.setProjectTitle(appTitleSeed());
+        cgen.setProjectName(vbpProjectName_);
         cgen.setStartupObject(startupObject);      // Fix 142: 启动对象 (入口点归属模块)
         cgen.setModulePublicConsts(&modulePublicConsts);  // Fix 086: 跨模块常量内联
         cgen.setDesignerFiles(&frmFiles_);  // Fix 112: 工程内 UserControl 设计器描述

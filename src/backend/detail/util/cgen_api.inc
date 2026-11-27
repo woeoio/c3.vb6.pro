@@ -328,6 +328,8 @@
     // 算好注入。入口点把它播种给 RTL 的 `vb6_SetAppTitle` —— App.Title 与 MsgBox 默认题头
     // 都只问那一格（见 vb6rtl_system.c 的所有权注释）。
     void setProjectTitle(std::string t) { projectTitle_ = std::move(t); }
+    // §11.217: Err.Source 的种子（.vbp 的 Name=）。与 setProjectTitle 同一个入口模板里播种。
+    void setProjectName(std::string n) { projectName_ = std::move(n); }
     // 账 #305 §B187 第二腿: 注入"在运行期 coclass 描述表里占一行"的类名名单 (小写)。
     void setProjectCoclassNames(const std::unordered_set<std::string>* s) {
         projCoclassNames_ = s;

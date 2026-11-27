@@ -22,6 +22,17 @@
                 c_.emitLine("vb6_SetAppTitle(L\"" + escapeWideCString(projectTitle_)
                             + "\");  /* 账 #592: App.Title = .vbp 的 Title */");
             };
+            // §11.217 (第二百三十四刀): Err.Source 的运行期真值。真机 .temp/k225p/P329 的 E7/E9:
+            // `n = CLng(v)`（13）与 `d = 1 / 0`（11）之后 `Err.Source` 都是 **工程名**（"P329"），
+            // 不是 VB IDE 里那种 "VBA.Information"/"VBA.Conversion" —— 那两个串是 C3 内部给
+            // 自己看的占位符。与 App.Title 同一条闸：只在知道工程名时播种，单文件编译一行不发
+            // （行为与改动前一致，读取侧仍退空串）。
+            auto emitErrSourceSeed = [&]() {
+                const std::string seed = !projectName_.empty() ? projectName_ : projectTitle_;
+                if (seed.empty()) return;
+                c_.emitLine("vb6_SetErrSourceSeed(L\"" + escapeWideCString(seed)
+                            + "\");  /* §11.217: Err.Source = 工程名 */");
+            };
             bool hasMain = false;
             // 2026-11-04 免注册 COM: -ComMode 注入。只在显式给旗时发一行，未给时**一行不发**
             // ⇒ 所有既有产物的 C 文本逐字节不变（Emit manifest 585 份口径不动）。
@@ -138,6 +149,7 @@
             emitOcxRefReg();
             c_.emitLine("vb6_Init();");
             emitAppTitleInit();
+            emitErrSourceSeed();
             if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
             // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
             emitExtInits();
@@ -155,6 +167,7 @@
             emitOcxRefReg();
             c_.emitLine("vb6_Init();");
             emitAppTitleInit();
+            emitErrSourceSeed();
             if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
             // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
             emitExtInits();
@@ -182,6 +195,7 @@
             emitOcxRefReg();
                 c_.emitLine("vb6_Init();");
                 emitAppTitleInit();
+                emitErrSourceSeed();
                 // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
                 emitExtInits();
                 if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
@@ -199,6 +213,7 @@
             emitOcxRefReg();
             c_.emitLine("vb6_Init();");
             emitAppTitleInit();
+            emitErrSourceSeed();
             if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
             // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
             emitExtInits();
@@ -222,6 +237,7 @@
             emitOcxRefReg();
                 c_.emitLine("vb6_Init();");
                 emitAppTitleInit();
+                emitErrSourceSeed();
                 if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
                 // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
                 emitExtInits();

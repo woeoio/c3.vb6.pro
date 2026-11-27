@@ -478,6 +478,11 @@ int32_t vb6_ErrLastDllError(void);
 void vb6_ErrSetLastDllError(int32_t code);
 void vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description);
 void vb6_ErrRaiseNumber(int32_t errNum);
+// §11.217 (第二百三十四刀): Err.Source 的运行期真值 = 工程名（.vbp 的 Name=）。
+// 生成的入口点在 vb6_Init 之后播种；单文件编译不播种 ⇒ 旧口径（空串）。
+void vb6_SetErrSourceSeed(const wchar_t* name);
+int vb6_ErrSourceIsInternal(BSTR src);
+BSTR vb6_ErrDefaultDescription(int32_t errNum);
 // C30-11 第七十九刀 (§B227): 错误序号 —— 每次 vb6_ErrRaise 自增。赋值站用它判
 // 断「本语句里 raise 过吗」：变了就不写目标（VB6 的语句级中止）。
 int32_t vb6_ErrSerial(void);

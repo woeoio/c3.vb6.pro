@@ -13903,6 +13903,21 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "L2=[]/0/True")
     Test-Vbp 'b240_hex_oct_text' "$Tests\b240_hex_oct_text\B240Res.vbp" $b240Needles
     Test-Vbp 'b240_hex_oct_text_x86' "$Tests\b240_hex_oct_text\B240Res.vbp" $b240Needles -Arch "x86"
+    # §11.217 第二百三十四刀: Err.Source / Err.Description 的「空串面」与「运行期 raise 面」。
+    # 真机 .temp/k225p/p329.txt（十格）：无错误时两者皆空；用户 Err.Raise 的源与描述原样保留；
+    # 运行期 13/11 的 Source 是**工程名**（真机 "P329"，本夹具 "B241Res"）、
+    # Description 是 "Type mismatch"/"Division by zero"。改前 C3 两格都是空串（raise 站点没源）。
+    $b241Needles = @(
+    "E1=[]/0",
+    "E2=[]/0",
+    "E3=[mySrc]/[myDesc]/5",
+    "E4=[]/[]/0",
+    "E7=13/[B241Res]/[Type mismatch]",
+    "E8=[]/[]/0",
+    "E9=11/[B241Res]/[Division by zero]",
+    "E10=0/0/0")
+    Test-Vbp 'b241_err_source_desc' "$Tests\b241_err_source_desc\B241Res.vbp" $b241Needles
+    Test-Vbp 'b241_err_source_desc_x86' "$Tests\b241_err_source_desc\B241Res.vbp" $b241Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

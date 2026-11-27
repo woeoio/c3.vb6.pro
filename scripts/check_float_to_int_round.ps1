@@ -504,8 +504,40 @@ foreach ($slot216 in @(@('Hex', $hSlot216), @('Oct', $oSlot216))) {
 $b240Cells = @([regex]::Matches($runnerText, 'b240_hex_oct_text\\B240Res\.vbp')).Count
 if ($b240Cells -ne 2) { $bad += ("S17 b240 run cells = " + $b240Cells + " (want 2 = x64 + x86)") }
 
+# ---- S18: Err.Source / Err.Description 的空串面与运行期 raise 面 (账 §11.217 第二百三十四刀) ----
+# 真机 .temp/k225p/p329.txt（十格）：无错误时两者皆空；用户 Err.Raise 的源与描述原样保留；
+# 运行期 13/11 的 Source 是**工程名**、Description 是 "Type mismatch"/"Division by zero"。
+# 三条判据：(a) 两张 raise 站点都把「没有源」翻成播种的工程名；
+#           (b) 播种值**是 BSTR**（宽字面量存进去读侧长度为 0，本刀实测过的坑）；
+#           (c) 入口点只在知道工程名时播种；夹具 b241 两套。
+$rtl217 = Get-CodeText (Join-Path $root "src\rtl\core\vb6rtl\vb6rtl.c")
+if ($rtl217 -notmatch 'vb6_err_source_seed = \(name && \*name\) \? vb6_BSTR_FromStr\(name\) : NULL;') {
+    $bad += "S18 the Err.Source seed is not stored as a real BSTR (a wide literal reads back as an empty string)"
+}
+$raise217 = [regex]::Match($rtl217, 'void vb6_ErrRaise\(int32_t errNum, BSTR source, BSTR description\) \{[\s\S]*?\n\}')
+if (-not $raise217.Success) {
+    $bad += "S18 vb6_ErrRaise body not found"
+} elseif ($raise217.Value -notmatch 'source = vb6_err_source_seed;') {
+    $bad += "S18 vb6_ErrRaise no longer fills Err.Source from the project name"
+}
+$raiseErr217 = [regex]::Match($rtl217, 'void vb6_RaiseError\(int32_t errNum, BSTR description\) \{[\s\S]*?\n\}')
+if (-not $raiseErr217.Success) {
+    $bad += "S18 vb6_RaiseError body not found"
+} elseif ($raiseErr217.Value -notmatch 'vb6_err\.source = vb6_err_source_seed;') {
+    $bad += "S18 vb6_RaiseError no longer fills Err.Source from the project name"
+}
+$entry217 = Get-CodeText (Join-Path $root "src\backend\detail\base\cgen_base_generate_entry.inc")
+if ($entry217 -notmatch 'vb6_SetErrSourceSeed') {
+    $bad += "S18 the entry template no longer seeds the project name"
+}
+if ($entry217 -notmatch 'projectName_') {
+    $bad += "S18 the entry seed no longer reads the .vbp Name="
+}
+$b241Cells = @([regex]::Matches($runnerText, 'b241_err_source_desc\\B241Res\.vbp')).Count
+if ($b241Cells -ne 2) { $bad += ("S18 b241 run cells = " + $b241Cells + " (want 2 = x64 + x86)") }
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise)"

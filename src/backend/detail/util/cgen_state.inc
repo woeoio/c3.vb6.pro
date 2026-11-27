@@ -1506,6 +1506,11 @@
     // `App.Title` 读取都只问那一格。单文件编译（无 .vbp）时为空 ⇒ 入口点一行不发。
     std::string projectTitle_;
 
+    // §11.217 (第二百三十四刀): .vbp 的 **Name=**（工程名）—— Err.Source 的运行期真值。
+    // 真机 .temp/k225p/P329 的 E7/E9 读数：13 / 11 之后 `Err.Source` 都是 "P329"（工程名），
+    // 不是 IDE 里那两个 "VBA.*" 占位符。与 App.Title 同一条闸：单文件编译为空 ⇒ 不发播种行。
+    std::string projectName_;
+
     // CoClass 身份 (tB, ai/022 B13b): stage 2.7 Pass E 求出的唯一出口 (coclassIds_)。
     // 只有 generateDllEntry 读它 —— 产品里的 CLSID / 默认接口 IID / 组名 ProgID 一律
     // 从这里取，prelude 里那两枚 lambda 退成"读不到块的类"的兜底路径。

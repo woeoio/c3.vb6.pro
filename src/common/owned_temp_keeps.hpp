@@ -281,6 +281,9 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_DecimalToBSTR",
         "vb6_Dir",
         "vb6_Environ",
+        // §11.217 (第二百三十四刀): 号 ⇒ 默认描述的出口**现造**一枚 BSTR（vb6_BSTR_FromStr）。
+        // 推导侧（K13）认它 owned；这里不登记，发码侧就会把一枚它以为不是新造的值放掉。
+        "vb6_ErrDefaultDescription",
         // Print#/Write# 的格式化族（交出去的都是新造的 BSTR，归调用方所有）
         "vb6_FileBoolText",
         "vb6_FileDateText",
