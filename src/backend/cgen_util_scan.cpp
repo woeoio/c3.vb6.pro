@@ -221,6 +221,22 @@ bool CCodeGen::exprCanRaiseVariantStore(Expr* e) const {
             return exprCanRaiseVariantStore(static_cast<UnaryExpr&>(*e).operand.get());
         case ASTNodeKind::IndexOrCallExpr: {
             auto& c = static_cast<IndexOrCallExpr&>(*e);
+            // §11.214: **数组下标**那一形不是调用 —— 它本身不转换、不 raise（越界 9 那一档
+            // 本轮未量，而且 tests/test_bstr_borrow_slot.bas 的借用形状钉着原有发码：
+            // `sA = strArr(0)` 必须是 vb6_VariantFromValue(VB6_SA_AT(...)) 那一形）。
+            // 所以只递归实参，不看“下标本身”。其余 IndexOrCall（内建 / 过程 / 方法 / 晚绑定）
+            // 一律当会 raise（保守宽）。
+            if (c.callee && c.callee->kind == ASTNodeKind::IdentifierExpr) {
+                const std::string lw = Symbol::toLower(
+                    static_cast<IdentifierExpr&>(*c.callee).name);
+                if (knownArrays_.count(lw) || arrayElemTypes_.count(lw)) {
+                    for (auto& a : c.positional)
+                        if (exprCanRaiseVariantStore(a.get())) return true;
+                    for (auto& na : c.named)
+                        if (exprCanRaiseVariantStore(na.value.get())) return true;
+                    return false;
+                }
+            }
             if (exprCanRaiseVariantStore(c.callee.get())) return true;
             for (auto& a : c.positional)
                 if (exprCanRaiseVariantStore(a.get())) return true;
