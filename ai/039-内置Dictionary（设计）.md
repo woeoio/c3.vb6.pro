@@ -14752,3 +14752,77 @@ Double）、`RI` 给 3、`D1..D3` 给 5、`K5` 给 3。`AI`/`II`/`FI`（Integer�
   这一刀最贵的不是改码，是**发现那张矩阵属于四个函数**：上一刀的背账写成「`Round` 的子类型
   保持」，若照那句话只改 `Round`，`Abs`/`Int`/`Fix` 的 Long/Byte 两档会继续错着，
   而它们今天没有任何夹具。
+
+## §11.208 Round 的变体载体出口：改道写在了一处，问的人却在另一处（第二百二十五刀）
+
+上一刀的背账第一条是「`Round` 的变体载体出口」：真机 `P298` 的 `vI..vN` 与 `P300` 的 `V1..V7`
+第三列早就量到了，`vb6_RoundV` 也已经落在 RTL 里，只差发码那一站。本刀量的结果是：
+**改道其实写过了 —— 写在了一个永远问不到的地方。**
+
+### 一、现象
+
+```
+vI=2  vL=3  vS=4  vC=6  vB=17  vE=2  vN=1      真机 Round(v)：保载体子类型
+C3 改前：vI..vN 七个全 5（VT_R8）
+```
+
+`P300` 同一件事，按值分列：`V1=2 2 5`、`V2=7 7 5`、`V4=17 17 5`、`V6=6 6 5`、`V7=4 4 5`，
+`W2=5` —— 第三列（Round）全是 5，前两列（Int/Fix）全对。
+
+### 二、病根：前缀对不上
+
+上一刀在 `wrapVariantValue` 的 `mathNullFamilyV` 里加了 round 分支，判据是
+`cExpr` 以 `vb6_Round(vb6_VariantToDouble(` 开头。实测发码长这样：
+
+```c
+vb6_VariantBorrowFromValue(vb6_VariantBorrowFromValue(vb6_Round(vb6_VariantToDouble(v), 0)))
+```
+
+问到那一站时，`cExpr` 的头已经是 `vb6_VariantBorrowFromValue(` —— 前缀判据**根本对不上**，
+分支静默落空。`Abs/Int/Fix` 为什么对？它们走的是 `boxToVariant` 里那张 k64 单参表
+（`{"int", "vb6_Int(vb6_VariantToDouble(", "vb6_IntV("}` …），那张表在包装**之前**命中。
+`Round` 有 0..1 个位数实参，被那张表的 `positional.size() == 1` 闸门挡在门外，于是它一路
+落到 `_Generic` 的 double 档。
+
+一句话：**同一个决定被写了两份，其中一份写在了一条走不到的路上。** 这比漏写更难量 ——
+代码看上去是「已经处理过了」。
+
+### 三、改法
+
+在 k64 那一站（与那张单参表并排）补 round 臂：从
+`vb6_Round(vb6_VariantToDouble(` 之后按括号配平取第一实参正文，尾巴空 ⇒ 位数缺省 `, 0`，
+尾巴是 `, n)` ⇒ 照抄，交出 `vb6_RoundV(载体[, n])`。`mathNullFamilyV` 里那一支保持不变
+（它守的是另一条入口；两条入口同一出口，多一层兜底不是第二份口径）。
+
+### 四、夹具与区域无关
+
+`tests/b232_round_carrier`（十五格，x64/x86 各一份，全 `Debug.Print`）：
+
+- `N1..N8`：载体八档 —— Integer `2/3`、Long `3/70000`、Single `4/2`、Currency `6/2`、
+  Byte `17/7`、Date `7/5`（用 `Day(Round(v))` 避开区域文本）、Boolean `2/-1`、Empty `2/0`；
+- `N9`：`Null` → `IsNull` True、`VarType` 1；
+- `M1..M5`：值仍是 §11.206 的口径 —— `Round(v)=2`/`Round(v,2)=2.5`、`Round(0.5)=0`、
+  `Round(2.675,2)=2.68`、`"2.9"` → `5/3`、`-5`；
+- `K1`：直接档仍是实参子类型（`236`）—— 上一刀那一条没被本刀碰坏。
+
+真机 `P304.bas` → `p304.txt` 十五行；C3 改后 x64/x86 逐行相同。
+
+### 五、读数与针
+
+- 新增 **R21**：装箱站的 round 臂恰 1 处、它交的确实是 `vb6_RoundV(`、`vb6_RoundV`
+  定义在 RTL 恰 1 处、b232 两台在跑。
+- 本机 14 条门禁全绿；清单 inputs 956 → 958（b232 两行，逐行 targeted 复算）。
+- 神谕：`.temp/k224p/P298.bas`（vI..vN）、`P300.bas`（V1..V7 按值）、`P304.bas`（夹具十五格）。
+- 门：run `46003962583`（`dev`、head `6692df0d`；23/23 success）。
+
+### 六、记账
+
+- 代码：`6692df0d`（装箱站一处 + 夹具 + R21 + 清单两行）。
+- **号**：本节 = 第二百二十五刀 / §11.208。
+- 背账：`Hex(Date)` / `Oct(Date)` 的「先四入后进制」（真机 `ACE4`、C3 `ACE3`）；
+  `Abs`/`Sgn` 在 `Empty`/`Null` 上的传播（本轮 `aE/aN/iE/iN/fE/fN` 读数全对，但夹具没钉，
+  属未验证的绿）；`Err.Source` / `Err.Description` 读空串。
+- 教训：**「已经处理过」的代码也要量一遍发码。** 上一刀在 `mathNullFamilyV` 里写下 round 分支时，
+  判据是文本前缀；而同一个表达式在两站之间已经被包了一层 `vb6_VariantBorrowFromValue(`，
+  前缀判据就永远为假。这类错误不会红、不会 warn，只会让「明明写了」的那一档继续答错 ——
+  因此每一刀的验收必须落在**发码文本**或**夹具读数**上，不能落在「我加了这个分支」上。
