@@ -1007,6 +1007,8 @@ sha256=a2f613eac5ac3ddff4519a215a77abfba6f8b2a239acc91edf794c0597c0edb9 ascii256
 sha256=068682edd611364c5f144f4d1fb6a17f274ffdb65fa3a5aa237272c3990a045c ascii256=a85eb10005d45ffe24469264d0e7e4ee4b477497447477c91855182e88a77518 rc=0 bytes=21039 tests/b238_variant_store_abort/B238Res.vbp
 sha256=a2e050dd1800178f3e6fd5ca5ef61f9022dc5ee1befffb4a001a9f6be78fff96 ascii256=cd2f530cbbc2817218181297ae5091f9fc65b32b7cd041cdbbe0aa244571f7ac rc=0 bytes=22038 tests/b239_cstr_null_face/B239Main.bas
 sha256=fbb7284f62415ef912d497b6c32229a0ad0fd056061bce1260bfbcd83f145b84 ascii256=cd2f530cbbc2817218181297ae5091f9fc65b32b7cd041cdbbe0aa244571f7ac rc=0 bytes=22116 tests/b239_cstr_null_face/B239Res.vbp
+sha256=a474b9146cbe113d4a843a7f3b6f0fc1550ea80f9d9ec19d00d19d3123069ff7 ascii256=14b52079a180f5b2c9bb59d49b28b7dcc0034d2a48ae3181359163e466c97a3e rc=0 bytes=19618 tests/b240_hex_oct_text/B240Main.bas
+sha256=efc9a02b541503f9fda4bef0c2aa68dd33b04a33aacc18e75d70d2f3340cbcd7 ascii256=14b52079a180f5b2c9bb59d49b28b7dcc0034d2a48ae3181359163e466c97a3e rc=0 bytes=19696 tests/b240_hex_oct_text/B240Res.vbp
 # 账 #305 SB222（第二百三十刀）：tests/b230_arrout 是数组形参**出站回写**那两格的夹具（两台各一条真跑）；
 # 新增两份输入的哈希取自本机复算 —— 本刀 534 行逐行零移动（RTL 头不进 --emit-c），所以没等门上的数。
 # 账 #305 SB223（第二百三十三刀）：tests/b231_byrefparam 是 ByRef 标量回写那两格的夹具（两台各一条真跑）；
