@@ -15184,3 +15184,56 @@ b233 当场红）。这不是小尾巴，是真机把两件事同时钉住了：
 1. `w = "keep": w = CStr(Abs(v))`（`v = Null`）—— 真机 `[keep]/94`（**目标一字不动**），C3 现在给 `[]/94`：错误号对了、值被清成空串。这是**变体目标上的赋值守卫**那一族（表达式里抛错 ⇒ 语句整条中止），与本刀的提取门是两件事，下一刀处理。
 2. `Hex/Oct` 的 `LongLong` 档（16 位宽）。
 3. `Err.Source` / `Err.Description` 空串。
+
+### §11.214 第二百三十一刀：右值 raise ⇒ 语句整条中止
+
+**读数（真机 `.temp/k225p/P325` / `P326`，Variant 目标先置 `"keep"`）**
+
+| 格 | 表达式 | 真机 |
+| --- | --- | --- |
+| W1 | `v = Null: w = CStr(Abs(v))` | `[keep]/94/False` |
+| W2 | `v = Null: w = CStr(v)` | `[keep]/94/False` |
+| W3 | `v = "x": w = Abs(v)` | `[keep]/13/False` |
+| W4 | `v = "": w = Int(v)` | `[keep]/13/False` |
+| W5 | `v = "x": w = CLng(v)` | `[keep]/13/False` |
+| W6 | `d = 0: w = 1 / d` | `[keep]/11/False` |
+| W7 | `v = "x": w = v + 1` | `[keep]/13/False` |
+| W8 | `v = "x": w = Hex(v)` | `[keep]/13/False` |
+| W9 | `v = Null: w = Hex(v)` | `[]/0/True`（不抛错，槽变 Null） |
+| W10 | `v = "x": w = CStr(Abs(v))` | `[keep]/13/False` |
+| S1..S3 | String 目标的同三形（`CStr(Null)` / `CLng("x")` / `1/0`） | `[keep]/94`、`[keep]/13`、`[keep]/11` |
+| D1/D2 | Double 目标的 `CStr(Null)` / `CLng("x")` | `[-99]/94`、`[-99]/13` |
+
+十格说的是同一句话：**右值求值里任何一次 raise 都把语句整条中止**，Variant 目标一个字都不写。String 与 Double 目标这一族早已如此（第七十九/八十四/八十五/九十七刀），缺的只有 Variant 目标。
+
+**改前**
+
+赋值站给 Variant 目标的守卫只认**晚绑定 COM 读**（§11.84 第一百零六/一百零七刀：`v = o.NoSuchProperty` ⇒ 438 且目标不动），其余右值一律走 `emitVariantSlotAssign` 直接盖写。实测：错误号是对的（94/13/11 都报了），值被清成空串 —— 又是一次「号对了、值被清」，与 §11.75 的 `d = CLng(Null)`、§11.77 的晚绑定 BSTR 同一形。
+
+**改法：一枚宽判据 + 一条收窄补丁**
+
+1. **主改**（`cgen_assign_value_sem.inc`）：Variant 目标那一支的入口条件从 `exprHasLateBoundComRead(rhs)` 改成 `exprHasLateBoundComRead(rhs) || exprCanRaiseVariantStore(rhs)`，走**既有**的「先抓 `vb6_ErrSerial()` → 临时量求值 → 同序号才写」那一形（临时量、所有权、槽位语义都复用原处，不新造形状）。
+2. **新谓词**（`cgen_util_scan.cpp` 的 `exprCanRaiseVariantStore`）：与 §11.174 第一百九十一刀的 `exprCanRaiseStmt` 同族，但**多认 Add/Sub/Mul** —— W7 证明 `w = v + 1` 里的槽提取（`vb6_VariantToLong`）与 `CLng` 一样会 raise，而 `exprCanRaiseStmt` 只认 `Div/IntDiv/Mod/Pow`。`exprCanRaiseStmt` 本身不动：第一百九十一刀量的语句实参守卫不跟着洗。
+3. **两枚收窄**（都由 CI 红反推出来的，各有实物）：
+   - **数组下标不算调用**：第一版把 `IndexOrCallExpr` 一律当调用，于是 `sA = strArr(0)` 从借用形 `vb6_VariantAssign(&sA, vb6_VariantFromValue(VB6_SA_AT(BSTR, strArr, 0)))` 变成「临时量 + 深拷贝」—— 门 46051260737 的 `[EMITC-SHAPE] b167_bstr_borrow_shape` 当场指出来。下标本身不转换、不 raise（越界 9 那一档本轮未量），所以只递归实参。
+   - **只认「转换/数值内建」+ 无处理器过程**：第二版收窄后 `sA = Left$(s, 3)` 仍被套上守卫（`Left$` 不 raise），门 46053185259 的同一枚针脚报了第二句 `missing: sA = vb6_VariantString(vb6_Left(s, 3));`。于是把「任何调用」换成一张 36 枚的名单（`CStr/CInt/CLng/CDbl/CSng/CByte/CBool/CCur/CDate/CSByte/CUInt/CULng/CLngLng/CLngPtr/CDec` + `Abs/Int/Fix/Sgn/Round/Hex/Oct/Sqr/Log/Exp/Sin/Cos/Tan/Atn` + `Asc/AscB/AscW/Chr/ChrB/ChrW`）+ §11.175 那枚 `exprCallsUnprotectedProc`（被调方没有 On Error ⇒ raise 必然爬出来）。
+
+**夹具与哨兵**
+
+- 新夹具 `tests/b238_variant_store_abort`（14 格）：Q1..Q8 = W1/W3..W8 那一批，Q9/Q10 = 「不抛错的照写」（`w = Null`、`w = CDbl("2.5")`，防守卫误挡），Q11..Q14 = String/Double 目标那一族既有行为（防回退）。x64 + x86 两套。
+- `scripts/check_float_to_int_round.ps1` 新增 **S15**（现 S1..S15）三条：(a) 赋值站那一支仍认晚绑定读（§11.84 不许回退）；(b) 同一支也认 `exprCanRaiseVariantStore`，且该谓词把 Add/Sub/Mul/Div/IntDiv/Mod/Pow 都算 raise；(c) b238 两套在跑。
+- 清单 `emit-manifest.expected.txt`：本机 +2 行，随后按 CI 清单登记 **63 行**移动（凡右值含转换/数值内建或无处理器过程调用的变体赋值都多两行守卫），inputs 968 → 970。
+
+**验证**
+
+- 夹具 x64 / x86 各 14 格与真机 P326 逐行 `IDENTICAL`。
+- 回归：b231（14 针）、b232（15）、b233（26）、b234（19）、b235（14）、b236（12）、b237（18）全绿；`tests/test_bstr_borrow_slot.bas` 的五枚形状针脚（借用、数组元素、UDT 字段、`Left$`）逐条回来。
+- 本机 13 条门禁全绿。
+- CI：head `28bb3a40`（第一版，判据过宽）与 `7f96004d`（收窄后）两次门各剩 `Emit manifest` 与同一枚 b167 针脚；按 CI 清单登记（`436949d9`，63 行）后 head `1b601efc` → GA **46056323744 = 23/23 success**，failure=0。
+
+**背账（本轮读数里剩下的三处，都是「变体→串/数值」那一族的转换档）**
+
+1. `w = CStr(v)`（`v = Null`）：真机 `[keep]/94`，C3 `[]/0` —— Variant 目标这一面的 CStr 根本没报 94（String 目标那一面 `s = CStr(v)` 是对的）。
+2. `d = CStr(v)`（`v = Null`）：真机 `[-99]/94`，C3 `[-99]/13` —— 号错了（13 而不是 94）。
+3. `w = Hex(v)`（`v = "x"`）：真机 `[keep]/13`，C3 `[0]/0` —— `HexSlot` 对 BSTR 走宽松提取，文本非数值没有报 13。
+4. 另有 `Hex/Oct` 的 `LongLong` 档与 `Err.Source`/`Err.Description` 空串在册。
