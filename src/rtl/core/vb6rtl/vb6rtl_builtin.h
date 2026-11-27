@@ -442,7 +442,9 @@ int32_t vb6_WeekOfYear(int32_t serial, int32_t fdow, int32_t fwoy);
 void vb6_fmtLocaleShortDate(const SYSTEMTIME* st, wchar_t* out, size_t cap);
 void vb6_fmtLocaleLongDate(const SYSTEMTIME* st, wchar_t* out, size_t cap);
 void vb6_fmtLocaleLongTime(const SYSTEMTIME* st, wchar_t* out, size_t cap);
-void vb6_fmtLocaleGeneralDate(const SYSTEMTIME* st, wchar_t* out, size_t cap);
+// §11.198 (第二百一十五刀): 第一参传**序列号** —— 「日期部分为零」那一档只给时间，
+// SYSTEMTIME 自己答不出这件事（序列 0..1 落在 1899-12-30，与真日期同形）。
+void vb6_fmtLocaleGeneralDate(const SYSTEMTIME* st, double serial, wchar_t* out, size_t cap);
 double vb6_DateValue(BSTR dateStr);
 double vb6_TimeSerial(int32_t hour, int32_t minute, int32_t second);
 double vb6_TimeValue(BSTR timeStr);

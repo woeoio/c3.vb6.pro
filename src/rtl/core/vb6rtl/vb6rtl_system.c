@@ -97,7 +97,7 @@ BSTR vb6_FormatDateTime(double dateSerial, int32_t namedFormat) {
         GetTimeFormatW(LOCALE_USER_DEFAULT, TIME_NOSECONDS, &st, NULL, buf, 256);
         break;
     case 0: // vbGeneralDate
-        vb6_fmtLocaleGeneralDate(&st, buf, 256);
+        vb6_fmtLocaleGeneralDate(&st, dateSerial, buf, 256);
         break;
     default:
         // 越界档位：运行期报 err 5（§B210 ②）。这一格**不许**回落到 general date ——

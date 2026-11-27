@@ -266,6 +266,13 @@ $r32arm = N 'itNI2 == Vb6Type::Date\),?\s*callee = "vb6_CStrDate"' $s221conv
 if ($r32arm -ne 1) { $fail += ('R32 CStr site Date arm = ' + $r32arm + ' (want 1: the only place that turns the Date answer into vb6_CStrDate)') }
 $r32ask = N 'lb197 == "now"' $s221type
 if ($r32ask -ne 1) { $fail += ('R32 inferExprType date-builtin ask = ' + $r32ask + ' (want 1: one authority for "is this Now/Date/Time a Date?")') }
+# R33 (§11.198 第二百一十五刀): general date 的「日期部分为零只给时间」那一问 ——
+# 判据必须走**序列号**（SYSTEMTIME 分不出 1899-12-30 是真日期还是零日），且只住一处。
+$r33cells = N '\$Tests\\b222_time_general_date\\B222Res\.vbp' $T
+if ($r33cells -ne 2) { $fail += ('R33 b222 run cells = ' + $r33cells + ' (want 2 = x64 + x86)') }
+$s222fmt = Get-Content -Raw (Join-Path $Root 'src\rtl\core\vb6rtl\vb6rtl_format.c')
+$r33rule = N 'serial >= 0\.0 && serial < 1\.0' $s222fmt
+if ($r33rule -ne 1) { $fail += ('R33 general-date zero-date rule = ' + $r33rule + ' (want 1: date-part-zero => time only, decided on the serial)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -274,5 +281,5 @@ if ($fail.Count -gt 0) {
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
     ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells +
-    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells + ' bld220-cells=' + $r31sa + ' now221-cells=' + $r32cells)
+    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells + ' bld220-cells=' + $r31sa + ' now221-cells=' + $r32cells + ' gen222-cells=' + $r33cells)
 exit 0

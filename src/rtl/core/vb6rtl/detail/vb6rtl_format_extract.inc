@@ -88,7 +88,7 @@
                 SYSTEMTIME st;
                 if (VariantTimeToSystemTime(expr.dblVal, &st)) {
                     wchar_t genBuf[128];
-                    vb6_fmtLocaleGeneralDate(&st, genBuf, 128);
+                    vb6_fmtLocaleGeneralDate(&st, expr.dblVal, genBuf, 128);
                     return vb6_BSTR_FromStr(genBuf);
                 }
             }

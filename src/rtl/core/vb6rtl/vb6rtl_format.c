@@ -109,8 +109,18 @@ void vb6_fmtLocaleLongTime(const SYSTEMTIME* st, wchar_t* out, size_t cap) {
 //   本体都不需要, 出口的形参跟着少一条。
 // 两条旧答案一起作废: Fix 175 留在 conv.c 的 1e-9 在 500 毫秒那一档答带时间; vb6rtl_system.c 那条
 //   「零头 != 0」在午夜前一毫秒那一档答带时间 —— 引擎两处都答「只给日期」。
-void vb6_fmtLocaleGeneralDate(const SYSTEMTIME* st, wchar_t* out, size_t cap) {
+void vb6_fmtLocaleGeneralDate(const SYSTEMTIME* st, double serial, wchar_t* out, size_t cap) {
     size_t n;
+    // §11.198 (第二百一十五刀): **日期部分为零** —— VB6 的序列 0..1（= 1899-12-30）那一档
+    // 只给时间。真机 P269: `CStr(CDate(0))` = "0:00:00" / `CDate(0.5)` = "12:00:00" /
+    // `Format(CDate(0.5), "General Date")` 同形；C3 改前拼成 "1899/12/30 12:00:00"。
+    // 判据用序列而不是 SYSTEMTIME: 序列 0..1 映射出的年月日与真日期 1899-12-30 不可区分，
+    // 而负数（P269 E5 `CDate(-1)` = "1899/12/29"）真机仍给日期 ⇒ 只认 [0,1) 这半开区间。
+    if (serial >= 0.0 && serial < 1.0) {
+        if (out && cap) out[0] = 0;
+        vb6_fmtLocaleLongTime(st, out, cap);
+        return;
+    }
     vb6_fmtLocaleShortDate(st, out, cap);
     if (st->wHour == 0 && st->wMinute == 0 && st->wSecond == 0) return;
     n = wcslen(out);
@@ -134,7 +144,7 @@ static BSTR vb6_fmtNamedDateTime(double serial, BSTR fmt) {
     buf[0] = 0;
     switch (kind) {
         case 1:  // general date = 短日期，四入后当日时分秒全零就不加时间段 (第一百零一刀)
-            vb6_fmtLocaleGeneralDate(&st, buf, 128);
+            vb6_fmtLocaleGeneralDate(&st, serial, buf, 128);
             break;
         case 2: {  // medium date —— locale 相关: zh-CN = yy-MM-dd (参考图 "26-12-14"),
                    // 西文 = d-mmm-yy ("28-Dec-26")。按用户主语言分流。

@@ -13457,6 +13457,34 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "Y3 diff=True")
     Test-Vbp 'b221_cstr_now_date' "$Tests\b221_cstr_now_date\B221Res.vbp" $b221Needles
     Test-Vbp 'b221_cstr_now_date_x86' "$Tests\b221_cstr_now_date\B221Res.vbp" $b221Needles -Arch "x86"
+    # §11.198 第二百一十五刀: general date 的文本形状 —— 日期部分为零 (序列 0..1) 只给时间,
+    # 时间部分为零只给日期。真机 .temp/k215p/P270.bas -> p270.txt 二十一格全 True;
+    # 改前 CStr(TimeSerial(12,30,0)) 打 "1899/12/30 12:30:00" (P268 的 D3/D5)。
+    # 同样只钉区域无关格 (含 "/" / 含 ":" / IsDate / VarType / 长度)。
+    $b222Needles = @(
+    "A1 colon=True",
+    "A2 noslash=True",
+    "A3 isdate=True",
+    "A4 len=True",
+    "B1 slash=True",
+    "B2 nocolon=True",
+    "C1 noslash=True",
+    "C2 colon=True",
+    "C3 len=True",
+    "D1 slash=True",
+    "D2 nocolon=True",
+    "E1 noslash=True",
+    "E2 colon=True",
+    "G1 slash=True",
+    "G2 nocolon=True",
+    "H1 noslash=True",
+    "H2 colon=True",
+    "K1 slash=True",
+    "K2 nocolon=True",
+    "V1 vt=True",
+    "V2 vt=True")
+    Test-Vbp 'b222_time_general_date' "$Tests\b222_time_general_date\B222Res.vbp" $b222Needles
+    Test-Vbp 'b222_time_general_date_x86' "$Tests\b222_time_general_date\B222Res.vbp" $b222Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
