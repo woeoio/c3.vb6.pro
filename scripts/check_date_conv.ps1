@@ -271,8 +271,16 @@ if ($r32ask -ne 1) { $fail += ('R32 inferExprType date-builtin ask = ' + $r32ask
 $r33cells = N '\$Tests\\b222_time_general_date\\B222Res\.vbp' $T
 if ($r33cells -ne 2) { $fail += ('R33 b222 run cells = ' + $r33cells + ' (want 2 = x64 + x86)') }
 $s222fmt = Get-Content -Raw (Join-Path $Root 'src\rtl\core\vb6rtl\vb6rtl_format.c')
-$r33rule = N 'serial >= 0\.0 && serial < 1\.0' $s222fmt
+$r33rule = N 'serial > -1\.0 && serial < 1\.0' $s222fmt
 if ($r33rule -ne 1) { $fail += ('R33 general-date zero-date rule = ' + $r33rule + ' (want 1: date-part-zero => time only, decided on the serial)') }
+# R34 (§11.199 第二百一十六刀): 「日期部分为零」的窗口是 (−1,1)（向零截断为 0），
+# 不是 [0,1) —— 真机 P271: CStr(CDate(-0.5)) = "12:00:00"、CDate(-1.5) 仍带日期。
+# Print # 那一站有自己的一份同规则窗口 (vb6rtl_file.c 的 vb6_FileDateText)，两处都要在。
+$r34cells = N '\$Tests\\b223_negative_serial_text\\B223Res\.vbp' $T
+if ($r34cells -ne 2) { $fail += ('R34 b223 run cells = ' + $r34cells + ' (want 2 = x64 + x86)') }
+$s222file = Get-Content -Raw (Join-Path $Root 'src\rtl\core\vb6rtl\vb6rtl_file.c')
+$r34file = N 'v > -1\.0 && v < 1\.0' $s222file
+if ($r34file -ne 1) { $fail += ('R34 Print # zero-date window = ' + $r34file + ' (want 1: the file station has its own window, same rule)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -281,5 +289,5 @@ if ($fail.Count -gt 0) {
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
     ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells +
-    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells + ' bld220-cells=' + $r31sa + ' now221-cells=' + $r32cells + ' gen222-cells=' + $r33cells)
+    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells + ' bld220-cells=' + $r31sa + ' now221-cells=' + $r32cells + ' gen222-cells=' + $r33cells + ' neg223-cells=' + $r34cells)
 exit 0

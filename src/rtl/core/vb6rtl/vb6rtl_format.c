@@ -116,7 +116,12 @@ void vb6_fmtLocaleGeneralDate(const SYSTEMTIME* st, double serial, wchar_t* out,
     // `Format(CDate(0.5), "General Date")` 同形；C3 改前拼成 "1899/12/30 12:00:00"。
     // 判据用序列而不是 SYSTEMTIME: 序列 0..1 映射出的年月日与真日期 1899-12-30 不可区分，
     // 而负数（P269 E5 `CDate(-1)` = "1899/12/29"）真机仍给日期 ⇒ 只认 [0,1) 这半开区间。
-    if (serial >= 0.0 && serial < 1.0) {
+    // §11.199 (第二百一十六刀): 判据是**整数部分为零**（向零截断），不是 [0,1)。
+    // 真机 P271: `CStr(CDate(-0.5))` = "12:00:00"、`CDate(-0.25)` = "6:00:00"（
+    // 截断后整数部分是 0）
+    // 而 `CDate(-1.5)` = "1899/12/29 12:00:00"（整数部分 -1，仍给日期）。上一刀按
+    // [0,1) 写，负数那一半在 P269 里没取样 —— 本刀把窗口改成 (−1,1)。
+    if (serial > -1.0 && serial < 1.0) {
         if (out && cap) out[0] = 0;
         vb6_fmtLocaleLongTime(st, out, cap);
         return;

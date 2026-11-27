@@ -13485,6 +13485,29 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "V2 vt=True")
     Test-Vbp 'b222_time_general_date' "$Tests\b222_time_general_date\B222Res.vbp" $b222Needles
     Test-Vbp 'b222_time_general_date_x86' "$Tests\b222_time_general_date\B222Res.vbp" $b222Needles -Arch "x86"
+    # §11.199 第二百一十六刀: 「日期部分为零」的窗口是 (−1,1)（向零截断为 0），不是 [0,1)；
+    # Print # 那一站 (vb6_FileDateText) 有自己的一份同规则窗口。真机 .temp/k216p/P272.bas ->
+    # p272.txt 十七格全 True; 改前 CStr(CDate(-0.5)) 打 "1899/12/30 12:00:00" (P271 的 N1/N3/N8)。
+    $b223Needles = @(
+    "A1 noslash=True",
+    "A2 colon=True",
+    "A3 noslash=True",
+    "A4 colon=True",
+    "A5 noslash=True",
+    "B1 slash=True",
+    "B2 colon=True",
+    "C1 slash=True",
+    "C2 colon=True",
+    "C3 noslash=True",
+    "D1 slash=True",
+    "D2 nocolon=True",
+    "E1 slash=True",
+    "F1 colon=True",
+    "G1 noslash=True",
+    "G2 slash=True",
+    "G3 colon=True")
+    Test-Vbp 'b223_negative_serial_text' "$Tests\b223_negative_serial_text\B223Res.vbp" $b223Needles
+    Test-Vbp 'b223_negative_serial_text_x86' "$Tests\b223_negative_serial_text\B223Res.vbp" $b223Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
