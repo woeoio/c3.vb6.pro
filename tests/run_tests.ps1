@@ -13638,6 +13638,28 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "K4 colon=True")
     Test-Vbp 'b228_int_fix_date' "$Tests\b228_int_fix_date\B228Res.vbp" $b228Needles
     Test-Vbp 'b228_int_fix_date_x86' "$Tests\b228_int_fix_date\B228Res.vbp" $b228Needles -Arch "x86"
+    # §11.205 第二百二十二刀: Abs / Round 也保持 Date 身份。
+    # 真机 .temp/k222p/P288 / P289 全格一致; 改前 VarType(Abs(t))=5、CStr(Round(t,0))="44260"。
+    $b229Needles = @(
+    "E1=7",
+    "E2=7",
+    "E3=7",
+    "E4=7",
+    "E5=5",
+    "E6=5",
+    "F1 slash=True",
+    "F2 colon=True",
+    "F3 slash=True",
+    "F4 nocolon=True",
+    "F5=5",
+    "F6=12",
+    "F7=[2.5]",
+    "G1=3",
+    "G2=[44260]",
+    "G3=6",
+    "G4 err=6")
+    Test-Vbp 'b229_abs_round_date' "$Tests\b229_abs_round_date\B229Res.vbp" $b229Needles
+    Test-Vbp 'b229_abs_round_date_x86' "$Tests\b229_abs_round_date\B229Res.vbp" $b229Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

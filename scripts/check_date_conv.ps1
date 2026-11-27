@@ -326,8 +326,14 @@ if (($r38raw1 + $r38raw2) -ne 0) { $fail += ('R38 raw day halves = ' + ($r38raw1
 $r39cells = N '\$Tests\\b228_int_fix_date\\B228Res\.vbp' $T
 if ($r39cells -ne 2) { $fail += ('R39 b228 run cells = ' + $r39cells + ' (want 2 = x64 + x86)') }
 $s204type = Get-Content -Raw (Join-Path $Root 'src\backend\cgen_util_type.cpp')
-$r39rule = N 'if \(\(Symbol::toLower\(id\.name\) == "int" \|\| Symbol::toLower\(id\.name\) == "fix"\)' $s204type
-if ($r39rule -ne 1) { $fail += ('R39 Int/Fix date identity = ' + $r39rule + ' (want 1)') }
+$r39rule = N 'if \(\(idn == "int" \|\| idn == "fix" \|\| idn == "abs" \|\| idn == "round"\)' $s204type
+if ($r39rule -ne 1) { $fail += ('R39 Int/Fix (+Abs/Round) date identity = ' + $r39rule + ' (want 1)') }
+# R40 (§11.205 第二百二十二刀): Abs / Round 也在 Date 实参上保持 Date；
+# CInt/CLng/CCur/CSng/CDbl 不在此列。真机 P288/P289。
+$r40cells = N '\$Tests\\b229_abs_round_date\\B229Res\.vbp' $T
+if ($r40cells -ne 2) { $fail += ('R40 b229 run cells = ' + $r40cells + ' (want 2 = x64 + x86)') }
+$r40set = N 'idn == "abs" \|\| idn == "round"' $s204type
+if ($r40set -ne 1) { $fail += ('R40 Abs/Round in the date set = ' + $r40set + ' (want 1)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -336,5 +342,5 @@ if ($fail.Count -gt 0) {
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
     ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells +
-    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells + ' bld220-cells=' + $r31sa + ' now221-cells=' + $r32cells + ' gen222-cells=' + $r33cells + ' neg223-cells=' + $r34cells + ' wr224-cells=' + $r35cells + ' carry225-cells=' + $r36cells + ' dadd226-cells=' + $r37cells + ' pdiff227-cells=' + $r38cells + ' intfix228-cells=' + $r39cells)
+    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells + ' bld220-cells=' + $r31sa + ' now221-cells=' + $r32cells + ' gen222-cells=' + $r33cells + ' neg223-cells=' + $r34cells + ' wr224-cells=' + $r35cells + ' carry225-cells=' + $r36cells + ' dadd226-cells=' + $r37cells + ' pdiff227-cells=' + $r38cells + ' intfix228-cells=' + $r39cells + ' absr229-cells=' + $r40cells)
 exit 0
