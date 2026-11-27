@@ -13384,3 +13384,94 @@ V5 else err=0   "!"   > #1/1/2021#
 - 教训：**「入账刀」也是刀。** 改前就对，不等于这条组合已被守住 —— 真正稀缺的是
   「这一格存在」这件事本身。挑格时优先挑**成对**的（能等 / 不能等），单格很容易被
   下一次重构顺手改掉而没人发现。
+---
+
+## §11.195 Date 数组元素 / UDT 成员当 Select Case 的主语（第二百一十二刀）
+
+### 一、问题
+
+§11.190 修的是 **比较操作数** 那一侧的「Date 数组元素」与「Date UDT 成员」；§11.192 修的是
+**槽标签**。这两刀都绕着 `Select Case` 走，但谁都没问过一句：**主语**本身是这两种形状时呢？
+
+改前的表现是**编不过**：
+
+```c
+BSTR _vb6_select_1 = VB6_SA_AT(double, q, 0);      /* C2440：double -> BSTR */
+```
+
+原因是一条链上的两个判据各答一半：
+
+- `isDateSelect` 只读 `inferExprType(testExpr)`，而它对数组元素 / UDT 成员答 **Variant**；
+- 接着「Variant 主语 + 标签全是串」那条强制翻档（第311刀的 AllString 闸）把主语拉去**串承载**。
+
+两条合起来，`q(0)` 这枚 `double` 就被塞进 `BSTR` 临时量。
+
+### 二、真机读数（VB6Mini `/make`，`.temp/k212p/P259.bas` → `p259.txt`）
+
+```
+E1 hit err=0   Select Case q(0)  Case #3/4/2021#
+E2 hit err=0   Select Case q(0)  Case "2021-03-04"
+E3 hit err=0   Select Case q(0)  Case Is > #1/1/2021#
+E4 hit err=0   Select Case u.d   Case #3/4/2021#
+E5 hit err=0   Select Case u.d   Case "2021-03-04"
+```
+
+五格全命中 —— 而且 `E2`/`E5` 的串标签按**日期**解（与 §11.190 的 Y2 同一条口径），
+不是按串比。
+
+### 三、判据与改法
+
+主语判据改成与 binary 比较那腿**同一个问句形状**（三处权威，依次问）：
+
+1. `inferExprType(testExpr) == Date`；
+2. 裸名数组元素：`arrayElemTypes_[name] == Date`；
+3. UDT 成员：`inferUdtFieldVb6Type(...,&isArr) == Date`（成员数组要求 `isArr`，标量成员要求 `!isArr`）。
+
+同时给「AllString 翻串档」那条闸补上 `&& !isDateSelect` —— 否则上面第 2/3 条刚认定是 Date，
+下一行又被翻回串承载（这正是改前那半条错的来源）。
+
+**为什么不在 `inferExprType` 里补**：那个函数是全局问句，改它会牵动所有站点（含 `--emit-c`
+的每一行），而 `Select Case` 只需要**这一处**判据。三处权威本身已经是既有事实，这里只是
+把「哪三种形状算 Date」这个答案**接过来问**，没有新造答案。
+
+### 四、为什么这样改
+
+- **同一个问句不许有两个答案**：`§11.190` 已经为「操作数是不是 Date」定了三处权威；
+  主语这一侧原本只问第一处，于是数组元素/UDT 成员两形在两条链上**答案不同**。
+  本刀把主语也接到同一份答案上。
+- **翻档闸必须与判据同源**：判据答 Date、翻档闸却仍按 Variant 办事，等于判据白判。
+  这条闸在 §11.192 也踩过一次（那次是 Date 主语被 `isVariantSelect` 抢走承载档）。
+
+### 五、读数与随刀改的针
+
+- 新夹具 `tests/b219_date_subject_elem`（E1–E5 五行，含 `Private Type TRec`），x64/x86 逐行相同。
+- 新哨兵 R29（`arrayElemTypes_` 读点 ≥4、`inferUdtFieldVb6Type` 恰 2、
+  `!isDateSelect && testType == Vb6Type::Variant` 恰 1）、R30（b219 两台在跑）。
+- 旧哨兵语义迁移：`check_select_carrier_authority` R2 的正则要求那条闸**带 `!isDateSelect`**。
+- 改坏即红：把 UDT 那一支改成 `isDateSelect = false;` ⇒ `R29 inferUdtFieldVb6Type reads = 1`，还原后 PASS。
+- 回归：`b214`（7 格）、`b215`、`b216`（13 格）、`b217`（12 格）、`b218`（5 格）逐行不变。
+- 闸门（本机全 PASS）：`check_date_conv`（`subj219-cells=2`）、`check_manifest_coverage`（inputs=932）、
+  `check_static_sentinel_registration`、`check_owned_temp_keeps`、`check_ispred_text`、`check_sa_access`、
+  `check_caseis_shape`、`check_select_carrier_authority`、`check_select_label_owner`。
+
+### 六、神谕与清单
+
+- 真机神谕：`.temp/k212p/P259.bas` / `p259.txt`（五行）。
+- 顺带读过的两形（**不改码**）：`Option Compare Text` 下的 Date×String 二元比较（`P257`，六行
+  与 C3 逐行相同 —— Option Compare 不影响这条腿）；`GetV()`（Function 返回 Variant）当 Date 比较
+  操作数（`P258`，六行也相同 —— §11.191 的 `inferExprType` 判据已覆盖调用形）。
+- 改前取证：`.temp/k212p/c3c`（`BSTR _vb6_select_1 = VB6_SA_AT(double, q, 0);`）。
+- 门：run `45923673066`（`dev`、head `4791d152`）**23/23 全绿**。
+- 背账：`Select Case` 的**主语**是 Date **UDT 成员数组元素**（`u.arr(i)`）那一形没读；
+  类实例成员（`obj.d`）同样没读 —— 探针只能用 .bas，类模块这一族仍按「不猜」挂着。
+
+### 七、记账
+
+- 探针：`.temp/k212p/P257.bas`、`P258.bas`、`P259.bas`、`c3a/c3b/c3c/c3d`、`x86`、`rows219.ps1`。
+- 夹具：`tests/b219_date_subject_elem`，注册在 `tests/run_tests.ps1`（x64 + x86）。
+- 代码：`4791d152`（主语三权威判据 + 翻档闸 `!isDateSelect` + 夹具 + R29/R30 + R2 迁移 + 清单两行）。
+- **号**：本节 = 第二百一十二刀 / §11.195。
+- 教训：**「同一个问题」在两条链上各有一次机会答错。** §11.190 修好操作数侧之后，
+  主语侧看起来「应该也跟着好」，其实它读的是另一个判据（`inferExprType` 的第一处）。
+  这一族里凡是「某形状算不算 Date」的答案，都必须**只有一处**，并且每个新站点都要
+  **显式接过去问** —— 判据复用不会自动发生。
