@@ -13745,3 +13745,110 @@ E7=[12:00:00]  Format(CDate(0.5),"General Date")        E8=[2021/3/4] Format(CDa
 - 教训：**同一个「文本形状」问题，会在三个站点各写一遍判断。** `Format` 与 `CStr` 早就
   声称共用「一个出口」，缺的那一档照样是三个站点各错一次 —— 上一刀是「消费点不问推断」，
   这一刀是「出口缺一档」，病根都是**把一条规则拆成几处各自的 if**。
+
+## §11.199 零日窗口是 (−1,1)：负数序列也只给时间（第二百一十六刀）
+
+上一刀把「日期部分为零 ⇒ 只给时间」写成半开区间 `[0,1)`，并且把这一句的**背面**记成了
+背账：「`[0,1)` 之外的小数（负数带时间分量，如 `CDate(-0.5)`）未取样」。本刀第一件事就是量它
+—— 结论是上一刀那条闸**只对了一半**。
+
+### 一、现象
+
+真机 `.temp/k216p/P271.bas` → `p271.txt`（与 C3 改前逐行对照）：
+
+```
+N1=[12:00:00]                  CStr(CDate(-0.5))        C3: 1899/12/30 12:00:00
+N2=[1899/12/29 12:00:00]       CStr(CDate(-1.5))        C3: 一致
+N3=[6:00:00]                   CStr(CDate(-0.25))       C3: 1899/12/30 6:00:00
+N4=[12:00:00]                  Format(CDate(-0.5),"General Date")
+N5=[1899/12/29 12:00:00]       Format(CDate(-1.5),"General Date")
+N6<12:00:00>                   Print #f, CDate(0.5)
+N7<1899/12/31>                 Print #f, CDate(1)
+N8<12:00:00>                   Print #f, CDate(-0.5)    C3: 1899/12/30 12:00:00
+N9<2021/3/4 12:30:00>          Print #f, CDate(44259.5208333333)
+NA=[1899/12/30]                FormatDateTime(CDate(0.5), vbShortDate)
+NB=[12:00:00]                  FormatDateTime(CDate(0.5), vbLongTime)
+NC=[12:00]                     FormatDateTime(CDate(0.5), vbShortTime)
+ND=[1899/12/31]                FormatDateTime(CDate(1), vbShortDate)
+NE=[12:00:00]                  FormatDateTime(CDate(-0.5), vbGeneralDate)
+NF=[1899/12/29 12:00:00]       FormatDateTime(CDate(-1.5), vbGeneralDate)
+```
+
+三点：
+
+1. **负数也走「只给时间」**：`-0.5` / `-0.25` 与 `0.5` / `0.25` 同形。`-1.5` 才带日期。
+2. **`Print #` 那一站自己有一份同规则窗口**（N8），上一刀的背账里就挂着这条。
+3. **`FormatDateTime` 的命名档不参与**：`vbShortDate` 对零日照样给 `1899/12/30`（NA/ND），
+   `vbGeneralDate` 才走这条规则（NE/NF）。这也把上一刀那条背账（`FormatDateTime(0, vbShortDate)`
+   未量）结清了 —— 答案是「不给时间段，也不隐藏零日」，命名档就是纯粹的命名格式。
+
+### 二、判据：整数部分为零，不是 `[0,1)`
+
+`-0.5` 与 `0.5` 都对，`-1.5` 与 `1.5` 都不对 ⇒ 判据是**向零截断后整数位为 0**，
+即 `serial > -1.0 && serial < 1.0`。这也解释了为什么负数不能简单「按日期处理」：
+OLE 日期对负数是「日期 = 向零截断、时间 = |小数|」，所以 `-0.5` 的日期部分是 0（零日）、
+时间部分是 12:00 —— 被隐藏的正是零日那一段。
+
+`vb6_FileDateText` 还得跟着改时间取法：原式 `v * 86400 + 0.5` 对 `-0.5` 会算成负秒
+（`-12:00:00`）。改成先取 `fabs`：
+
+```c
+double frac = v < 0 ? -v : v;          /* |v| < 1 ⇒ 就是时间分量 */
+int32_t sec = (int32_t)(frac * 86400.0 + 0.5);
+```
+
+### 三、改法（两处窗口，一处规则）
+
+| 站点 | 文件 | 改法 |
+|---|---|---|
+| general date 出口 | `vb6rtl_format.c` 的 `vb6_fmtLocaleGeneralDate` | `serial >= 0.0 && serial < 1.0` → `serial > -1.0 && serial < 1.0` |
+| `Print #` 文本 | `vb6rtl_file.c` 的 `vb6_FileDateText` | 同上窗口 + 时间分量取绝对值 |
+
+两个窗口各住一处（`Print #` 不经过 `vb6_fmtLocaleGeneralDate`，它的输出还带尾随空格、
+小时不补零，是另一份文本），但**规则一句话**：截断为 0 就只给时间。哨兵 R34 因此同时钉
+两处窗口，防止将来只改一边。
+
+### 四、夹具与区域无关
+
+`tests/b223_negative_serial_text`（十七格，x64/x86 各一份）。仍然只钉两边都成立的事实
+（CI 在 en-US、神谕在 zh-CN）：
+
+- `-0.5` / `-0.25` / `-0.9999`：不含 `/`、含 `:`；
+- `-1.5`：含 `/`、含 `:`；
+- `Format(CDate(-1.5),"General Date")` 含 `/`；`Format(CDate(-0.5),…)` 不含 `/`；
+- `FormatDateTime(CDate(0.5), vbShortDate)` 含 `/` 且不含 `:`（命名档不参与）；
+- `FormatDateTime(CDate(1), vbShortDate)` 含 `/`；`vbShortTime` 含 `:`；
+- `Print #f, CDate(-0.5)` 回读不含 `/` 且含 `:`；`CDate(-1.5)` 回读含 `/`。
+
+真机读数 `.temp/k216p/P272.bas` → `p272.txt`（同一批格子在 VB6 里跑一遍，十七行全 True）。
+C3 改后 x64/x86 十七格全 True，且 `P271` 十五行**逐字节**与神谕相同。
+
+### 五、回归面
+
+- **b431**（general date 的既有主人）：十六格本机复跑全 True。
+- **b222**（上一刀的零日夹具）：二十一格全 True —— 它的格子在 `[0,1)` 内，窗口放大不影响。
+- 发射面：RTL 改动不进 `--emit-c`，清单只有 b223 两行新增（inputs 938 → 940）。
+
+### 六、读数与针
+
+- **R33** 跟进新窗口：`vb6rtl_format.c` 里 `serial > -1.0 && serial < 1.0` 恰 1 处。
+- 新增 **R34**：b223 两台在跑；`vb6rtl_file.c` 里 `v > -1.0 && v < 1.0` 恰 1 处
+  （`Print #` 那份窗口不许缺、也不许分叉）。
+- `check_general_date_outlets` 的 R6 同步，并新增「旧的 `serial >= 0.0 && serial < 1.0`
+  不许残留」。
+- 本机闸门：`check_date_conv`（`neg223-cells=2`）、`check_general_date_outlets`、
+  `check_manifest_coverage`（inputs=940，sets equal）、`check_select_carrier_authority`。
+- 神谕：`.temp/k216p/P271.bas`（十五行原始文本）、`P272.bas`（夹具十七格）。
+- 门：run `45939269810`（`dev`、head `86d819df`）。
+
+### 七、记账
+
+- 代码：`86d819df`（RTL 两站 + 夹具 + R33/R34 + 清单两行）。
+- **号**：本节 = 第二百一十六刀 / §11.199。
+- 背账：本轮已结清上一刀三条（负数带时间分量、`Print #` 同规则、`FormatDateTime` 命名档）；
+  仍未取样的是 `CDate(-1e-9)` 这种**零日附近的时间分量四入**（`-0.0000001` 是否也隐藏零日）、
+  以及 `Write #` 的 `#…#` 档（`vb6_FileDateText(mode=1)`）对零日的形状。
+- 教训：**「窗口」这种判据一定要在负数那一侧也量一次。** 上一刀写下 `[0,1)` 时，本体、
+  命名档、文件站三处都跟着写了一遍；窗口错，三处一起错，而夹具只钉了正数侧 —— 因此
+  全绿也说明不了对。区域无关的格能挡住区域差异，挡不住**定义域差异**：这次补的就是
+  「判据的定义域只画了一半」。
