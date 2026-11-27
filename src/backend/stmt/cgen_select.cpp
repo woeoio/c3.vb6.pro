@@ -337,6 +337,15 @@ void CCodeGen::visit(SelectCaseStmt& node) {
             // §11.190/§11.192: Date 主语的标签 —— 串档折成日期序列, Variant 标签走 CDate 那一档
             // (文本按日期解析、数值原样、Null 抛 94、坏文本抛 13; 真机 P250 的 A3/A4 就是这两档),
             // 其余按数值原样。
+            // §11.193: 串主语的标签若是 Date 形 —— 先折成 VB6 自己的短日期文本再按串比。
+            // 真机 p253 的读数是「按文本比」: T3 (`CStr(CDate(...))` = "2021/3/4") 命中,
+            // T1 "9999" > #1/1/2021# 命中, T5 "2021-03-05" 不命中 (`-` < `/`)。
+            auto strLabel193 = [&](Expr* lbl, const std::string& txt) -> std::string {
+                if (!isStringSelect) return txt;
+                if (lbl && inferExprType(*lbl) == Vb6Type::Date)
+                    return "vb6_CStrDate(" + txt + ")";
+                return txt;
+            };
             auto dateLabel190 = [&](Expr* lbl, const std::string& txt) -> std::string {
                 if (!isDateSelect) return txt;
                 // 「这格是 Date 吗」与比较站同一个问句形状: 先问语义类型, 再补数组元素那一形
@@ -371,7 +380,9 @@ void CCodeGen::visit(SelectCaseStmt& node) {
                     } else if (isStringSelect) {
                         // 字符串比较: vb6_StrCmp(tempVar, rightVal) op 0
                         // <vbeclipse>: 本模块 Option Compare Text → 恒文本入口
-                        cond = std::string(optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + rightVal + ") " + mapBinaryOp(cv.relOp) + " 0";
+                        // §11.193: 标签是日期时先折成 VB6 自己的短日期文本 (vb6_CStrDate — 与
+                        // CStr(Date) 同一个出口), 再按串比 (真机 p253: T3 命中、T1/T2/T5 全对)。
+                        cond = std::string(optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + strLabel193(cv.value.get(), rightVal) + ") " + mapBinaryOp(cv.relOp) + " 0";
                     } else if (isFloatSelect) {
                         // Fix 136: Single 语义 — Case 侧也按 float 求值
                         cond = "(float)" + tempVar + " " + mapBinaryOp(cv.relOp) + " (float)(" + rightVal + ")";
@@ -397,8 +408,8 @@ void CCodeGen::visit(SelectCaseStmt& node) {
                            + " <= " + dateLabel190(cv.toValue.get(), hi);
                 } else if (isStringSelect) {
                     // 字符串范围比较: wcscmp >= lo && wcscmp <= hi
-                    cond = std::string(optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + lo + ") >= 0 && "
-                           + (optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + hi + ") <= 0";
+                    cond = std::string(optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + strLabel193(cv.value.get(), lo) + ") >= 0 && "
+                           + (optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + strLabel193(cv.toValue.get(), hi) + ") <= 0";
                 } else if (isFloatSelect) {
                     // Fix 136: Single 语义范围比较
                     cond = "(float)" + tempVar + " >= (float)(" + lo + ") && (float)" + tempVar + " <= (float)(" + hi + ")";
@@ -411,7 +422,7 @@ void CCodeGen::visit(SelectCaseStmt& node) {
                 if (isDateSelect) {
                     cond = tempVar + " == " + dateLabel190(cv.value.get(), lastExpr_);
                 } else if (isStringSelect) {
-                    cond = std::string(optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + lastExpr_ + ") == 0";
+                    cond = std::string(optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + strLabel193(cv.value.get(), lastExpr_) + ") == 0";
                 } else if (isFloatSelect) {
                     // Fix 136: Single 语义精确匹配
                     cond = "(float)" + tempVar + " == (float)(" + lastExpr_ + ")";

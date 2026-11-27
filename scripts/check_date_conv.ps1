@@ -216,6 +216,16 @@ if ($r24cp -ne 1) { $fail += ('R24 Date label -> vb6_VarCmp = ' + $r24cp + ' (wa
 # R25: b216 夹具两台在跑。
 $r25cells = N '\$Tests\\b216_select_variant_label_date\\B216Res\.vbp' $T
 if ($r25cells -ne 2) { $fail += ('R25 b216 run cells = ' + $r25cells + ' (want 2 = x64 + x86)') }
+# R26 (§11.193 第二百一十刀): 串主语的 Date 标签走 VB6 自己的短日期文本入口 (vb6_CStrDate),
+# 三处形状 (Is / 范围 / 精确) 各 1 —— 少了任何一处就会退回 `vb6_StrCmp(BSTR, 44259.0)` 编不过。
+$s26 = Get-Content -Raw (Join-Path $Root 'src\backend\stmt\cgen_select.cpp')
+$r26wrap = N 'vb6_CStrDate\(" \+ txt \+ "\)' $s26
+if ($r26wrap -ne 1) { $fail += ('R26 Date label -> vb6_CStrDate = ' + $r26wrap + ' (want 1: one owning lambda)') }
+$r26use = N 'strLabel193\(' $s26
+if ($r26use -ne 4) { $fail += ('R26 strLabel193 sites = ' + $r26use + ' (want 4 = def + Is + range + exact)') }
+# R27: b217 夹具两台在跑。
+$r27cells = N '\$Tests\\b217_string_select_date_label\\B217Res\.vbp' $T
+if ($r27cells -ne 2) { $fail += ('R27 b217 run cells = ' + $r27cells + ' (want 2 = x64 + x86)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -224,5 +234,5 @@ if ($fail.Count -gt 0) {
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
     ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells +
-    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells)
+    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells)
 exit 0

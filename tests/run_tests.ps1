@@ -13382,6 +13382,22 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "B5 hit err=0")
     Test-Vbp 'b216_select_variant_label_date' "$Tests\b216_select_variant_label_date\B216Res.vbp" $b216Needles
     Test-Vbp 'b216_select_variant_label_date_x86' "$Tests\b216_select_variant_label_date\B216Res.vbp" $b216Needles -Arch "x86"
+    # §11.193 第二百一十刀: Select Case 的串主语 × Date 标签 —— 标签先折成 VB6 短日期文本再按串比。
+    # 真机 .temp/k210p/p252.txt + p253.txt 十一行; 改前根本编不过 (vb6_StrCmp(BSTR, 44259.0))。
+    $b217Needles = @(
+    "S1 else err=0",
+    "S2 else err=0",
+    "S3 else err=0",
+    "S4 else err=0",
+    "S5 else err=0",
+    "S6 else err=0",
+    "T1 hit err=0",
+    "T2 else err=0",
+    "T3 hit err=0",
+    "T4 hit err=0",
+    "T5 else err=0")
+    Test-Vbp 'b217_string_select_date_label' "$Tests\b217_string_select_date_label\B217Res.vbp" $b217Needles
+    Test-Vbp 'b217_string_select_date_label_x86' "$Tests\b217_string_select_date_label\B217Res.vbp" $b217Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
