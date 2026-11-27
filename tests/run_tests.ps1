@@ -13364,6 +13364,24 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "Z8 rev=1 err=0")
     Test-Vbp 'b215_date_variant_compare' "$Tests\b215_date_variant_compare\B215Res.vbp" $b215Needles
     Test-Vbp 'b215_date_variant_compare_x86' "$Tests\b215_date_variant_compare\B215Res.vbp" $b215Needles -Arch "x86"
+    # §11.192 第二百零九刀: Select Case 的标签是 Variant 槽（主语 Date）/ 主语是 Variant 槽（标签日期字面量）。
+    # 真机 .temp/k209p/p250.txt + p251.txt 十三行; 改前主语被截成 int32_t / Variant 主语走 ToLong。
+    $b216Needles = @(
+    "A1 hit err=0",
+    "A2 else err=0",
+    "A3 hit err=13",
+    "A4 hit err=94",
+    "A5 hit err=0",
+    "A6 hit err=0",
+    "A7 hit err=0",
+    "A8 else err=0",
+    "B1 hit err=0",
+    "B2 else err=0",
+    "B3 hit err=0",
+    "B4 else err=0",
+    "B5 hit err=0")
+    Test-Vbp 'b216_select_variant_label_date' "$Tests\b216_select_variant_label_date\B216Res.vbp" $b216Needles
+    Test-Vbp 'b216_select_variant_label_date_x86' "$Tests\b216_select_variant_label_date\B216Res.vbp" $b216Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

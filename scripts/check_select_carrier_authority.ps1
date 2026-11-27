@@ -154,7 +154,8 @@ if ($packCallN -ne 1) { $bad += ('R6 label packer wrapVariantValue(ast, expr) = 
 if ($handPackN -ne 0) { $bad += ('R6 cgen_select.cpp hand-rolls a Variant packer (quoted VariantLong/String/Double = ' + $handPackN + '; want 0 - reuse wrapVariantValue)') }
 if ($hardN -ne 0) { $bad += ('R6 hard-coded binary cmp names in the carrier arm = ' + $hardN + ' (want 0: 走 cmpPrefix 那一处)') }
 if ($selN -ne 1) { $bad += ('R6 "vb6_VarSelCmp" prefix literal = ' + $selN + ' (want exactly 1: typed-label arm)') }
-if ($fallN -ne 1) { $bad += ('R6 "vb6_VarCmp" prefix literal = ' + $fallN + ' (want exactly 1: Variant-slot label arm)') }
+# §11.192: 第二枚 = Date 标签那一支（A7/A8 真机读数：文本按日期静默解析、Null 不命中且不报错）。
+if ($fallN -ne 2) { $bad += ('R6 "vb6_VarCmp" prefix literal = ' + $fallN + ' (want exactly 2: Variant-slot label arm + Date label arm)') }
 if ($prefixN -ne 4) { $bad += ('R6 cmpPrefix( use sites = ' + $prefixN + ' (want exactly 4: Case Is / range low / range high / exact))') }
 if ($boolN -ne 1) { $bad += ('R6 quoted vb6_VariantToBool( emit = ' + $boolN + ' (want exactly 1: the bare Case Is arm)') }
 if ($mixDecN -ne 1) { $bad += ('R6 the carrier decision asks SelectCaseLabelClass::Mixed = ' + $mixDecN + ' times (want exactly 1)') }

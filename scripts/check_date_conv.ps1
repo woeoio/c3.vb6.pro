@@ -202,6 +202,20 @@ if ($r22quiet -ne 1) { $fail += ('R22 quiet date parse = ' + $r22quiet + ' (want
 # R23: b215 夹具两台在跑。
 $r23cells = N '\$Tests\\b215_date_variant_compare\\B215Res\.vbp' $T
 if ($r23cells -ne 2) { $fail += ('R23 b215 run cells = ' + $r23cells + ' (want 2 = x64 + x86)') }
+# R24 (§11.192 第二百零九刀): Select Case 的三处口径 —— 主语 Date 时不走整枚槽那条链、
+# Variant 标签按 CDate 折、Date 标签在 Variant 主语上改走 VarCmp（不再 VarSelCmp 抛 94）。
+$sel = Get-Content -Raw (Join-Path $Root 'src\backend\stmt\cgen_select.cpp')
+$r24skip = N 'if \(isVariantSelect && !isDateSelect\) \{' $sel
+if ($r24skip -ne 1) { $fail += ('R24 date carrier beats variant carrier = ' + $r24skip + ' (want 1)') }
+$r24cd = N 'lt190 == Vb6Type::Variant\) return "vb6_CDate\("' $sel
+if ($r24cd -ne 1) { $fail += ('R24 Variant label -> vb6_CDate = ' + $r24cd + ' (want 1)') }
+$r24dl = N 'dateLabelPresent' $sel
+if ($r24dl -ne 5) { $fail += ('R24 dateLabelPresent reads = ' + $r24dl + ' (want 5 = decl + two sets + gate + comment)') }
+$r24cp = N 'inferExprType\(\*lbl\) == Vb6Type::Date\) return "vb6_VarCmp"' $sel
+if ($r24cp -ne 1) { $fail += ('R24 Date label -> vb6_VarCmp = ' + $r24cp + ' (want 1)') }
+# R25: b216 夹具两台在跑。
+$r25cells = N '\$Tests\\b216_select_variant_label_date\\B216Res\.vbp' $T
+if ($r25cells -ne 2) { $fail += ('R25 b216 run cells = ' + $r25cells + ' (want 2 = x64 + x86)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -210,5 +224,5 @@ if ($fail.Count -gt 0) {
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
     ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells +
-    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells)
+    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells)
 exit 0

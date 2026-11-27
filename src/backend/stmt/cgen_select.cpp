@@ -62,6 +62,20 @@ void CCodeGen::visit(SelectCaseStmt& node) {
     // SysListView32 隐身、ListBox 上位，实测只弹了一句 "clicked button 5"、零枚窗口翻转。
     bool slotLabel = false;
     const SelectCaseLabelClass labelClass = selectCaseLabelClass(node, &slotLabel);
+    // §11.192 (第二百零九刀): 标签里有 **Date 形**（日期字面量 / Date 变量 / Date 数组元素）时,
+    // 主语是槽的话必须走整枚槽那条链 —— 真机 P250 的 A7/A8 读数是「文本日期命中、Null 不命中
+    // 且不报错」, 这正好是 §11.191 给 vb6_VarCmp* 定下的口径（VT_DATE 与文本静默解析、
+    // VT_NULL 无序）；而旧的 int32_t + vb6_VariantToLong 两格都错（A7 答 0、A8 抛 94 误命中）。
+    bool dateLabelPresent = false;
+    for (auto& cc : node.cases) {
+        for (auto& v190 : cc->values) {
+            Expr* e190 = v190.value.get();
+            if (e190 && inferExprType(*e190) == Vb6Type::Date) { dateLabelPresent = true; break; }
+            Expr* t190 = v190.toValue.get();
+            if (t190 && inferExprType(*t190) == Vb6Type::Date) { dateLabelPresent = true; break; }
+        }
+        if (dateLabelPresent) break;
+    }
     if (!isStringSelect && !isFloatSelect && testType == Vb6Type::Variant
         && labelClass == SelectCaseLabelClass::AllString) {
         isStringSelect = true;
@@ -80,7 +94,8 @@ void CCodeGen::visit(SelectCaseStmt& node) {
     // （inferExprType 答 Variant 而 C 侧是 int32_t 的那档）仍走 ToLong。
     const bool wantVariantCarrier = !isStringSelect && !isFloatSelect
         && (slotLabel
-            || (testType == Vb6Type::Variant && labelClass == SelectCaseLabelClass::Mixed));
+            || (testType == Vb6Type::Variant
+                && (labelClass == SelectCaseLabelClass::Mixed || dateLabelPresent)));
 
     emitExpr(*node.testExpr);
     if (isComMarker_) {
@@ -153,7 +168,12 @@ void CCodeGen::visit(SelectCaseStmt& node) {
     bool subjectBoxOwned = false;
     {
         std::string initExpr = testVar;
-        if (isVariantSelect && !testIsVariant) {
+        if (isDateSelect) {
+            // §11.192 (第二百零九刀): Date 承载档优先于“整枚槽”那一档。标签是 Variant 时
+            // `isVariantSelect` 也会为真 (slotLabel), 但主语 Date 的 tempType 是 double ——
+            // 再走 wrapVariantValue 就发成 `double x = vb6_VariantDate(d);` (真机 P250 实测 6 条 C2440)。
+            initExpr = testIsVariant ? ("vb6_CDate(" + testVar + ")") : testVar;
+        } else if (isVariantSelect && !testIsVariant) {
             // 第324刀：主语不是槽而标签是槽 ⇒ 把主语装箱成整枚槽（唯一那处 wrapVariantValue，
             // 与标签同一个打包器）。它说 owns 的（现造的调用 / 对象档取了引用）要在链尾收，
             // 说 borrowed 的（裸变量别名）一个都不许清 —— 同 §B164 那条主人。
@@ -183,7 +203,7 @@ void CCodeGen::visit(SelectCaseStmt& node) {
     // 形状：Case Is op x → VarCmp<Op>(&subj, &x)；Case a To b → VarCmpGe(&subj,&a) &&
     // VarCmpLe(&subj,&b)；精确 → VarCmpEq(&subj,&x)。标签临时量必须提到 if 链**之前**声明，
     // 否则第二枚标签的声明会落在 `}` 与 `else if` 之间（非法 C）。
-    if (isVariantSelect) {
+    if (isVariantSelect && !isDateSelect) {
         auto cmpSuffix = [](BinaryOp op) -> std::string {
             switch (op) {
                 case BinaryOp::Eq:  return "Eq";
@@ -202,6 +222,11 @@ void CCodeGen::visit(SelectCaseStmt& node) {
            依据是真 VB6 /make 实测（2026-11-07）：主语 7 + Case "07" 不命中（串比），
            主语 "07" + Case 7 命中（数比）—— 二进制比较那条「数值恒小于字符串」在这里不成立。 */
         auto cmpPrefix = [&](Expr* lbl) -> std::string {
+            // §11.192: 标签是 Date 形 ⇒ 走 Variant-Variant 那一档（vb6_VarCmp*）——
+            // 它的那套口径（VT_NULL 无序、VT_DATE 与文本静默解析，§11.191）才是真机
+            // 在 P250 A7/A8 上的读数；把主语往 Date 档拉的 VarSelCmp 会把 Null 抛成
+            // 94（实测 A8 误命中），与真机“不命中、不报错”相反。
+            if (lbl && inferExprType(*lbl) == Vb6Type::Date) return "vb6_VarCmp";
             if (lbl && inferExprType(*lbl) != Vb6Type::Variant) return "vb6_VarSelCmp";
             return "vb6_VarCmp";
         };
@@ -309,11 +334,31 @@ void CCodeGen::visit(SelectCaseStmt& node) {
         for (size_t vi = 0; vi < caseClause->values.size(); vi++) {
             auto& cv = caseClause->values[vi];
             std::string cond;
-            // §11.190: Date 主语的标签 —— 串档折成日期序列, 其余按数值原样
+            // §11.190/§11.192: Date 主语的标签 —— 串档折成日期序列, Variant 标签走 CDate 那一档
+            // (文本按日期解析、数值原样、Null 抛 94、坏文本抛 13; 真机 P250 的 A3/A4 就是这两档),
+            // 其余按数值原样。
             auto dateLabel190 = [&](Expr* lbl, const std::string& txt) -> std::string {
                 if (!isDateSelect) return txt;
-                return (lbl && inferExprType(*lbl) == Vb6Type::String)
-                           ? ("vb6_DateVal(" + txt + ")") : txt;
+                // 「这格是 Date 吗」与比较站同一个问句形状: 先问语义类型, 再补数组元素那一形
+                // (inferExprType 对数组元素答 Variant, 与 §11.190 的 Y3 同因)。
+                auto isDate190 = [&](Expr* e) -> bool {
+                    if (!e) return false;
+                    if (inferExprType(*e) == Vb6Type::Date) return true;
+                    if (e->kind == ASTNodeKind::IndexOrCallExpr) {
+                        const auto& ic = static_cast<const IndexOrCallExpr&>(*e);
+                        if (ic.callee && ic.callee->kind == ASTNodeKind::IdentifierExpr) {
+                            auto it = arrayElemTypes_.find(Symbol::toLower(
+                                static_cast<const IdentifierExpr&>(*ic.callee).name));
+                            return it != arrayElemTypes_.end() && it->second == Vb6Type::Date;
+                        }
+                    }
+                    return false;
+                };
+                Vb6Type lt190 = lbl ? inferExprType(*lbl) : Vb6Type::Double;
+                if (isDate190(lbl)) return txt;
+                if (lt190 == Vb6Type::String) return "vb6_DateVal(" + txt + ")";
+                if (lt190 == Vb6Type::Variant) return "vb6_CDate(" + txt + ")";
+                return txt;
             };
 
             if (cv.isIsClause) {
