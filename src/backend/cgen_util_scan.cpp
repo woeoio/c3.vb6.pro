@@ -224,8 +224,8 @@ bool CCodeGen::exprCanRaiseVariantStore(Expr* e) const {
             // §11.214: **数组下标**那一形不是调用 —— 它本身不转换、不 raise（越界 9 那一档
             // 本轮未量，而且 tests/test_bstr_borrow_slot.bas 的借用形状钉着原有发码：
             // `sA = strArr(0)` 必须是 vb6_VariantFromValue(VB6_SA_AT(...)) 那一形）。
-            // 所以只递归实参，不看“下标本身”。其余 IndexOrCall（内建 / 过程 / 方法 / 晚绑定）
-            // 一律当会 raise（保守宽）。
+            // 所以只递归实参，不看“下标本身”。
+            bool isCall = true;
             if (c.callee && c.callee->kind == ASTNodeKind::IdentifierExpr) {
                 const std::string lw = Symbol::toLower(
                     static_cast<IdentifierExpr&>(*c.callee).name);
@@ -236,13 +236,26 @@ bool CCodeGen::exprCanRaiseVariantStore(Expr* e) const {
                         if (exprCanRaiseVariantStore(na.value.get())) return true;
                     return false;
                 }
+                // §11.214 第二版: “任何调用”太宽 —— 门 46053185259 的 b167 形状针脚
+                // `sA = vb6_VariantString(vb6_Left(s, 3));` 被套上守卫（Left$ 不会 raise）。
+                // 收窄到**会做数值/串转换**的那一族（真机 W 族那一批）+ 无处理器过程调用。
+                static const std::unordered_set<std::string> kRaiseConv214 = {
+                    "cstr", "cint", "clng", "cdbl", "csng", "cbyte", "cbool",
+                    "ccur", "cdate", "csbyte", "cuint", "culng", "clnglng",
+                    "clngptr", "cdec", "abs", "int", "fix", "sgn", "round",
+                    "hex", "oct", "sqr", "log", "exp", "sin", "cos", "tan",
+                    "atn", "asc", "ascb", "ascw", "chr", "chrb", "chrw",
+                };
+                isCall = kRaiseConv214.count(lw) != 0;
             }
             if (exprCanRaiseVariantStore(c.callee.get())) return true;
             for (auto& a : c.positional)
                 if (exprCanRaiseVariantStore(a.get())) return true;
             for (auto& na : c.named)
                 if (exprCanRaiseVariantStore(na.value.get())) return true;
-            return true;   // 调用/下标本身就可能 raise
+            // 无处理器过程的调用必然把 raise 爬出来（§11.175 第一百九十二刀那一枚谓词）。
+            if (isCall || exprCallsUnprotectedProc(e)) return true;
+            return false;
         }
         case ASTNodeKind::MemberAccessExpr:
             return exprCanRaiseVariantStore(static_cast<MemberAccessExpr&>(*e).object.get());
