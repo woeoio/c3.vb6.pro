@@ -1321,6 +1321,15 @@ BSTR vb6_HexSlot(vb6_VARIANT v) {
                      vb6_BSTR_FromStr(L"Type mismatch"));
         return vb6_BSTR_FromStr(L"");
     }
+    /* §11.216 (第二百三十三刀): 文字档不许宽松折数。真机 .temp/k225p/P328:
+       H1 `v = "x": w = Hex(v)` ⇒ [keep]/13、H3 `v = ""` ⇒ [keep]/13（空串也不是 0）；
+       而 H2 `v = "12"` ⇒ [C]、O2 `v = "9"` ⇒ [11] 仍然是"文本能折数就折"。
+       改前这里走 vb6_VariantToLong（文本档宽松 ⇒ 0）⇒ [0]/0：号不报、值也错。
+       口径与字面量那一站（`Hex("x")` = [keep]/13，既有的 vb6_DblStrict + CLng）
+       对齐 —— 严格折数只有一位主人，这里不另写解析。 */
+    if (vt == vb6_vtBSTR) {
+        return vb6_HexW(vb6_CLng(vb6_DblStrict(v)), vt);
+    }
     return vb6_HexW(vb6_VariantToLong(v), vt);
 }
 BSTR vb6_Oct(int32_t n) { return vb6_OctW(n, vb6_vtLong); }
@@ -1333,6 +1342,11 @@ BSTR vb6_OctSlot(vb6_VARIANT v) {
         vb6_ErrRaise(13, vb6_BSTR_FromStr(L"VBA.Information"),
                      vb6_BSTR_FromStr(L"Type mismatch"));
         return vb6_BSTR_FromStr(L"");
+    }
+    /* §11.216: 与 HexSlot 同一枚判据（真机 P328 O1 `v = "x"` ⇒ [keep]/13、
+       O2 `v = "9"` ⇒ [11]）—— 两个出口只差最后那一步的底数，折数那一段不许分家。 */
+    if (vt == vb6_vtBSTR) {
+        return vb6_OctW(vb6_CLng(vb6_DblStrict(v)), vt);
     }
     return vb6_OctW(vb6_VariantToLong(v), vt);
 }

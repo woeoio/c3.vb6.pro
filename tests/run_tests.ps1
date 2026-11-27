@@ -13883,6 +13883,26 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "C3=[keep]/94")
     Test-Vbp 'b239_cstr_null_face' "$Tests\b239_cstr_null_face\B239Res.vbp" $b239Needles
     Test-Vbp 'b239_cstr_null_face_x86' "$Tests\b239_cstr_null_face\B239Res.vbp" $b239Needles -Arch "x86"
+    # §11.216 第二百三十三刀: Hex/Oct 收到「文字档」的整只 Variant 槽。
+    # 真机 .temp/k225p/P328（十四格）：H1 "x" ⇒ keep/13、H3 "" ⇒ keep/13、H2 "12" ⇒ C、
+    # O2 "9" ⇒ 11、H4/L2 Null ⇒ Null（不报错）；S1/N1/C1 三个消费者也跟着 13。
+    $b240Needles = @(
+    "H1=[keep]/13/False",
+    "H2=[C]/0",
+    "H3=[keep]/13",
+    "H4=[]/0/True",
+    "H5=[D]/0",
+    "H6=[FFFF]/0",
+    "O1=[keep]/13",
+    "O2=[11]/0",
+    "S1=[keep]/13",
+    "N1=[-99]/13",
+    "N2=[-99]/13",
+    "C1=[keep]/13",
+    "L1=[keep]/13",
+    "L2=[]/0/True")
+    Test-Vbp 'b240_hex_oct_text' "$Tests\b240_hex_oct_text\B240Res.vbp" $b240Needles
+    Test-Vbp 'b240_hex_oct_text_x86' "$Tests\b240_hex_oct_text\B240Res.vbp" $b240Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

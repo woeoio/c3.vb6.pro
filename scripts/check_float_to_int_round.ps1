@@ -480,8 +480,32 @@ if ($cstr215 -notmatch 'isDefinitelyVariantExpr\(\*firstArg\)') {
 $b239Cells = @([regex]::Matches($runnerText, 'b239_cstr_null_face\\B239Res\.vbp')).Count
 if ($b239Cells -ne 2) { $bad += ("S16 b239 run cells = " + $b239Cells + " (want 2 = x64 + x86)") }
 
+# ---- S17: Hex/Oct 的文字档 (账 §11.216 第二百三十三刀) ----
+# 真机 .temp/k225p/P328：H1 `v = "x": w = Hex(v)` ⇒ [keep]/13、H3 `v = ""` ⇒ [keep]/13；
+# 而 H2 `v = "12"` ⇒ [C]、O2 `v = "9"` ⇒ [11]。改前文本档走宽松的 VariantToLong ⇒ [0]/0。
+# 三条判据：(a) HexSlot / OctSlot 都把 vtBSTR 那一档交给 vb6_DblStrict + vb6_CLng；
+# (b) 两个出口不得分家（两张表逐字相同）；(c) 夹具 b240 两套。
+$conv216 = Get-CodeText (Join-Path $root "src\rtl\core\vb6rtl\vb6rtl_conv.c")
+$hSlot216 = [regex]::Match($conv216, 'BSTR vb6_HexSlot\(vb6_VARIANT v\) \{[\s\S]*?\n\}')
+$oSlot216 = [regex]::Match($conv216, 'BSTR vb6_OctSlot\(vb6_VARIANT v\) \{[\s\S]*?\n\}')
+if (-not $hSlot216.Success) { $bad += "S17 vb6_HexSlot body not found" }
+if (-not $oSlot216.Success) { $bad += "S17 vb6_OctSlot body not found" }
+foreach ($slot216 in @(@('Hex', $hSlot216), @('Oct', $oSlot216))) {
+    if ($slot216[1].Success) {
+        $body216 = $slot216[1].Value
+        if ($body216 -notmatch 'vt == vb6_vtBSTR') {
+            $bad += ("S17 vb6_" + $slot216[0] + "Slot no longer routes the text carrier through the strict parse")
+        }
+        if ($body216 -notmatch 'vb6_DblStrict\(v\)') {
+            $bad += ("S17 vb6_" + $slot216[0] + "Slot does not use vb6_DblStrict for the text carrier")
+        }
+    }
+}
+$b240Cells = @([regex]::Matches($runnerText, 'b240_hex_oct_text\\B240Res\.vbp')).Count
+if ($b240Cells -ne 2) { $bad += ("S17 b240 run cells = " + $b240Cells + " (want 2 = x64 + x86)") }
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse)"
