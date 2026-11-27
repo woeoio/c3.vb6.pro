@@ -15018,3 +15018,67 @@ b233 当场红）。这不是小尾巴，是真机把两件事同时钉住了：
 - 背账：`Hex`/`Oct` 的 `LongLong` 档（C3 的 `CLngLng` 载体，VB6 没有这一档，待定）；
   `Hex(<整枚数组>)`；`Abs`/`Sgn` 在 `Empty`/`Null` 的传播（读数对、夹具未钉）；
   `Err.Source`/`Err.Description` 空串。
+
+### §11.211 第二百二十八刀：Sgn 没有变体位
+
+**读数（真机 `.temp/k225p/P313` / `P314` / `P315`）**
+
+| 格 | 表达式 | 真机 |
+| --- | --- | --- |
+| G1 | `d = -99: d = Sgn(Null)`（`On Error Resume Next`） | `-99/94` |
+| G2 | `d = -99: d = Abs(Null)` | `-99/94` |
+| G3 | `d = -99: d = Int(Null)` | `-99/94` |
+| G4 | `d = -99: d = Fix(Null)` | `-99/94` |
+| G5 | `v = "": d = Sgn(v)` | `-99/13` |
+| G6 | `v = "x": d = Sgn(v)` | `-99/13` |
+| G7 | `v = "2.5": d = Sgn(v)` | `1/0` |
+| G8 | `d = Sgn("")` | `-99/13` |
+| G9 | `d = Sgn(Null)`（字面量） | `-99/94` |
+| G10 | `d = Abs(True)` | `1/0` |
+| G11 | `d = Sgn(True)` | `-1/0` |
+| K2/K3 | `IsNull/Abs/Int(Null)` 赋给 Variant | `True/1`（`VarType=1`，即 Null 出） |
+| N1 | `IsNull(Abs(v))` ∧ `IsNull(Int(v))` ∧ `IsNull(Fix(v))`，`v=Null` | `TrueTrueTrue` |
+| N2 | `v = Empty: Abs/Int/Fix/Sgn(v)` | `0000` |
+
+两条互不相同的口径在这里并排：**Abs/Int/Fix 在整只槽上是 Null 进 Null 出**（K2/K3 的 `VarType=1`，`IsNull` 为 True），而 **Sgn 对 Null 直接报 94**、对非数值文本直接报 13。也就是说 Abs/Int/Fix 各有 `*V` 出口（`vb6_AbsV` / `vb6_IntV` / `vb6_FixV`，在装箱站按「整只槽」改道），**Sgn 没有**：它的每一个消费面都是数值面，Null 无处可逃。
+
+**改前本仓的四处差**
+
+| 格 | C3（改前） | 真机 |
+| --- | --- | --- |
+| `Sgn(Null)` 落 Double | `0/0` | `-99/94` |
+| `Sgn("")` | `0/0` | `-99/13` |
+| `Sgn("x")` | `0/0` | `-99/13` |
+| `IsNull(Sgn(Null))` | `False/0` | 语句整条中止（94 抛出） |
+
+发码是 `vb6_Sgn(vb6_VariantToDouble(v))`。问题不在 `vb6_Sgn` 本身（它只是一条平滑的符号函数），而在**实参位那一次提取**：`vb6_VariantToDouble` 必须保持宽松（`Val` 那一族整族靠它，`check_conv_strict_parse.ps1` 的 `val-still-lenient` 一格钉着这一点），于是 Null 折成 `0.0`、非数值文本折成 `0.0`，两档都静默落进 `vb6_Sgn` 的 `>0 / <0 / else` 三层里。
+
+这已经是同一族缺陷第三次以不同外衣出现：§11.75（第九十七刀）给 **Double 目标上的 Int/Fix/Abs** 加了严格入口 `vb6_DblStrict`；§11.208（第二百二十五刀）发现 `Round` 的判据是**文本前缀**、而实际发码换了载体名，分支静默落空；§11.209/§11.210 两刀则把 `Hex/Oct` 的档位从「文本」改问「静态档 + 载体」。本次的判据不靠文本前缀里的函数名，只靠**这一站拿到的那一位实参是不是「整只槽被 VariantToDouble 折了」这一形**。
+
+**改法：一处判据，一枚既有入口**
+
+`cgen_expr_call_builtin_argtype.inc`（内建函数实参类型适配站）在 `Hex/Oct` 那一块之后补一枚 `Sgn` 分支：只认 `callee == "vb6_Sgn" && args.size() == 1`，且第一位实参的文本确实是 `vb6_VariantToDouble(<…>)` 的**整串包裹**（按括号配平找到闭合位，闭合位必须正好落在末字符 —— 只按下标取子串的老写法在实参里再嵌一层括号时会切错），取出内层槽文本，改写成 `vb6_DblStrict(<槽>)`，同步替换 `argList` 里的那一位。
+
+为什么 `Sgn` 可以直接换、`Hex/Oct` 却要劈成两条路？因为 `Sgn` **没有变体消费面**：`Abs/Int/Fix` 那三枚在装箱站（`boxToVariant` 的 k64 表与 `mathNullFamilyV`）会被改道到 `*V` 出口，那两站的判据同样是「整只槽被 `VariantToDouble` 折了」这一形 —— 一旦在 argtype 站把文本改成 `vb6_DblStrict(`，前缀就对不上，装箱站会静默落空（§11.208 的原形）。`Sgn` 在两站的名单里都不出现，改它不会碰到任何前缀判据，因此这一刀不需要新增第二位消费者。
+
+`vb6_DblStrict` 是既有入口（`vb6rtl_conv.c`，第九十七刀），行为正好是三档：`Null ⇒ 94`、`BSTR ⇒ vb6_Dbl_AssignFromBSTR`（非数值 ⇒ 13，且不改写出参）、其余走 `vb6_VariantToDouble`（Empty ⇒ 0、Boolean ⇒ -1、Date ⇒ 序号）。这一刀**没有新增 RTL 函数**，也没有让 `vb6_Sgn` 自己抛错（哨兵 S12(c) 钉着这一点：抛错归调用点那一位主人，`vb6_Sgn` 仍是平滑函数）。
+
+**夹具与哨兵**
+
+- 新夹具 `tests/b235_sgn_null_gate`（14 格，`.bas` + `.vbp`，全部 `Debug.Print`）：G1..G11 逐格照 P313，另有 N1（Abs/Int/Fix 的 Null 传播仍是 Null）、N2（Empty 四枚都是 0）、N3（`Sgn(-3.5)`/`Sgn(0)`/`Sgn("2.5")`）= `-101`。`run_tests.ps1` 里 x64 + x86 两套。
+- `scripts/check_float_to_int_round.ps1` 新增 **S12**（现为 S1..S12），判据三条：(a) argtype 站的 `callee == "vb6_Sgn"` 恰 1 处且仍路由到 `vb6_DblStrict`；(b) `cgen_expr_call_builtin_pre.inc` 的 `*V` 改道名单里**不许**出现 `sgn`（真机答 94，不是 Null）；(c) `vb6_Sgn` 本体不含 `vb6_ErrRaise`/`vb6_RaiseError`。
+- 清单 `emit-manifest.expected.txt` 增两行（b235 的 `.bas`/`.vbp`），inputs 960 → 962。
+
+**验证**
+
+- 夹具 x64 / x86 各 14 格与真机 P315 逐行相同（`IDENTICAL`）。
+- 探针整份复跑：P313 十一格改前 `G1/G2/G5/G6/G9` 差、改后**逐行与真机相同**；P312 的 N2 也从 `False/0` 变成「语句整条中止」，与真机同形。
+- 本机 13 条门禁全绿（含 `check_owned_temp_keeps` 260 行、`check_rtl_proto_arity` 1809 对、`check_static_sentinel_registration` 149 条）。
+- CI：head `b5ad8d42` → GA **46030381053 = 23/23 success**，failure=0（`Emit manifest` 一格也直接绿 —— 两行哈希在 CI 那台与本机逐字相同）。
+
+**背账（本刀没有动的四处，都是同一个「数值位提取」家族）**
+
+1. `Abs("")` / `Abs("x")` 出现在**字符串消费面**（`s = CStr(Abs(v))`）时仍走 `vb6_Abs(vb6_VariantToDouble(v))`，C3 给 `[0]/0`，真机 `[keep]/13`（P312 的 S1/S2）。数值目标那一面已经由第九十七刀的 `vb6_DblStrict` 覆盖，缺的是字符串面 —— 那里的「严格性」该由谁判（argtype 站的消费面未知，装箱站又必须先看到 `VariantToDouble` 那一形）还没定，留给下一刀。
+2. `Hex(<整枚数组>)` / `Oct(<整枚数组>)`：真机 `[keep]/13`，C3 是 `[0]/0`，`Oct(a)` 更把数组描述符指针当整数打出来（P312 的 A1..A3）。整枚数组不是槽，判据要问 `isWholeArrayRef` 这一族，与「槽的宽度」是两回事。
+3. `Hex/Oct` 的 `LongLong` 档（`Hex(CLngLng(...))` 的 16 位宽）尚未与真机对齐。
+4. `Err.Source` / `Err.Description` 空串。
