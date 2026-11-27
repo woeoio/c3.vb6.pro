@@ -13704,6 +13704,26 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "W2=[70000][2]")
     Test-Vbp 'b231_num_kind' "$Tests\b231_num_kind\B231Res.vbp" $b231Needles
     Test-Vbp 'b231_num_kind_x86' "$Tests\b231_num_kind\B231Res.vbp" $b231Needles -Arch "x86"
+    # §11.208 第二百二十五刀: Round 的**变体载体**出口（Round(v) 保载体子类型）。
+    # 真机 .temp/k224p/P298(vI..vN) / P300(V1..V7 第三列) / P304 全格一致。
+    $b232Needles = @(
+    "N1=2/3",
+    "N2=3/70000",
+    "N3=4/2",
+    "N4=6/2",
+    "N5=17/7",
+    "N6=7/5",
+    "N7=2/-1",
+    "N8=2/0",
+    "N9=True/1",
+    "M1=2/2/2.5",
+    "M2=0",
+    "M3=2.68",
+    "M4=5/3",
+    "M5=-5/-5",
+    "K1=236")
+    Test-Vbp 'b232_round_carrier' "$Tests\b232_round_carrier\B232Res.vbp" $b232Needles
+    Test-Vbp 'b232_round_carrier_x86' "$Tests\b232_round_carrier\B232Res.vbp" $b232Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

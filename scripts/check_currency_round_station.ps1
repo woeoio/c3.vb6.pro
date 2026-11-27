@@ -619,6 +619,32 @@ else {
     if ($n20b -ne 2) { $bad += ('R20 b231 run cells = ' + $n20b + ' (want 2 = x64 + x86)') }
 }
 
+# ---- R21 (§11.208 第二百二十五刀): Round 的**变体载体**出口 ----
+# 真机 .temp/k224p/P298(vI..vN) / P300(V1..V7) / P304(夹具): Round(v) 保载体子类型。
+# 判据：装箱站（k64 那一站）必须有 round 臂，且它交的是 vb6_RoundV；
+# 纯 Double 直参那一臂（vb6_Round）不许被它顶掉。
+if ($null -eq $ct21) { $ct21 = Read-File 'src/backend/cgen_util_ctrl.cpp' }
+if ($null -eq $ct21) { $bad += 'R21 cgen_util_ctrl.cpp not found' }
+else {
+    $n21 = @([regex]::Matches($ct21, 'fn64 == "round"')).Count
+    if ($n21 -ne 1) { $bad += ('R21 the box station round arm = ' + $n21 + ' (want 1)') }
+    $n21b = @([regex]::Matches($ct21, [regex]::Escape('return "vb6_RoundV(" + innerR64'))).Count
+    if ($n21b -ne 1) { $bad += ('R21 vb6_RoundV reroute = ' + $n21b + ' (want 1)') }
+}
+$conv21 = Read-File 'src/rtl/core/vb6rtl/vb6rtl_conv.c'
+if ($null -eq $conv21) { $bad += 'R21 vb6rtl_conv.c not found' }
+else {
+    if ($conv21 -notmatch 'vb6_VARIANT vb6_RoundV\(vb6_VARIANT v, int32_t decimals\)') {
+        $bad += 'R21 vb6_RoundV definition missing'
+    }
+}
+$runner21 = Read-File 'tests/run_tests.ps1'
+if ($null -eq $runner21) { $bad += 'R21 run_tests.ps1 not found' }
+else {
+    $n21c = @([regex]::Matches($runner21, 'b232_round_carrier\\B232Res\.vbp')).Count
+    if ($n21c -ne 2) { $bad += ('R21 b232 run cells = ' + $n21c + ' (want 2 = x64 + x86)') }
+}
+
 if ($bad.Count -gt 0) {
     Write-Host ('FAIL currency_round_station: ' + ($bad -join ' | '))
     exit 1
@@ -631,5 +657,6 @@ Write-Host '  R17 Currency array elements are doubles with the same identity (st
 Write-Host '  R18 Currency range gate raises Error 6 on overflow (no UB wrap) OK'
 Write-Host '  R19 Abs/Int/Fix/Round keep the Currency identity (typed + Variant carrier) OK'
 Write-Host '  R20 Abs/Int/Fix/Round answer the argument numeric kind (Integer/Long/Single/Byte/Date/Boolean) OK'
-Write-Host 'PASS currency_round_station (R1..R20)'
+Write-Host '  R21 Round on a Variant carrier keeps the carrier subtype (one reroute in the box station) OK'
+Write-Host 'PASS currency_round_station (R1..R21)'
 exit 0

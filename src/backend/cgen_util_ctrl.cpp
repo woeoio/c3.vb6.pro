@@ -4820,6 +4820,33 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
                     return std::string(m64.out) + inner64 + ")";
                 }
             }
+            // §11.208 (第二百二十五刀): Round 有 0..1 个位数实参，上面那张单参表接不住
+            // （它的闸门是 positional.size()==1）。真机 .temp/k224p/P298 的 vI..vN 与
+            // P300 的 V1..V7 第三列：变体载体上的 Round 也保子类型（2/3/4/6/17/2/1）。
+            // 作法与 §11.207 在 mathNullFamilyV 里那一支完全同形：从
+            // `vb6_Round(vb6_VariantToDouble(` 之后按括号配平取第一实参正文，
+            // 尾巴空 ⇒ 位数缺省 0，尾巴是 `, n)` ⇒ 照抄。
+            if (fn64 == "round" && call64.positional.size() <= 2) {
+                static const std::string preR64 = "vb6_Round(vb6_VariantToDouble(";
+                size_t sR64 = 0;
+                while (sR64 < cExpr.size() && (cExpr[sR64] == '(' || cExpr[sR64] == ' ')) sR64++;
+                if (cExpr.compare(sR64, preR64.size(), preR64) == 0) {
+                    const size_t pR64 = sR64 + preR64.size();
+                    int depthR64 = 1;
+                    size_t kR64 = pR64;
+                    for (; kR64 < cExpr.size(); ++kR64) {
+                        if (cExpr[kR64] == '(') depthR64++;
+                        else if (cExpr[kR64] == ')') { if (--depthR64 == 0) break; }
+                    }
+                    if (kR64 < cExpr.size()) {
+                        std::string innerR64 = cExpr.substr(pR64, kR64 - pR64);
+                        std::string tailR64 = cExpr.substr(kR64 + 1);
+                        if (!tailR64.empty() && tailR64.back() == ')') tailR64.pop_back();
+                        if (tailR64.empty()) tailR64 = ", 0";
+                        return "vb6_RoundV(" + innerR64 + tailR64 + ")";
+                    }
+                }
+            }
         }
     }
     // C30-10 第三十二刀 格①: 常整数 / `As Integer` 变量按 VB6 的**Integer 档**装箱。
