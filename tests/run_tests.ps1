@@ -5770,11 +5770,13 @@ if ($Category -in @("all", "run", "bas")) {
         "$Tests\b170_mrt\B170Main.bas", "$Tests\b170_mrt\B170Holder.cls",
                  "$Tests\b170_mrt\B170Holder2.cls") @(
         # 撞名的 Variant 字段读 → 槽档; With 那一站同一个答案; Long 字段走数值档; String 字段裸读
-        'vb6_CStr(vb6_VariantFromValue(h->PV  /* class var .PV field variant */))',
-        'vb6_CStr(vb6_VariantFromValue(_vb6_with_0->PV  /* With class .PV field variant */))',
+        # §11.215 (第二百三十二刀): 整只槽的 CStr 现在统一走 vb6_CStrStrict（Null ⇒ 94），
+        # 槽档判定本身一字未变 —— 这里钉的仍是「哪一格交给槽档」。
+        'vb6_CStrStrict(h->PV  /* class var .PV field variant */)',
+        'vb6_CStrStrict(_vb6_with_0->PV  /* With class .PV field variant */)',
         'vb6_CStrLong(h->Command  /* class var .Command field */)',
         'vb6_Len(k->PV  /* class var .PV field */)',
-        'vb6_CStr(vb6_VariantFromValue(h->PZ  /* class var .PZ field variant */))'
+        'vb6_CStrStrict(h->PZ  /* class var .PZ field variant */)'
     )
     Test-EmitcAbsent "b170_member_read_lesion" @(
         "$Tests\b170_mrt\B170Main.bas", "$Tests\b170_mrt\B170Holder.cls",
@@ -9940,7 +9942,7 @@ if ($Category -in @("all", "run", "vbp")) {
     # 所以它自己就是那道闸的编译级反面证人（实测：闸摘掉 ⇒ NEW-BUILD-RC=1）。
     Test-EmitcShape "ga_emitc_handle_value_compare" @("$Tests\geomarr\GeomArr.vbp") @(
         '-(vb6_GetControlHwnd(vb6_CtrlArr_GetAt(&vb6_arr_arrA, 0)) != vb6_GetControlHwnd(vb6_CtrlArr_GetAt(&vb6_arr_arrA, 1)))',
-        'vb6_CStr(vb6_VariantFromValue(vb6_VariantFromComResult(vb6_ComGetProp(vb6_hwnd_soloT, L"hDC"))))')
+        'vb6_CStrStrict(vb6_VariantFromComResult(vb6_ComGetProp(vb6_hwnd_soloT, L"hDC")))')
     Test-EmitcAbsent "ga_emitc_handle_not_object_box" @("$Tests\geomarr\GeomArr.vbp") @(
         'vb6_VariantFromValue(vb6_GetControlHwnd(vb6_CtrlArr_GetAt(&vb6_arr_arrA, 0)))',
         'vb6_VariantFromValue(vb6_GetControlHwnd(vb6_CtrlArr_GetAt(&vb6_arr_arrA, 1)))')
