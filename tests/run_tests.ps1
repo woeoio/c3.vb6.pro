@@ -13660,6 +13660,30 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "G4 err=6")
     Test-Vbp 'b229_abs_round_date' "$Tests\b229_abs_round_date\B229Res.vbp" $b229Needles
     Test-Vbp 'b229_abs_round_date_x86' "$Tests\b229_abs_round_date\B229Res.vbp" $b229Needles -Arch "x86"
+    # §11.206 第二百二十三刀: Round 半到偶（银行家四入）+ numdecimalplaces 0..22。
+    # 真机 .temp/k223p/P296 全格一致; 改前是 C 的 round()（半值向外）+ 无位域门。
+    $b230Needles = @(
+    "R1=[0]",
+    "R2=[2]",
+    "R3=[4]",
+    "R4=[0] len=1",
+    "R5=[-2]",
+    "R6=[0.12]",
+    "R7=[0.38]",
+    "R8=[2.68]",
+    "R9=[1]",
+    "RA=[1.234]",
+    "RB=[0]",
+    "RC=[0.2]",
+    "RD=[1236]",
+    "RE=[3]",
+    "RF=[2]",
+    "RG=[2]",
+    "S1 err=5",
+    "S2 err=5",
+    "S3 err=0 v=[1.5]")
+    Test-Vbp 'b230_round_banker' "$Tests\b230_round_banker\B230Res.vbp" $b230Needles
+    Test-Vbp 'b230_round_banker_x86' "$Tests\b230_round_banker\B230Res.vbp" $b230Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

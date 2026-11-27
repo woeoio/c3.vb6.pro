@@ -156,9 +156,35 @@ vb6_VARIANT vb6_OctV(vb6_VARIANT v) {
 }
 int32_t vb6_Sgn(double x) { return (x > 0) ? 1 : (x < 0) ? -1 : 0; }
 double vb6_Sqr(double x) { return sqrt(x); }
+// §11.206 (第二百二十三刀): VB6 `Round` 的口径 = **半到偶**（银行家四入）+ 位域 [0,22]。
+// 真机 .temp/k223p/P290..P294（53 格）：
+//   Round(0.5)=0  Round(2.5)=2  Round(4.5)=4  Round(-0.5)=0  Round(-2.5)=-2  Round(-4.5)=-4
+//   Round(0.125,2)=0.12  Round(0.375,2)=0.38  Round(1.2345,3)=1.234
+//   Round(2.675,2)=2.68  ← 2.675*100 在 double 里落回 267.5（差 1.8e-14 < 半步 2.8e-14）
+//   Round(1.005,2)=1     ← 1.005*100 = 100.49999999999999，不足半步
+//   Round(0.05,1)=0      ← 0.05*10 恰好落回 0.5
+//   Round(2.5,-1) / Round(1.5,23) / Round(1.5,25) ⇒ 错误 5；Round(1.5,22) 正常
+// 所以口径就是「先乘再半到偶」，**不能**换成十进制串取整 —— 那样 1.005 会变 1.01、
+// 2.675 又碰巧对，两个真读数会互相打架；而双精度乘法的舍入恰好把两者都解释通了。
+//
+// 「半到偶」这一家**只许有一个主人**：浮点→窄整型的 vb6_FltToLng 早就是同一条规则
+// （账 #248 / Fix 431），本刀把它的身子提到这里，Round 也问它 —— 两份手写就是两个答案。
+// 不用 `rint`：它随 FP 环境可改，MSVC 各架构实现也不一。这里手算 floor + 小数部分，
+// 平局那一格看 floor 的奇偶。
+double vb6_RoundHalfEven(double x) {
+    double f = floor(x);
+    double d = x - f;                 /* 0 <= d < 1 */
+    if (d > 0.5) return f + 1.0;
+    if (d < 0.5) return f;
+    return (((int64_t)f & 1) == 0) ? f : f + 1.0;   /* 平局：留偶数那一边 */
+}
 double vb6_Round(double x, int32_t decimals) {
+    // 位域：VB6 的 numdecimalplaces 只收 0..22，其余（含负数）一律 5。
+    if (decimals < 0 || decimals > 22) { vb6_ErrRaiseNumber(5); return x; }
     double factor = pow(10.0, (double)decimals);
-    return round(x * factor) / factor;
+    double scaled = x * factor;
+    if (scaled != scaled) return x;              /* NaN 不该出现，防一手 */
+    return vb6_RoundHalfEven(scaled) / factor;
 }
 
 // Fix 117: VB6 默认「数值 → 字符串」(CStr(x) / Format(x, "") 无格式串) 语义。
@@ -375,11 +401,8 @@ int32_t vb6_ChkLong(int64_t v) {
    的树线列因此整列偏移 2px、首行文字上移 1px，文字行带被并成少一行。
    负号这边同一条规则：`CLng(-2.5) = -2`、`CLng(-3.5) = -4`（floor 后看奇偶）。 */
 int64_t vb6_FltToLng(double x) {
-    double f = floor(x);
-    double d = x - f;                 // 0 <= d < 1
-    if (d > 0.5) return (int64_t)(f + 1);
-    if (d < 0.5) return (int64_t)f;
-    return (((int64_t)f & 1) == 0) ? (int64_t)f : (int64_t)(f + 1);
+    // §11.206 (第二百二十三刀): 身子提到 vb6_RoundHalfEven —— 与 Round 同一份答案。
+    return (int64_t)vb6_RoundHalfEven(x);
 }
 
 #ifdef vb6_CInt

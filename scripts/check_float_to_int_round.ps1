@@ -9,7 +9,9 @@
 # 规则 (改坏了会红, 不是装饰):
 #   S1  取整出口只有一枚: vb6_FltToLng 在 src/rtl 里恰好定义一次，在 vb6rtl_builtin.h 里声明一次
 #   S2  半值取偶那一位也只许有一处: `((int64_t)f & 1) == 0` 在 src/rtl 里恰好 1 次，且住在
-#       vb6_FltToLng 体内; 旧的 `(int64_t)round(` 形必须为 0 (它现在是半个答案: 半值向外)。
+#       「半到偶」的唯一主人 vb6_RoundHalfEven 体内（第二百二十三刀把身子从 vb6_FltToLng
+#       提到这里，Round 也问它）; vb6_FltToLng 必须只委托一次；旧的 `(int64_t)round(` 形
+#       必须为 0 (它现在是半个答案: 半值向外)。
 #       (Fix 431 把这里从 round() 改成 floor + 奇偶判定 —— 银行家舍入, 见 vb6rtl_conv.c 那条)
 #       (改前 vb6_CInt / vb6_CLng 各抄了一遍 —— 那正是"两个答案"的另一半)
 #   S3  显式转换与隐式赋值同源: vb6_CInt / vb6_CLng 的体内必须调 vb6_FltToLng (两处)
@@ -119,8 +121,14 @@ if ($roundCount -ne 0) {
 $mHelp = [regex]::Match($convText, 'int64_t\s+vb6_FltToLng\s*\([^)]*\)\s*\{[\s\S]*?\}')
 if (-not $mHelp.Success) {
     $bad += "S2 helper body not found in vb6rtl_conv.c"
-} elseif (@([regex]::Matches($mHelp.Value, $evenTag)).Count -ne 1) {
-    $bad += "S2 the one half-even tie-break is not inside vb6_FltToLng's body"
+} elseif (@([regex]::Matches($mHelp.Value, 'vb6_RoundHalfEven\(')).Count -ne 1) {
+    $bad += "S2 vb6_FltToLng no longer delegates to vb6_RoundHalfEven exactly once"
+}
+$mEven = [regex]::Match($convText, 'double\s+vb6_RoundHalfEven\s*\([^)]*\)\s*\{[\s\S]*?\n\}')
+if (-not $mEven.Success) {
+    $bad += "S2 vb6_RoundHalfEven body not found in vb6rtl_conv.c"
+} elseif (@([regex]::Matches($mEven.Value, $evenTag)).Count -ne 1) {
+    $bad += "S2 the one half-even tie-break is not inside vb6_RoundHalfEven's body"
 }
 
 # ---- S3: CLng / CInt 同源 ----
@@ -222,8 +230,39 @@ if ($nOtherAsk -ne 0) {
     $bad += ("S8 narrowTargetTypeOf consumed outside cgen_util_type.cpp: " + $nOtherAsk + " site(s)")
 }
 
+# ---- S9: Round 的口径 = 半到偶 + 位域 [0,22] (账 §11.206 第二百二十三刀) ----
+# 真机 .temp/k223p/P290..P296: 平局往偶、位域外 5、且 2.675→2.68 与 1.005→1 两枚读数
+# 只有在「先乘再半到偶」下才能同时成立（十进制串取整会把 1.005 打成 1.01）。
+$roundDef = @([regex]::Matches((Get-CodeText $conv), 'double\s+vb6_RoundHalfEven\s*\(')).Count
+if ($roundDef -ne 1) { $bad += ("S9 vb6_RoundHalfEven definitions in vb6rtl_conv.c = " + $roundDef + " (want 1)") }
+$roundDecl = @([regex]::Matches((Get-CodeText $hdr), 'double\s+vb6_RoundHalfEven\s*\(\s*double\s+x\s*\)\s*;')).Count
+if ($roundDecl -ne 1) { $bad += ("S9 vb6_RoundHalfEven declaration = " + $roundDecl + " (want 1)") }
+$roundUse = 0
+foreach ($f in Get-SrcFiles $rtlDir) {
+    if ($f.Extension -ne ".c") { continue }   # 头里的声明单算，不混进站点普查
+    $roundUse += @([regex]::Matches((Get-CodeText $f.FullName), 'vb6_RoundHalfEven\(')).Count
+}
+if ($roundUse -ne 3) { $bad += ("S9 vb6_RoundHalfEven sites in .c = " + $roundUse + " (want 3 = def + FltToLng + Round)") }
+$mRound = [regex]::Match((Get-CodeText $conv), 'double\s+vb6_Round\s*\(\s*double\s+x[^)]*\)\s*\{[\s\S]*?\n\}')
+if (-not $mRound.Success) {
+    $bad += "S9 vb6_Round body not found"
+} else {
+    if (@([regex]::Matches($mRound.Value, 'decimals\s*<\s*0\s*\|\|\s*decimals\s*>\s*22')).Count -ne 1) {
+        $bad += "S9 vb6_Round no longer gates numdecimalplaces to 0..22 with error 5"
+    }
+    if (@([regex]::Matches($mRound.Value, 'vb6_ErrRaiseNumber\s*\(\s*5\s*\)')).Count -ne 1) {
+        $bad += "S9 vb6_Round does not raise error 5 outside 0..22"
+    }
+    if (@([regex]::Matches($mRound.Value, '(?<!_)\bround\s*\(')).Count -ne 0) {
+        $bad += "S9 vb6_Round calls round() again (half-away-from-zero is the old answer)"
+    }
+}
+$runnerText = [System.IO.File]::ReadAllText((Join-Path $root "tests\run_tests.ps1"))
+$b230Cells = @([regex]::Matches($runnerText, 'b230_round_banker\\B230Res\.vbp')).Count
+if ($b230Cells -ne 2) { $bad += ("S9 b230 round-banker run cells = " + $b230Cells + " (want 2 = x64 + x86)") }
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round(), S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22)"

@@ -124,6 +124,8 @@ vb6_VARIANT vb6_AbsV(vb6_VARIANT v);
 int32_t vb6_Sgn(double x);
 double vb6_Sqr(double x);
 double vb6_Round(double x, int32_t decimals);
+// §11.206: 「半到偶」的唯一主人 —— Round 与浮点→窄整型 (vb6_FltToLng) 同问这一处。
+double vb6_RoundHalfEven(double x);
 // Fix 117: VB6 默认数值→字符串 (最短往返表示; Single 最多 7 位有效数字)
 BSTR vb6_NumToBSTRDefault(double v, int isSingle);
 // Fix RND-SEQ: 与 VB6 逐值一致 (24-bit LCG + Randomize 折半 XOR)。seed 收 double:
