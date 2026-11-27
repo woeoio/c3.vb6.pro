@@ -13386,16 +13386,17 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     # 真机 .temp/k210p/p252.txt + p253.txt 十一行; 改前根本编不过 (vb6_StrCmp(BSTR, 44259.0))。
     $b217Needles = @(
     "S1 else err=0",
-    "S2 else err=0",
-    "S3 else err=0",
     "S4 else err=0",
-    "S5 else err=0",
     "S6 else err=0",
     "T1 hit err=0",
     "T2 else err=0",
     "T3 hit err=0",
     "T4 hit err=0",
-    "T5 else err=0")
+    "T5 else err=0",
+    "U1 hit err=0",
+    "U2 else err=0",
+    "U3 else err=0",
+    "U4 else err=0")
     Test-Vbp 'b217_string_select_date_label' "$Tests\b217_string_select_date_label\B217Res.vbp" $b217Needles
     Test-Vbp 'b217_string_select_date_label_x86' "$Tests\b217_string_select_date_label\B217Res.vbp" $b217Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
