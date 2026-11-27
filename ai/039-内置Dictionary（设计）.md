@@ -14617,3 +14617,138 @@ floor + 小数部分在哪都是同一个答案。`FltToLng` 的行为逐值不�
   能解释四分之三的格子，剩下的那一格（`2.5000000000000004`）才说明真值没被截断成串。
   另一条：这一刀最省事的地方是发现 `vb6_FltToLng` 早就写好了同一个谓词 —— 先找一找
   「这条规则是不是已经有一个主人」，比写第二份快，也免得下一次有人只改一处。
+
+## §11.207 Abs / Int / Fix / Round 的返回子类型 = 实参子类型（第二百二十四刀）
+
+上一刀背账第一条是「`Round` 的子类型保持」：真机 `Round(Integer)`→2、`Long`→3、`Byte`→17，
+C3 一律答 Double。本刀先按名去改 `Round`，量到第二张表才发现**它不属于 `Round` 一家**。
+
+### 一、现象
+
+真机 `.temp/k224p/P298.bas`（四个函数 × 六档 × 直接 / 变量 / `Function` 三路）：
+
+```
+AI=2 AL=3 AS=4 AC=6 AB=17 AD=5      VarType(Abs(i/l/s/c/b/d))
+II=2 IL=3 IS=4 IC=6 IB=17 ID=5      VarType(Int(...))
+FI=2 FL=3 FS=4 FC=6 FB=17 FD=5      VarType(Fix(...))
+RI=3 RL=3 RS=4 RC=6 RB=17 RD=5      VarType(Round(...))     ← 改前 RI=3 是 C3 的答案
+```
+
+`P300.bas` 补三条：
+
+```
+D1=2 -1     VarType(Int(CBool(True)))            Boolean 实参 → Integer，值 -1
+D2=2 D3=2   同理 Fix / Round
+U1=77       VarType(Int(t)) 与 VarType(Round(t))  —— Date 实参仍是 Date（上一刀）
+```
+
+`P302.bas` 把「`Dim i As Integer` 到底算不算 Integer」钉死：
+
+```
+K1=11   VarType(2)        K2=2    VarType(30000)     K3=2   VarType(CDate) 之外
+K4=11   VarType(2&)       K5=2    VarType(Round(i,0)) K6=2  VarType(Round(40000&,0))
+```
+
+C3 改前：`AL`/`IL`/`FL`/`RL` 全 5（`Long` 落 Double）、`AB`/`IB`/`FB`/`RB` 全 5（`Byte` 落
+Double）、`RI` 给 3、`D1..D3` 给 5、`K5` 给 3。`AI`/`II`/`FI`（Integer）那一列本来就对 ——
+因为 `inferExprType` 里 `Integer` 与 `Long` 在符号表里是**同一档**（C 侧都是 `int32_t`），
+真正区分它们的是另一把尺。
+
+### 二、三处一起改，判据只住一处
+
+| 站 | 文件 | 改法 |
+|---|---|---|
+| 类型推断 | `cgen_util_type.cpp` `inferExprType` | §11.166（Currency）+ §11.204/205（Date）两条前账合并成**一个 switch**：实参 Integer/Long/Single/Double/Currency/Date/Byte ⇒ 同名返回，Boolean ⇒ Integer |
+| 变体装箱 | `cgen_util_ctrl.cpp` `wrapVariantValue` / `boxToVariant` | 补 `case Integer`，`Long` 臂显式收窄（以前这两档没有臂，落 `_Generic` 猜 C 类型） |
+| 载体保档 | `vb6rtl_conv.c` | 新提 `vb6_VariantNumSameKind` —— 「按载体装回哪一档」的唯一主人；`vb6_IntV` / `vb6_FixV` / 新 `vb6_RoundV` 三枚同问它 |
+
+两个坑各有名字：
+
+1. **`Integer` 在符号表里记成 `Long`。** 先问 `inferExprType` 会得到 Long，`Round(i)` 于是答 3
+   （K5 的红）。所以 switch 之前先问 `isNarrowIntExpr(positional[0])` —— 与 `Const` 收窄
+   那一处**同一把尺**，没有第二份判据。
+2. **装箱站缺 Integer 臂。** 补齐前 `Int(i)` 推出的类型是 Integer，但装箱 `switch` 没有这一档，
+   落 `_Generic`：`vb6_Int(...)` 的 C 返回类型是 `double` ⇒ 装成 VT_R8。这条只在有
+   `case Integer` 之后才看得出来（改前 `II` 反而是对的，因为那时推断结果是 Double，
+   `case Double` 恰好命中 —— **两处错互相抵消**，是最难量的那种绿）。
+
+### 三、夹具与区域无关
+
+`tests/b231_num_kind` 十四格，x64/x86 各一份，全是 `VarType` 整数、小整数与 `(-1)`：
+
+- `S1..S4`：四个函数 × 六档，直接打成 `2346175` 这样的串；
+- `T1/T2`：Boolean 实参 → `222`、值 `[-1]`；
+- `U1`：Date 实参 → `77`（上一刀那两格没被本刀碰坏）；
+- `V1..V5`：Int/Fix 的**变体载体**（Long `33`、Byte `1717`、Empty `22`、Null `11`、Single `44`）；
+- `W1/W2`：值本身不变（`Int(CInt(-5))` 仍是 `-5`、`Int(70000)` 仍是 `70000`）。
+
+真机 `P303.bas` → `p303.txt` 十四行；C3 改后 x64/x86 逐行相同。
+
+### 四、回归面
+
+- **b179**（Currency 平局）/ **b185**（Currency 溢出）/ **b196**（Format 定点）/ **b228**
+  （Int/Fix 的 Date 身份）/ **b230**（Round 半到偶）本机复跑读数不变 —— 这一刀动的是
+  身份与装箱，取值路径一格未碰。
+- **§11.206 的 `vb6_RoundHalfEven` 仍是唯一 tie-break 主人**：本刀只加「装回哪一档」，
+  没有再写第二份取整。
+- 第一版进 GA 时红了一格真行为：`tests/k483_redim_member_elem` 的
+  `K483-long-vt` / `K483-int-vt` 从 8195/8194 变成 3/2。病根不是取值，而是**整枚数组**：
+  `VarType(d)` 里 `d` 是载体描述符，本该答 `vtArray|vt<元素>`，被新加的 Integer/Long 臂
+  当成标量收窄（8194 截成 16 位 = 2）。修法是给两个臂各加一句排除：
+  `isWholeArrayRef(expr) || isSafeArrayCarrier(cExpr)` ⇒ 交给 `_Generic` 那条原路。
+  这也是「同一句话只能有一处主人」的反面教材：那条 `_Generic` 早就知道数组该装成什么，
+  新加的臂只看「静态类型是不是 Integer」，看不见「它其实是描述符」。
+- 发射面：**后端改动进 `--emit-c`**，全量清单里有 **68 行**哈希变了（Integer/Long 两档
+  不再落 `_Generic`），逐行归因后重登记；清单只增 b231 两行（inputs 954 → 956）。
+  `cgen_variant_slot_prefixes.inc` 按 `gen_variant_slot_prefixes.ps1` 重派生（68 名：
+  `+vb6_RoundV`、`+vb6_VariantNumSameKind`）——那张表是生成物，`check_builtin_slot_returns`
+  会两个方向对账，手改必红。
+
+### 五、读数与针
+
+- **R19 跟到新主人**：`vb6_IntV`/`vb6_FixV` 不再各写一份 Currency 保档，只许委托
+  `vb6_VariantNumSameKind`；「保 Currency」的判据落在新主人身上（`vb6_vtCurrency` +
+  `vb6_VariantCur` 各 1 处）。
+- 新增 **R20**：子类型矩阵（`isNarrowIntExpr` 先问、名单含 Byte/Single/Long）、
+  `boxToVariant` 的 Integer 臂、载体包装的 Byte 臂、`vb6_VariantNumSameKind` 站点恰 4
+  （定义 + Int/Fix/Round）、b231 两台在跑。
+- `check_date_conv` 的 **R39/R40** 跟进改名后的名单（`idn` → `lb183`，与
+  `cgen_util_type.cpp` 里那两处同源）。
+- 三张既有账本跟着这一刀动，都是**派生**而不是手改口径：
+  1. `check_variant_i8_coverage` —— 这张新 vt 表的 host（`vb6_VariantNumSameKind`）进
+     I8／Decimal／I1／UI2 四份 exempt（理由与 `vb6_AbsV` 同形：这几档真 VB6 造不出来，
+     落 default 走的是 `vb6_VariantConvNum` 权威换算，不是静默交 0）。
+  2. `check_owned_temp_keeps` —— 三枚 Int/Fix/Round 的变体位与新的包装器一起进 owned
+     名单，快照 `owned_temp_keeps_164.txt` 重登记（257 → 258 行）。
+  3. `check_emitted_declared` —— 包装器的定义出现在发码派生表（`variantPrefixes`）里，
+     伞头就必须看得见它 ⇒ 从 `static` 改成正式出口并在 `vb6rtl_builtin.h` 里声明。
+     这一条是「表说它是 VARIANT 出口、头里却查不到」的直接后果，不是选择。
+- 本机闸门：`check_currency_round_station`（R1..R20）、`check_float_to_int_round`（S1..S9）、
+  `check_date_conv`、`check_time_split`、`check_general_date_outlets`、`check_conv_strict_parse`、
+  `check_manifest_coverage`（inputs=956，sets equal）、`check_builtin_slot_returns`、
+  `check_owned_temp_keeps`、`check_variant_i8_coverage`、`check_rtl_proto_arity`、
+  `check_rtl_embedded`、`check_static_sentinel_registration`、`check_select_carrier_authority`。
+- 神谕：`.temp/k224p/P297.bas`（第一版探测）、`P298.bas`（四函数 × 六档）、`P299.bas`、
+  `P300.bas`（Boolean / Date 实参）、`P301.bas`、`P302.bas`（`VarType` 与字面量）、
+  `P303.bas`（夹具十四格）。
+- 门：run `46001092163`（`dev`、head `77d025d1`，23/23）。前面两轮红都在这一刀的收尾上：`45975101362`（k483 的整枚数组 + 三张哨兵）、`45998806599`（只剩发码登记那 6 行机器相关）。
+
+### 六、记账
+
+- 代码：`1e3c3f06`（类型推断一处 + 装箱两站 + RTL 三枚 + 夹具 + R19/R20 + 清单两行）、`12410da9`（整枚数组守卫 + 包装器出口化 + 三张哨兵 + 68 行登记）、`77d025d1`（6 行按 CI 清单重登记）。
+- **号**：本节 = 第二百二十四刀 / §11.207。
+- 背账：
+  1. **`Round` 的变体载体出口**：真机 `Round(v)`（`v` 装 Integer）答 2、`v` 装 Byte 答 17，
+     C3 仍答 5 —— `vb6_RoundV` 已在 RTL 里、`mathNullFamilyV` 的 round 分支也写了，但
+     `VarType(Round(v))` 那一站的发码是 `vb6_Round(vb6_VariantToDouble(v), 0)`（走 Double 直参），
+     改道站没认 round。本刀夹具因此只钉 Int/Fix 那一列载体格。
+  2. `Hex(Date)` / `Oct(Date)` 的「先四入后进制」：真机 `ACE4`、C3 `ACE3`。
+  3. `Abs` / `Sgn` 在 `Empty` / `Null` 上的传播（`aE/aN/iE/iN/fE/fN` 本轮读到 2/1 全对，
+     但夹具没钉，属未验证的绿）。
+  4. `Err.Source` / `Err.Description` 读出空串（真机给项目名 + 英文描述）。
+- 教训：**「某个函数返回什么类型」这件事，问一次就够，但必须问对那把尺。** `Integer` 与
+  `Long` 在 C 侧都是 `int32_t`，符号表把它们记成一档；于是同一个问题在 `inferExprType`
+  里问错了、在装箱站又漏了一臂 —— 两处错互相抵消，`VarType(Int(i))` 一直是绿的。
+  这一刀最贵的不是改码，是**发现那张矩阵属于四个函数**：上一刀的背账写成「`Round` 的子类型
+  保持」，若照那句话只改 `Round`，`Abs`/`Int`/`Fix` 的 Long/Byte 两档会继续错着，
+  而它们今天没有任何夹具。
