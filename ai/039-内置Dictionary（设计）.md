@@ -13126,3 +13126,90 @@ Z5 null=0 err=0 Z6 empty=1 err=0 Z7 elem=1 err=0  Z8 rev=1 err=0
 - 教训：**“同一个转换”在不同类型对上是不同规则。** 类型化 `String` 面对日期"折不了就报 13"，
   `Variant` 面对日期却“折不了就答假” —— 两边都不是随便定的，都是真机读出来的。
   落实现时最危险的动作是“复用刚刚那枚”，因为它看上去一模一样。
+
+---
+
+## §11.192 Select Case 的 Variant 标签：Date 主语按 CDate 折、Variant 主语走 VarCmp（第二百零九刀）
+
+### 一、问题
+
+§11.191 把「Date 与 Variant 比较」收了口，但那只在 **二元比较** 那一站。`Select Case`
+是另一条链（`cgen_select.cpp` 自己那套承载档 + 标签装箱），两条链各问各的，所以同一个
+问题在这边仍然错。本刀对着真机把这条链的三档读了：
+
+1. **主语 Date、标签是 Variant 槽** —— 改前 `isVariantSelect` 为真（标签是槽），
+   承载档却是 `double`，发成 `double _vb6_select_0 = vb6_VariantDate(d);` ⇒ **6 条 C2440，编不过**。
+2. **主语 Variant、标签是日期字面量** —— 落 `int32_t` + `vb6_VariantToLong(v)`：A7 答 0（应命中）、
+   A8 把 Null 抛成 94 且**误命中**（真机是不命中、不报错）。
+
+### 二、真机读数（VB6Mini `/make`，`.temp/k209p`）
+
+```
+A1 hit err=0   A2 else err=0   A3 hit err=13  A4 hit err=94
+A5 hit err=0   A6 hit err=0    A7 hit err=0   A8 else err=0
+B1 hit err=0   B2 else err=0   B3 hit err=0   B4 else err=0   B5 hit err=0
+```
+
+A 组：文本日期命中且**等于**日期；别的日期不命中；`"abc"` 与 `Null` 两格是
+「**命中且 Err 留着 13 / 94**」（条件里抛错后恢复到 `Case` 体内，这是本引擎既有口径，
+与 §11.190 的 Y5 同一族，不是本刀新造的）；数值 44259 命中；真日期命中；
+Variant 主语 + 日期字面量：文本命中、`Null` 不命中且**不报错**。
+B 组：`Case Is >`、`Case lo To hi`、`Case 44000 To v` 三形、以及 `Empty`（=0，永不等于日期）。
+
+### 三、判据与改法（全在 `cgen_select.cpp`）
+
+1. **承载档顺序**：`isDateSelect` 排在「整枚槽」之前 —— 主语 Date 时临时量就是 `double`，
+   不进 `wrapVariantValue`；`isVariantSelect` 那一支加 `&& !isDateSelect` 闸。
+2. **Date 主语的标签折档**（`dateLabel190`）：串档 `vb6_DateVal`（§11.190 的既有口径）、
+   **Variant 档 `vb6_CDate`**（文本按日期解、数值原样、`Null` 抛 94、坏文本抛 13 —— A3/A4 正是这两档）、
+   Date 形原样。判「是不是 Date 形」复用 `inferExprType` + `arrayElemTypes_` 两道，
+   与 §11.190 的比较站同一问句形状。
+3. **Variant 主语 + 含 Date 标签 ⇒ 走整枚槽那条链**（新闸 `dateLabelPresent`）：
+   `vb6_VarCmpEq(&v, &lbl)` 正好就是 §11.191 定下的 RTL 口径（VT_DATE 与文本静默解析、
+   VT_NULL 无序），A7 命中、A8 不命中且不报错。
+4. **`cmpPrefix`**：标签静态类型是 Date 时答 `vb6_VarCmp`，**不再**答 `vb6_VarSelCmp` ——
+   后者把主语往标签的档拉，`Null` 在那一拉里抛 94 并因此误命中，与真机相反。
+
+### 四、为什么这样改
+
+- **不新造第四套转换**：三档各复用已有的唯一出口（`vb6_DateVal` / `vb6_CDate` / `vb6_VarCmp*`）。
+- **为什么 A3/A4 能「命中」**：条件里的转换抛错后，本引擎恢复到 `Case` 体内 —— 真机也如此。
+  这类格不能靠「把错误吞掉」去凑，只能让**同一个出口**抛，形状才会自动一致。
+- **为什么 `VarSelCmp` 要让位**：它的语义是「把主语迁就到标签的档」，而 `Null` 在迁移中
+  必然抛错；真机在 `Select Case` 上对 `Null` 的读数是「不命中、不报错」，那正是
+  `VarCmp` 的无序规则。「按标签档迁移」这条原则在**类型化标签**（串/数）上仍然成立，
+  只是 Date 这一档已经被 §11.191 收进了 RTL 的公共口径。
+
+### 五、读数与随刀改的针
+
+- 新夹具 `tests/b216_select_variant_label_date`（A1–A8 + B1–B5 十三行），x64/x86 **逐行相同**。
+- 新哨兵 R24（四枚钉子：`!isDateSelect` 闸 1、Variant 标签 → `vb6_CDate` 1、
+  `dateLabelPresent` 5 次读、Date 标签 → `vb6_VarCmp` 1）、R25（b216 两台在跑）。
+- 旧哨兵语义迁移：`check_select_carrier_authority` R6 的 `"vb6_VarCmp"` 前缀字面量 1→**2**
+  （第二枚 = Date 标签那一支）。
+- 改坏即红：把「Date 标签 → VarCmp」那行改成 `if (lbl && false)` ⇒ `R24 Date label -> vb6_VarCmp = 0`，还原后 PASS。
+- 回归：`b213` / `b214` / `b215` 三份夹具逐行不变（13 + 9 + 8 格读数与 §11.189–§11.191 完全一致）。
+- 闸门（本机全 PASS）：`check_date_conv`（`sel-cells=1 b216-cells=2`）、`check_select_carrier_authority`、
+  `check_select_label_owner`、`check_caseis_shape`、`check_manifest_coverage`（inputs=926）、
+  `check_static_sentinel_registration`、`check_owned_temp_keeps`、`check_ispred_text`、`check_sa_access`。
+
+### 六、神谕与清单
+
+- 真机神谕：`.temp/k209p/P250.bas` / `p250.txt`（八行）、`P251.bas` / `p251.txt`（五行）。
+- 改前取证：`c3a`（6 条 C2440：`double _vb6_select_N = vb6_VariantDate(d);`）、
+  `c3b`（能编过但 A1–A8 全落 else、A8 反而命中 err=94）、`c3c`（A1–A6 对了，A7/A8 仍错）。
+- 门：run `45915717786`（`dev`、head `d46cab93`）**23/23 全绿** —— 首次跑的 `Tests (gui)` 红在
+  `[GUI] NewTab 子窗口数 0（控件未建出）`，与本刀无关的建窗 flake，单作业重跑后 success。
+- 刻意不跟的格（背账）：`Case Is` **无比较符**的 Date 形；成员/委托当标签（`obj.GetV()`）——
+  仍不猜；Date 标签在**字符串主语**上的档未验；`vb6_VarSelCmp*` 的其余类型对未按本刀口径复读。
+
+### 七、记账
+
+- 探针：`.temp/k209p/P250.bas`、`P251.bas`、`c3a/c3b/c3d/c3e`、`x86P250/x86P251`、`rows216.ps1`（清单两行复算）。
+- 夹具：`tests/b216_select_variant_label_date`，注册在 `tests/run_tests.ps1`（x64 + x86）。
+- 代码：`d46cab93`（三处口径 + 夹具 + 哨兵 R24/R25 + R6 迁移 + 清单两行）。
+- **号**：本节 = 第二百零九刀 / §11.192。
+- 教训：**一个语义站对了不等于这一族都对了。** 二元比较与 `Select Case` 是两条独立的链，
+  同一个 `Date`×`Variant` 组合在两条链上分别错成「编不过」和「答得理直气壮」。
+  而且第三档更值得记：`Case Is >` / `Case a To b` 两形在改完 ①②③ 之后**自己就对了**——
+  这说明正确的做法不是逐形打补丁，而是把判据放在「主语档 + 标签档」这一层，形状跟着走。
