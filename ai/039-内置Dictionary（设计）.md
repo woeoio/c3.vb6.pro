@@ -1,4 +1,4 @@
-﻿# 039 - 内置 Dictionary（设计）
+# 039 - 内置 Dictionary（设计）
 
 > 状态：**S1/S2/S3 已完成**（设计 + 基准 + 实现 + 对照全绿）。S4（三条入口的 New 那一半）已在实现里做了，剩 S5 门禁登记与 S6 收口。
 > 当前读数：`PASS dict_native 用例=54 行`（1 行 VB6-SEM 手工期望，5 行已知 C3 缺口剔除，明细见 §9）。
@@ -15353,3 +15353,65 @@ if (vt == vb6_vtBSTR) {
 
 1. `Hex/Oct` 的 `LongLong` 16 位宽那一档（`Hex(CLngLng(-1))` 的位数）。
 2. `Err.Source` / `Err.Description` 的空串。
+
+### §11.217 第二百三十四刀：`Err.Source` / `Err.Description` 的空串面
+
+**读数（真机 `.temp/k225p/P329`，十格，工程名 `P329`）**
+
+| 格 | 语句 | 真机 | 改前 C3 |
+| --- | --- | --- | --- |
+| E1 | 无错时 `Err.Source` | `[]/0` | 同 |
+| E2 | 无错时 `Err.Description` | `[]/0` | 同 |
+| E3 | `Err.Raise 5, "mySrc", "myDesc"` | `[mySrc]/[myDesc]/5` | 同 |
+| E4 | `Err.Clear` 之后 | `[]/[]/0` | 同 |
+| E7 | `v = "x": n = CLng(v)` | `13/[P329]/[Type mismatch]` | `13/[]/[Type mismatch]` |
+| E8 | `Err.Clear` 之后 | `[]/[]/0` | 同 |
+| E9 | `d = 1 / 0` | `11/[P329]/[Division by zero]` | `11/[]/[]` |
+| E10 | 再清一次 | `0/0/0` | 同 |
+
+一句话：**运行期报错的 `Err.Source` 是工程名**（不是 IDE 里那两枚 `VBA.Information` / `VBA.Conversion` 位置标签），**`Err.Description` 是对应的英文消息**；用户 `Err.Raise` 自己给的源与描述一律原样保留。E9 还有第二处缺口：`vb6_ErrRaiseNumber(11)` 以前连描述都不给，`Err.Description` 读回空串。
+
+**改了三处，各答一问**
+
+1. **源从哪来**（`vb6rtl.c`）：`vb6_SetErrSourceSeed(const wchar_t*)` + 一枚进程生命期的 `vb6_err_source_seed`。播种由生成的入口点做，与 `App.Title` 同一条闸：
+
+   ```c
+   vb6_Init();
+   vb6_SetAppTitle(L"P329");       /* 账 #592 */
+   vb6_SetErrSourceSeed(L"P329");  /* §11.217: Err.Source = 工程名 */
+   ```
+
+   种子取 `.vbp` 的 **`Name=`**（`projectName_`），没有才退 `Title`；单文件编译（无 `.vbp`）一行不发 ⇒ 仍是旧口径的空串，不做任何猜测。
+
+2. **两张 raise 站点同一口径**：以前 `vb6_ErrRaise` 直接把形参存进 `vb6_err.source`（内部串 `VBA.*` 照存），`vb6_RaiseError` **根本不碰** source（于是读回空串）。现在两边都把「没有源 / 内部位置标签」翻成播种的工程名：
+
+   ```c
+   if (!source || vb6_ErrSourceIsInternal(source)) source = vb6_err_source_seed;
+   ```
+
+   判别只住 `vb6_ErrSourceIsInternal` 一处（`NULL`、`"VBA.Information"`、`"VBA.Conversion"` 三档）。
+
+3. **号 → 默认描述的单一主人**（`vb6_ErrDefaultDescription`）：只在调用方没给描述时查表。表**只登记已经量过的号**（5/6/9/11/13/20/94/438/450/457/481），没量过的宁可留空 —— 编一句没读数的文本比空串更坏。
+
+**踩到的坑：`Err.Source` 必须是真 BSTR**
+
+第一版把宽字符字面量的指针直接存进 `vb6_err.source`，读数却是空串。原因在读取侧：`Err.Source` 走 BSTR 语义（长度前缀在 `[-4]`），宽字面量没有那个前缀 ⇒ 长度读到 0。探针里表现为「指针非空、打印为空」（`[DBGGET 1]` 之后仍然 `[]`）。所以 setter 当场 `vb6_BSTR_FromStr(name)` 拷一份，播种只发生在入口点一次，进程生命期不释放。这条已写进 S18(b)，退回宽字面量会当场红。
+
+**夹具与哨兵**
+
+- 新夹具 `tests/b241_err_source_desc`（8 行，逐格对应 P329 去掉两段 `Err.Description=`/`Err.Source=` 赋值后的形态；工程名 `B241Res`），x64 + x86。
+- `scripts/check_float_to_int_round.ps1` 新增 **S18**（现 S1..S18）：(a) 两张 raise 站点都把「没有源」翻成工程名；(b) 播种值是真 BSTR；(c) 入口模板读的是 `.vbp` 的 `Name=` 且会发 `vb6_SetErrSourceSeed`；(d) b241 两套在跑。
+- `src/common/owned_temp_keeps.hpp` 的 `kOwned` 登记 `vb6_ErrDefaultDescription`（它现造一枚 BSTR，推导侧认 owned，不登记就会被发码侧当成「不是新造」而漏放）；KEEPS 快照按脚本重新登记 1 行（`vb6_ErrSourceIsInternal`）。
+- 清单：入口模板多发一行 ⇒ **386 个 `.vbp` 语料的发码全动**。CI 交回的清单是 344 行改写 + 2 行新增（夹具），inputs 974 → 976，`.vbp=386 / .bas=590`。
+
+**验证**
+
+- 夹具 x64 / x86 十格与真机 P329 逐行相同（E7/E9 的源是 `B241Res`）。
+- b233（37）/b234（19）/b236（12）/b238（14）/b239（17）/b240（14）复跑行数不变；本机 13 条门禁全绿。
+- CI：head `00fea118` → 21/23（`Emit manifest` + `Tests (compile #1)` 的 K1，都是清单面）；按 CI 清单登记（`320908bc`）→ head `c7fd1a95` → GA 见下。
+
+**背账**
+
+1. `Err.Source` 的**用户赋值面**（`Err.Source = "..."` / `Err.Description = "..."`）本刀未做：C3 现在把它发成 `error C2106: '=' 左操作数必须为左值`（探针里那两段就是这么去掉的）。
+2. `Err.Description` 表里未量过的号仍是空串（如 424/429/53 等 RTL 自带描述的那一族不受影响）。
+3. `Hex/Oct` 的 `LongLong` 16 位宽那一档。
