@@ -13438,6 +13438,25 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "H6 hit err=0")
     Test-Vbp 'b220_date_builtin_subject' "$Tests\b220_date_builtin_subject\B220Res.vbp" $b220Needles
     Test-Vbp 'b220_date_builtin_subject_x86' "$Tests\b220_date_builtin_subject\B220Res.vbp" $b220Needles -Arch "x86"
+    # §11.197 第二百一十四刀: CStr(零参日期内建) 交短日期/时间**文本**而不是裸序列号。
+    # 真机 .temp/k214p/P267.bas -> p267.txt 十二格全 True; 改前 CStr(Now) 发成
+    # vb6_CStr(vb6_VariantFromValue(vb6_Now())) (VT_R8) ⇒ 打出 "46353.4325925926"。
+    # 只钉区域无关格 (含 "/" 与 ":" / CDate 可解析 / 往返同一瞬时 / 长度), 不钉文本。
+    $b221Needles = @(
+    "W1 len=True",
+    "W2 slash=True",
+    "W3 colon=True",
+    "W4 isdate=True",
+    "W5 str=True",
+    "W6 round=True",
+    "X1 isdate=True",
+    "X2 len=True",
+    "X3 nocolon=True",
+    "Y1 colon=True",
+    "Y2 len=True",
+    "Y3 diff=True")
+    Test-Vbp 'b221_cstr_now_date' "$Tests\b221_cstr_now_date\B221Res.vbp" $b221Needles
+    Test-Vbp 'b221_cstr_now_date_x86' "$Tests\b221_cstr_now_date\B221Res.vbp" $b221Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

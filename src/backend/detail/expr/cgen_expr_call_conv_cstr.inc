@@ -62,6 +62,13 @@
                 else if (itNI2 == Vb6Type::ULongLong) callee = "vb6_CStrULongLong";
                 else if (itNI2 == Vb6Type::SByte
                          || itNI2 == Vb6Type::UInteger) callee = "vb6_CStrLong";
+                // §11.197 (第二百一十四刀): 上面那一排 known*Vars_ 只认**登记过的局部变量**,
+                // 裸写的零参日期内建 (Now / Date / Time) 不在任何一张表里 ⇒ 落到下面 Fix 056b
+                // 的 `vb6_CStr(vb6_VariantFromValue(vb6_Now()))` (VT_R8) ⇒ 真机打
+                // "2026/11/27 10:22:18", C3 打裸序列号 "46353.4325925926" (P264 的 N1/N2)。
+                // 档位问唯一权威 inferExprType (它对这三枚名字答 Date, 见 cgen_util_type.cpp
+                // 的 §11.197 那一问), 出口与 Fix 175 的 Date 那一臂同一个 vb6_CStrDate。
+                else if (itNI2 == Vb6Type::Date)      callee = "vb6_CStrDate";
             }
         } else {
 

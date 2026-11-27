@@ -254,6 +254,18 @@ $r31list = N 'kVariantDate196' $s26
 if ($r31list -ne 2) { $fail += ('R31 kVariantDate196 = ' + $r31list + ' (want 2 = the one name table + its loop)') }
 $r31gate = N '!dateBuiltinSubj196' $s26
 if ($r31gate -ne 1) { $fail += ('R31 AllString gate must exclude date builtins = ' + $r31gate + ' (want 1)') }
+# R32 (§11.197 第二百一十四刀): CStr(零参日期内建) —— 两处必须同时在位：
+#   ① 推断权威 (cgen_util_type.cpp) 对 now/date/time 答 Date 的那一问；
+#   ② CStr 站点 (conv_cstr) 把 Date 档交给 vb6_CStrDate 那一臂。
+# 缺①或②就回到 `vb6_CStr(vb6_VariantFromValue(vb6_Now()))` ⇒ 打裸序列号。
+$r32cells = N '\$Tests\\b221_cstr_now_date\\B221Res\.vbp' $T
+if ($r32cells -ne 2) { $fail += ('R32 b221 run cells = ' + $r32cells + ' (want 2 = x64 + x86)') }
+$s221conv = Get-Content -Raw (Join-Path $Root 'src\backend\detail\expr\cgen_expr_call_conv_cstr.inc')
+$s221type = Get-Content -Raw (Join-Path $Root 'src\backend\cgen_util_type.cpp')
+$r32arm = N 'itNI2 == Vb6Type::Date\),?\s*callee = "vb6_CStrDate"' $s221conv
+if ($r32arm -ne 1) { $fail += ('R32 CStr site Date arm = ' + $r32arm + ' (want 1: the only place that turns the Date answer into vb6_CStrDate)') }
+$r32ask = N 'lb197 == "now"' $s221type
+if ($r32ask -ne 1) { $fail += ('R32 inferExprType date-builtin ask = ' + $r32ask + ' (want 1: one authority for "is this Now/Date/Time a Date?")') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -262,5 +274,5 @@ if ($fail.Count -gt 0) {
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
     ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells +
-    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells + ' bld220-cells=' + $r31sa)
+    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells + ' bld220-cells=' + $r31sa + ' now221-cells=' + $r32cells)
 exit 0

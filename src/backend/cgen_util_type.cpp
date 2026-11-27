@@ -198,6 +198,34 @@ Vb6Type CCodeGen::inferExprType(Expr& expr) const {
 }
 
 Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
+    // §11.197 (第二百一十四刀): 裸写的**零参日期内建** `Now` / `Date` / `Time` 一律答 Date。
+    // 为什么要问在最前面: 这三枚名字在解析成**标识符**还是**零参调用**上并不稳定 (两种写法并发),
+    // 而无论哪一种, 旧路径都会给出非 Date 的答案 —— 标识符落到栈底 Variant, 零参调用落到
+    // 符号表里那份登记。后果是 `CStr(Now)` 发成 `vb6_CStr(vb6_VariantFromValue(vb6_Now()))`,
+    // 真机打 `2026/11/27 10:22:18`, C3 打裸序列号 `46353.4325925926` (P264 的 N1/N2)。
+    // 同名局部变量/形参由 knownLocalVars_ 否决 (它们真有自己的类型)。
+    if (expr.kind == ASTNodeKind::IdentifierExpr || expr.kind == ASTNodeKind::IndexOrCallExpr) {
+        const IdentifierExpr* id197 = nullptr;
+        bool bareZeroArg197 = true;
+        if (expr.kind == ASTNodeKind::IdentifierExpr) {
+            id197 = static_cast<const IdentifierExpr*>(&expr);
+        } else {
+            const auto& ic197 = static_cast<const IndexOrCallExpr&>(expr);
+            if (ic197.callee && ic197.callee->kind == ASTNodeKind::IdentifierExpr
+                && ic197.positional.empty()) {
+                id197 = static_cast<const IdentifierExpr*>(ic197.callee.get());
+            } else {
+                bareZeroArg197 = false;
+            }
+        }
+        if (id197 && bareZeroArg197) {
+            const std::string lb197 = Symbol::toLower(id197->name);
+            if ((lb197 == "now" || lb197 == "date" || lb197 == "time")
+                && !knownLocalVars_.count(lb197)) {
+                return Vb6Type::Date;
+            }
+        }
+    }
     switch (expr.kind) {
         case ASTNodeKind::IdentifierExpr: {
             auto& id = static_cast<IdentifierExpr&>(expr);
