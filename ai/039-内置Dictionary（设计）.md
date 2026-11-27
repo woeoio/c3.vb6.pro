@@ -13323,3 +13323,64 @@ auto strLabel193 = [&](Expr* lbl, const std::string& txt) -> std::string {
   locale 格式化再参与的字符串比较，zh-CN 与 en-US 的**数字排布**会让读数翻面 ——
   写夹具时要问一句「这一格的答案，会不会因为机器把日期写成 `2021/3/4` 还是 `3/4/2021` 而变」。
   能钉的只有与排布无关的那几条（首字符大小、相等/不等、两边界都够不着）。
+---
+
+## §11.194 Option Compare Text × Date 标签：两档自己就合上了（第二百一十一刀，无改码）
+
+### 一、问题
+
+§11.193 把「串主语 × Date 标签」定成「标签先折成 VB6 自己的短日期文本，再按串比」。那一刀
+只读了**二进制比较**（`vb6_StrCmp`）。这条链上还剩一个组合没问：模块级
+`Option Compare Text` 时，折档与文本入口会不会打架 —— 例如日期折出来的文本被大小写
+规则改写、或两档各走各的。
+
+### 二、真机读数（VB6Mini `/make`，`.temp/k211p/P256.bas` → `p256.txt`）
+
+```
+V1 hit err=0    "ABC" vs Case "abc"          （文本比较本身）
+V2 else err=0   "ABC" vs Case #3/4/2021#     （Date 仍折成短日期文本 ⇒ 不比大小写也无从命中）
+V3 hit err=0    CStr(CDate("2021-03-04")) vs Case #3/4/2021#
+V4 hit err=0    "ZZZ" > #1/1/2021#           （Z/z 都比任何数字大）
+V5 else err=0   "!"   > #1/1/2021#
+```
+
+### 三、改前 C3 的读数
+
+**逐行相同**（x64 与 x86 都是五行同值）。也就是说：`strLabel193` 折出来的 BSTR 交给
+`vb6_StrCmpT`，两档自然复合 —— 折档只改**内容**（`2021/3/4`），文本入口只改**比较规则**
+（忽略大小写），没有第二处规则需要写。
+
+这一刀因此是**入账刀**：不改代码，只把这条组合钉进夹具，防止以后有人「顺手」把折档搬到
+文本入口里面（那会让 `V2` 在 en-US 一类区域下翻面，或让 `V3` 的相等判定失效）。
+
+### 四、为什么值得单独钉一格
+
+- `V2` 与 `V3` 是**一对**：一个说「折档后仍可能不等」（`ABC` vs 日期文本），
+  一个说「折档后必须能等」（同源文本 vs 日期）。只钉 `V3` 会漏掉「折档被当成通配」的错法。
+- `V4` / `V5` 是 §11.193 那对区域无关边界格在**文本入口**下的复本（大小写不影响它们）。
+
+### 五、读数与随刀改的针
+
+- 新夹具 `tests/b218_octext_date_label`（V1–V5 五行，模块顶 `Option Compare Text`），x64/x86 逐行相同。
+- 新哨兵 R28（b218 两台在跑 + 夹具里 `Option Compare Text` 恰 1 行 —— 少了那一行这份夹具
+  就退化成 §11.193 的复制品）。
+- 闸门（本机全 PASS）：`check_date_conv`（`oc218-cells=2`）、`check_manifest_coverage`（inputs=930）、
+  `check_static_sentinel_registration`、`check_owned_temp_keeps`、`check_ispred_text`、`check_sa_access`、
+  `check_caseis_shape`、`check_select_carrier_authority`、`check_select_label_owner`。
+
+### 六、神谕与清单
+
+- 真机神谕：`.temp/k211p/P256.bas` / `p256.txt`（五行）。
+- 门：run `45921546008`（`dev`、head `d65addf0`）**23/23 全绿**。
+- 背账：`Case Is` **无比较符**的 Date 形仍未读；`Option Compare Text` 下 **Variant 主语**
+  与 Date 标签那一链（`vb6_VarCmp*`）没读（本刀只覆盖串主语）。
+
+### 七、记账
+
+- 探针：`.temp/k211p/P256.bas`、`c3a`、`x86`、`rows218.ps1`。
+- 夹具：`tests/b218_octext_date_label`，注册在 `tests/run_tests.ps1`（x64 + x86）。
+- 代码：`d65addf0`（夹具 + R28 + 清单两行；**无产品代码改动**）。
+- **号**：本节 = 第二百一十一刀 / §11.194。
+- 教训：**「入账刀」也是刀。** 改前就对，不等于这条组合已被守住 —— 真正稀缺的是
+  「这一格存在」这件事本身。挑格时优先挑**成对**的（能等 / 不能等），单格很容易被
+  下一次重构顺手改掉而没人发现。
