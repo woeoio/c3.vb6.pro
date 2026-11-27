@@ -13555,6 +13555,32 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "W5 len=True")
     Test-Vbp 'b225_boundary_carry' "$Tests\b225_boundary_carry\B225Res.vbp" $b225Needles
     Test-Vbp 'b225_boundary_carry_x86' "$Tests\b225_boundary_carry\B225Res.vbp" $b225Needles -Arch "x86"
+    # §11.202 第二百一十九刀: DateAdd 的日期半与时间半必须问同一句 splitter。
+    # 真机 .temp/k219p/P277.bas / P278.bas / P279.bas 全格一致; 改前
+    # DateAdd("s",1,CDate(44259.9999999)) 给 2021/3/4 0:00:01 (少一整天)。
+    # 格都是整数读数 + 含 "/" / 含 ":", 与区域无关。
+    $b226Needles = @(
+    "D1 day=5",
+    "D2 hour=0",
+    "A1 day=5",
+    "A2 hour=0",
+    "A3 sec=1",
+    "A4 day=31",
+    "A5 sec=1",
+    "A6 sec=59",
+    "A7 day=4",
+    "A8 sec=0",
+    "A9 min=1",
+    "B1 day=5",
+    "B2 sec=1",
+    "B3 year=1899",
+    "B4 day=30",
+    "B5 sec=1",
+    "C1 slash=True",
+    "C2 colon=True",
+    "C3 slash=True")
+    Test-Vbp 'b226_dateadd_carry' "$Tests\b226_dateadd_carry\B226Res.vbp" $b226Needles
+    Test-Vbp 'b226_dateadd_carry_x86' "$Tests\b226_dateadd_carry\B226Res.vbp" $b226Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

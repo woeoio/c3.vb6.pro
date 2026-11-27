@@ -228,15 +228,18 @@ static vb6_date_interval vb6_parse_interval(BSTR interval) {
 
 double vb6_DateAdd(BSTR interval, double number, double date) {
     vb6_date_interval di = vb6_parse_interval(interval);
-    int32_t datePart = (int32_t)date;
-    double timePart = date - (double)datePart;
-    if (timePart < 0) { timePart += 1.0; datePart--; }
-    
+    // §11.202 (第二百一十九刀): 两半必须问**同一句** —— vb6_split_serial 会把「四入到
+    // 24:00」的进位同时落到日期与时间两半上（44259.9999999 ⇒ 2021-03-05 + 0 秒）。
+    // 改前这里用裸 `(int32_t)date` 配 vb6_SecondsOfDay：时间那半已归零进位、日期那半
+    // 还是 3/4，于是 DateAdd("s",1,…) 给出 2021/3/4 0:00:01（真机 P278 A1/A2/A3 = 3/5）。
+    int32_t datePart = 0;
+    int32_t sod = 0;
+    vb6_split_serial(date, &datePart, &sod);
+
     int32_t y, m, d;
     vb6_serial_to_date(datePart, &y, &m, &d);
     // 账 #419 (§B193): 这三行原本各抄一份截断 —— DateAdd 是「改完之后还要写回去」的那一站，
     // 截断掉的那一秒会**永久留在结果里** (DateAdd("d", 1, #2026/1/1 14:30#) 少一分钟)。
-    int32_t sod = vb6_SecondsOfDay(date);
     int32_t hh = sod / 3600;
     int32_t mm = (sod / 60) % 60;
     int32_t ss = sod % 60;

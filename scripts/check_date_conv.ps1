@@ -299,6 +299,16 @@ $r36decl = N 'int vb6_fmtDatePartIsZero\(double serial\);' (Get-Content -Raw (Jo
 if ($r36decl -ne 1) { $fail += ('R36 predicate declared = ' + $r36decl + ' (want 1: file.c asks it too)') }
 $r36carry = N '>= 86400\) ip \+= 1\.0;' $s222fmt
 if ($r36carry -ne 1) { $fail += ('R36 carry step = ' + $r36carry + ' (want 1: rounding to 24:00 advances one day)') }
+# R37 (§11.202 第二百一十九刀): DateAdd 的两半必须问同一句 —— 裸 (int32_t)date 配
+# vb6_SecondsOfDay 会让进位落到时间那半而日期那半不进，午夜附近的运算差一整天。
+# 真机 P278: DateAdd("s",1,CDate(44259.9999999)) = 2021/3/5 0:00:01（改前 3/4 0:00:01）。
+$r37cells = N '\$Tests\\b226_dateadd_carry\\B226Res\.vbp' $T
+if ($r37cells -ne 2) { $fail += ('R37 b226 run cells = ' + $r37cells + ' (want 2 = x64 + x86)') }
+$s202date = Get-Content -Raw (Join-Path $Root 'src\rtl\core\vb6rtl\vb6rtl_date.c')
+$r37split = N 'vb6_split_serial\(date, &datePart, &sod\);' $s202date
+if ($r37split -ne 1) { $fail += ('R37 DateAdd asks splitter = ' + $r37split + ' (want 1)') }
+$r37raw = N 'int32_t datePart = \(int32_t\)date;' $s202date
+if ($r37raw -ne 0) { $fail += ('R37 raw day half = ' + $r37raw + ' (want 0: the raw truncation must not come back)') }
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ('FAIL ' + $m) }
@@ -307,5 +317,5 @@ if ($fail.Count -gt 0) {
 Write-Host ('PASS check_date_conv: parse-sites=' + $r1parse + ' rtl-total=' + $r2sites +
     ' raise13=' + $r1raise + ' owners=2 projections=3 cgen-rows=3 cells=' + $r7cells +
     ' nd-cells=' + $r13cells + ' udt-cells=' + $r15cells + ' var-cells=' + $r17cells +
-    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells + ' bld220-cells=' + $r31sa + ' now221-cells=' + $r32cells + ' gen222-cells=' + $r33cells + ' neg223-cells=' + $r34cells + ' wr224-cells=' + $r35cells + ' carry225-cells=' + $r36cells)
+    ' call-cells=' + $r19cells + ' cmp-cells=' + $r21cells + ' vcmp-cells=' + $r23cells + ' sel-cells=' + $r24cd + ' b216-cells=' + $r25cells + ' s217-cells=' + $r27cells + ' oc218-cells=' + $r28cells + ' subj219-cells=' + $r30cells + ' bld220-cells=' + $r31sa + ' now221-cells=' + $r32cells + ' gen222-cells=' + $r33cells + ' neg223-cells=' + $r34cells + ' wr224-cells=' + $r35cells + ' carry225-cells=' + $r36cells + ' dadd226-cells=' + $r37cells)
 exit 0
