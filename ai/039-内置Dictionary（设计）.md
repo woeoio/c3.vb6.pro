@@ -13666,3 +13666,82 @@ Y1..Y3           CStr(Time)：含 ":" / 长度 >= 4 / 与日期串不同
 - 教训：**「某形状算不算 Date」只有一个出口，但每个消费点都要显式去问。** 本刀第一版只改了
   `inferExprType`，发码一个字没动 —— 因为 CStr 那一站压根没问它，而是自己维护了一排
   `known*Vars_` 登记表。推断对了不等于消费点用了。
+## §11.198 general date：日期部分为零时只给时间（第二百一十五刀）
+
+上一刀把 `CStr(Now/Date/Time)` 的承载修对了，本刀接着量「日期/时间**函数**」那一族
+（`DateSerial` / `DateValue` / `TimeSerial` / `TimeValue` / `DateAdd`）的文本形状。
+
+### 一、现象
+
+真机 `.temp/k215p/P268.bas` → `p268.txt`：
+
+```
+D1=[2021/3/4]            CStr(DateSerial(2021,3,4))
+D3=[12:30:00]            CStr(TimeSerial(12,30,0))
+D5=[12:30:00]            CStr(TimeValue("12:30:00"))
+D6=[2021/3/4 12:30:00]   CStr(CDate("2021-03-04 12:30:00"))
+```
+
+C3 改前 D3/D5 打 `1899/12/30 12:30:00` —— 只有**纯时间**这一档错，其余逐行同。
+病根在 `vb6_fmtLocaleGeneralDate`：它只会「短日期 + （时间非零时）空格 + 长时间」，
+缺「**日期部分为零 ⇒ 只给时间**」这一档。
+
+### 二、判据必须走序列号
+
+`P269.bas` 把边界量清了：
+
+```
+E1=[0:00:00]   CDate(0)      E2=[6:00:00]  CDate(0.25)   E3=[23:59:59] CDate(0.99998…)
+E4=[1899/12/31] CDate(1)     E5=[1899/12/29] CDate(-1)   E6=[12:00:00] CDate(0.5)
+E7=[12:00:00]  Format(CDate(0.5),"General Date")        E8=[2021/3/4] Format(CDate(44259),"General Date")
+```
+
+也就是说：**序列落在 `[0,1)`**（VB6 的零日 1899-12-30）只给时间；`1`、`-1` 这种没有
+时间分量的仍给日期；负数不特殊（`-1` 给日期，不是时间）。`Format` 的命名档
+`General Date` 与 `CStr` 同一条规则（E7）。
+
+⚠ 因此判据不能问 `SYSTEMTIME`：序列 0.5 与真日期 1899-12-30 映射出同一组年月日，
+两者在那一层**不可区分**。`vb6_fmtLocaleGeneralDate` 的签名因此加上序列号形参，
+三个调用点（`vb6rtl_format_extract.inc` 的「无格式串」那臂、`vb6rtl_format.c` 的
+命名档 `General Date`、`vb6rtl_system.c` 的 `FormatDateTime(..., vbGeneralDate)`）
+一起改 —— 一处规则、三处问同一句。
+
+### 三、夹具与区域无关
+
+`tests/b222_time_general_date`（二十一格，x64/x86 各一份）。同上一刀的理由（CI 在 en-US、
+神谕在 zh-CN，短日期与 AM/PM 文本会翻面），只钉两边都成立的事实：
+
+- 「纯时间」那三格：含 `:`、不含 `/`、`IsDate`、长度 ≥ 7；
+- 「纯日期」那三格：含 `/`、不含 `:`；
+- `CDate(0.5)` 走时间、`CDate(1)` 走日期（改前两者都带 `1899/12/30` 前缀）；
+- `CStr(TimeSerial(12,30,0))` 与 `VarType(...)` = 7 各一格。
+
+改前三格（`A1/A2/C1/C2/E1/E2/H1/H2`）全 False。
+
+### 四、回归面
+
+- **b431**（general date 的既有主人，§B203 第一百零一刀）：十六格本机复跑全 True ——
+  它量的 `d0/d1/q1/q2/q3/m1` 全部是「日期部分非零」的序列，本刀那一档碰不到；而
+  `CStr` / `Format(...,"General Date")` / `FormatDateTime(...,vbGeneralDate)` 三站
+  本来就共用这一个出口，所以「三站一致」那几格反而更稳。
+- 发射面：RTL 改动不进 `--emit-c`，清单只有 b222 两行新增（inputs 936 → 938）。
+
+### 五、读数与针
+
+- 新哨兵 **R33**：b222 两台在跑；`vb6rtl_format.c` 里 `serial >= 0.0 && serial < 1.0`
+  那一问恰 1 处（零日判据只许一处）。
+- 本机闸门：`check_date_conv`（`gen222-cells=2`）、`check_manifest_coverage`（inputs=938，
+  sets equal）。
+- 门：run `45935792911`（`dev`、head `d0b3a765`）。
+- 神谕：`.temp/k215p/P268.bas`（十二行）、`P269.bas`（十行边界）、`P270.bas`（夹具二十一格）。
+
+### 六、记账
+
+- 代码：`d0b3a765`（RTL 三站 + 夹具 + R33 + 清单两行）。
+- **号**：本节 = 第二百一十五刀 / §11.198。
+- 背账：`[0,1)` 之外的小数（负数带时间分量，如 `CDate(-0.5)`）未取样；`Print #` 那一站
+  （`vb6rtl_file.c`）是否也用同一条零日规则未对照；`FormatDateTime(0, vbShortDate)` 这类
+  **命名档**对零日的答案仍未单独量（它走 `vb6_fmtLocaleShortDate`，大概率给 `1899/12/30`）。
+- 教训：**同一个「文本形状」问题，会在三个站点各写一遍判断。** `Format` 与 `CStr` 早就
+  声称共用「一个出口」，缺的那一档照样是三个站点各错一次 —— 上一刀是「消费点不问推断」，
+  这一刀是「出口缺一档」，病根都是**把一条规则拆成几处各自的 if**。

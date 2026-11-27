@@ -52,7 +52,7 @@ foreach ($k in $files.Keys) {
 $FM = $T['fmt']; $EX = $T['extr']; $SY = $T['sys']; $CV = $T['conv']; $HD = $T['hdr']; $RT = $T['run']; $FX = $T['fx']
 
 $genCall = 'vb6_fmtLocaleGeneralDate('
-$defShape = 'void vb6_fmtLocaleGeneralDate(const SYSTEMTIME* st, wchar_t* out, size_t cap) {'
+$defShape = 'void vb6_fmtLocaleGeneralDate(const SYSTEMTIME* st, double serial, wchar_t* out, size_t cap) {'
 
 # ---- R1 那条闸只住一条出口, 而且住的是量出来的那一个数 ----
 Want 'R1 outlet defined' (C $defShape $FM) 1 'general date 那条出口恰好定义一处'
@@ -71,7 +71,7 @@ foreach ($n in @('ShortDate', 'LongDate', 'LongTime', 'GeneralDate')) {
 Want 'R2 outlets not static' (C 'static void vb6_fmtLocale' $FM) 0 '四条出口全部不再是 file-static (它们有跨文件的读者)'
 
 # ---- R3 system.c 的四档全部改问出口, 手抄的 Get*FormatW 撤干净 ----
-Want 'R3 general asks outlet' (C ('vb6_fmtLocaleGeneralDate(&st, buf, 256)') $SY) 1 'vbGeneralDate 那一档问出口'
+Want 'R3 general asks outlet' (C ('vb6_fmtLocaleGeneralDate(&st, dateSerial, buf, 256)') $SY) 1 'vbGeneralDate 那一档问出口'
 Want 'R3 short asks outlet' (C ('vb6_fmtLocaleShortDate(&st, buf, 256)') $SY) 1 'vbShortDate 那一档问出口'
 Want 'R3 long asks outlet' (C ('vb6_fmtLocaleLongDate(&st, buf, 256)') $SY) 1 'vbLongDate 那一档问出口'
 Want 'R3 longtime asks outlet' (C ('vb6_fmtLocaleLongTime(&st, buf, 256)') $SY) 1 'vbLongTime 那一档问出口'
@@ -84,6 +84,13 @@ Want 'R4 conv delegates' (C 'v.vt = (vb6_vartype)VT_DATE; v.dblVal = x;' $CV) 1 
 Want 'R4 conv no hand date fmt' (C 'GetDateFormatW(LOCALE_USER_DEFAULT' $CV) 0 'conv.c 不许再手抄一份短日期'
 Want 'R4 conv no own frac test' (C 'frac' $CV) 0 'conv.c 里那条判零头整族撤干净 (这文件里连 frac 这个名字都不该再有)'
 Want 'R4 extract asks outlet' (C $genCall $EX) 1 '无格式串那条兜底臂问出口, 不许再无条件拼「短 + 空格 + 长」'
+
+# ---- R6 (§11.198 第二百一十五刀) 日期部分为零那一档: 判据走**序列号**, 只住一处 ----
+# 为什么不能再只靠 SYSTEMTIME: 序列 0..1 与真日期 1899-12-30 映射出同一组年月日。
+# 真机 P269: CStr(CDate(0.5)) = "12:00:00", CStr(CDate(1)) = "1899/12/31", CStr(CDate(-1)) = "1899/12/29"。
+Want 'R6 zero-date rule' (C 'serial >= 0.0 && serial < 1.0' $FM) 1 '日期部分为零 ⇒ 只给时间, 恰好一处'
+Want 'R6 outlet takes serial' (C 'void vb6_fmtLocaleGeneralDate(const SYSTEMTIME* st, double serial' $FM) 1 '零日与真日期不可区分 ⇒ 形参必须有序列号'
+Want 'R6 extract passes serial' (C 'vb6_fmtLocaleGeneralDate(&st, expr.dblVal,' $EX) 1 'Format 无格式串那臂交的是声明值 (不是转换后的 SYSTEMTIME)'
 
 # ---- R5 判据两头都在 (定义了没被调用 = 静默不跑那一格) ----
 Want 'R5 b430 cells' (C ('Test-Vbp ' + $SQ + 'b431_general_date') $RT) 2 '两台各一行 (x64 + x86)'
