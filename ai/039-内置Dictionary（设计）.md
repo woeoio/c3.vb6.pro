@@ -14826,3 +14826,90 @@ vb6_VariantBorrowFromValue(vb6_VariantBorrowFromValue(vb6_Round(vb6_VariantToDou
   判据是文本前缀；而同一个表达式在两站之间已经被包了一层 `vb6_VariantBorrowFromValue(`，
   前缀判据就永远为假。这类错误不会红、不会 warn，只会让「明明写了」的那一档继续答错 ——
   因此每一刀的验收必须落在**发码文本**或**夹具读数**上，不能落在「我加了这个分支」上。
+
+## §11.209 Hex/Oct 的实参收窄：错的不只是日期那一档（第二百二十六刀）
+
+背账写的是「`Hex(Date)` / `Oct(Date)` 先四入后进制（真机 `ACE4`，C3 `ACE3`）」。本刀量下来的
+结论是：**日期只是最先被看见的那一格**，真正缺的是一整站 —— `Hex`/`Oct` 的实参收窄。
+
+### 一、现象（真机 `.temp/k225p/P305`）
+
+```
+Hex(44259.62)      VB6 ACE4             C3 ACE3
+Hex(44259.5)       VB6 ACE4             C3 ACE3
+Hex(1.5)           VB6 2                C3 1
+Hex(3.5)           VB6 4                C3 3
+Hex(-2.5)          VB6 FFFFFFFE         C3 FFFFFFFE   ← 负半值恰好同值（截断与往偶都到 -2）
+Hex("2.5")         VB6 2                C3 ADB839D8   ← BSTR 指针的低 32 位当整数
+Hex(2147483647.6)  VB6 Error 6（目标不变） C3 7FFFFFFF  ← 越界静默饱和
+```
+
+四件事一起错：**半值往偶**、**先四入后进制**、**字符串实参**、**越界检查**。
+只修日期那一格，另外三格照旧错 —— 而它们没有一个会在编译期或链接期响一声。
+
+### 二、病根
+
+发码把实参原样递进 `vb6_Hex(int32_t n)`：
+
+```c
+vb6_Hex(44259.620000000003)   // C 在调用边界上截断 ⇒ 44259
+vb6_Hex(_own_2)               // BSTR 指针低 32 位当整数 ⇒ 乱码数字
+```
+
+RTL 那一侧其实早就对了：`vb6_Hex` 的形参本来就是 `int32_t`，变体那一支 `vb6_HexV` 走
+`vb6_VariantToLong`（半到偶、`Null` 报 94）。**错的是"带类型的实参"这条路** —— 它把
+VB6 的隐式收窄整个交给了 C 的隐式转换，而 C 的隐式转换是**截断**，且不查范围。
+
+### 三、改法
+
+在 `cgen_expr_call_builtin_argtype.inc`（内建实参类型适配那一站）补一格：`callee` 是
+`vb6_Hex` / `vb6_Oct` 时，按**实参的静态档位**（`inferExprType`）决定收窄：
+
+| 实参档 | 发码 |
+|---|---|
+| Single / Double / Date / Currency | `vb6_CLng(<实参>)` |
+| String | `vb6_CLng(vb6_NumVal(<实参>))` |
+| Integer / Long / Byte / Boolean | 不动（C 的隐式加宽与 VB6 同值） |
+
+`vb6_CLng` 是既有那一枚主人（`FltToLng` → `vb6_RoundHalfEven` + `vb6_OvfChk`），
+本刀**没有新造第二份取整**，只是把 `Hex`/`Oct` 接到它上面。
+
+判据用**静态档位**而不是文本前缀 —— §11.208 刚量过一次文本判据的失效形状：上游包一层
+`vb6_VariantBorrowFromValue(` 之后，前缀判据永远为假，分支静默落空。
+
+### 四、夹具
+
+`tests/b233_hex_oct_narrow` 三十七格（x64/x86 各一份，全 `Debug.Print`、全区域无关）：
+
+- `H1..H6` 载体档（小数序列 / `DateSerial` / `CDate`）；
+- `H7..H13` 半值往偶（`2.5→2`、`1.5→2`、`0.5→0`、`3.5→4`、`-2.5→FFFFFFFE`、`CSng`、`CCur`）；
+- `H15..H18` **变量路**（`Date` / `Currency` / `String` 变量各一，判据来自声明而不是字面量）；
+- `H19..H20` `Empty` → `0`、`Hex(Null)` → `Null`；
+- `H21..H22` 负日期（`-1.6→FFFFFFFE`、`-1.4→FFFFFFFF`）；
+- `H23..H24` 2^31 边界两侧（`7FFFFFFF`，不越界）；
+- `O1..O9` `Oct` 同族；
+- `Y1..Y3` 越界：`Err.Number` = 6 **且目标保持原值**（`s` 仍是 `"x"`）；
+- `Y4` 下界 `-2147483648` 不越界 → `80000000`。
+
+真机 `P307` 与 C3 x64/x86 三十七行逐行相同。
+
+### 五、读数与针
+
+- `check_float_to_int_round` 新增 **S10**：收窄站恰 1 处；五档（Single/Double/Date/
+  Currency/String）齐全；判据必须问 `inferExprType`（文本判据视为回归）；调用站恰两枚
+  `vb6_CLng` 出口；`vb6_Hex`/`vb6_Oct` 的形参**仍是** `int32_t`（收窄不许挪进 RTL 变成
+  第二个口径）；b233 两台在跑。
+- 本机 13 条门禁全绿；清单 inputs 958 → 960（b233 两行，逐行 targeted 复算）。
+- 神谕：`.temp/k225p/P305.bas`（数值/字符串/边界）、`P306.bas`（越界 + `On Error`）、
+  `P307.bas`（夹具三十七格）。
+- 门：run `46008074893`（`dev`、head `514697bf`；23/23 success）。
+
+### 六、记账
+
+- 代码：`514697bf`（实参站一处 + 夹具 + S10 + 清单两行）。
+- **号**：本节 = 第二百二十六刀 / §11.209。
+- 背账新开两条（同族，另一刀）：`Hex`/`Oct` 的**答案宽度** —— 真机 `Hex(-1)` = `FFFF`、
+  `Hex(True)` = `FFFF`（Integer 四位数），Byte 更窄；C3 一律八位。以及 `Hex(<整枚数组>)`。
+- 教训：一个内置函数「看着只是格式化」，底下却是一次**隐式类型转换**。这类转换的判据面
+  在发码的**实参站**，不在 RTL 里那枚函数身上 —— 只读 RTL 会得出「它已经对了」的错觉，
+  而真机与 C3 差的不在函数体，在调用约定。
