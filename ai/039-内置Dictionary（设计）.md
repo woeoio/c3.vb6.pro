@@ -15491,3 +15491,85 @@ FAIL R7 rhs wraps to BSTR = 2 (want 1)
 1. `Err.HelpFile` / `Err.HelpContext` 的读写两面向来是常量（读侧折成 `(BSTR)0` / `0`），写面本刀未做。
 2. `Err.Description` 默认表里未量过的号仍是空串。
 3. `Hex/Oct` 的 `LongLong` 16 位宽那一档。
+
+### §11.219 第二百三十六刀：`Err.HelpFile` / `Err.HelpContext` 的读写两面
+
+**读数（真机 `.temp/k227p/P331`，九格，工程名 `P331`）**
+
+| 格 | 语句 | 真机 |
+| --- | --- | --- |
+| B1 | `Err.HelpFile = "h1": Err.HelpContext = 42` | `[h1]/42/0` |
+| B2 | 接着 `Err.Raise 5`（省掉后四参） | `[h1]/42/5` |
+| B3 | `Err.Clear` | `[]/0/0` |
+| B4 | `Err.Raise 5,"s1","d1","hf",7` | `[hf]/7/5/[s1]/[d1]` |
+| B5 | `Err.Clear` | `[]/0/0` |
+| B6 | 只给 `Err.HelpContext = 9` | `[]/9/0` |
+| B7 | 两格都赋空串 / 0 | `[]/0/0` |
+| B8 | 运行期 13 之后只改 `Err.HelpContext = 3` | `13/[]/3` |
+| B9 | `Err.Clear` | `[]/0/0` |
+
+一句话：这两格与 §11.218 的源/描述同族 —— **赋值只动那一格，`Err.Number` 一个字不动**（B1/B6/B7/B8），`Err.Clear` 才连号一起清；`Err.Raise` 缺参时**保留**旧值（B2），五参那一形直接把后两格设进去（B4）。改前读侧折成常量 `(BSTR)0` / `0`，写侧根本没有出口（`Err.HelpFile = "h"` 与 §11.218 之前的源/描述一样发成对左值运算）。
+
+**改法**
+
+1. **RTL 两格**（`vb6rtl.c`）：`vb6_ErrObject` 加 `BSTR helpFile; int32_t helpContext;`，`vb6_ErrClear` 一并清；读写四枚出口 `vb6_ErrHelpFile` / `vb6_ErrHelpContext` / `vb6_ErrSetHelpFile` / `vb6_ErrSetHelpContext`，setter 存**真 BSTR**（同 §11.217 那个坑：宽字面量指针读侧长度为 0）。
+2. **五参 raise**：新增 `vb6_ErrRaiseEx(errNum, source, description, helpFile, helpContext)`，后两格在调 `vb6_ErrRaise` **之前**写 —— 那一枚会 `longjmp`，写在它后面的行永远跑不到。三参的 `vb6_ErrRaise` 一字未动（仓里 34 处 raise 站点都走它）。
+3. **发码侧**：读侧两处折叠（`cgen_expr_member_precheck.inc` 的 err 那臂 + `cgen_expr_with.cpp` 的 `With Err` 那臂）从常量改成调 RTL；赋值站（`cgen_assign.cpp`，与 §11.218 那两格并排）加 `helpfile` / `helpcontext` 两臂；`Err.Raise` 的 callee 直接折成 `vb6_ErrRaiseEx`。
+4. **缺省五档交给表**：`kOD_ErrRaise` 从三档扩到五档（`nullptr, "(BSTR)0", "(BSTR)0", "(BSTR)0", "0"`），`kNames_ErrRaise` 同步补 `helpfile` / `helpcontext`。
+
+第 4 条是本刀唯一一处「改法被哨兵改回来」的地方。第一版把四/五参的 `Err.Raise` 留在 `cgen_expr_call_builtin_fixup.inc` 里改道 + 补档，`check_builtin_opt_defaults` 当场红：
+
+```
+R4 第二份抄法: vb6_ErrRaise ( 表里登记过了, 发码侧还往 argList 追加 (硬编码 2 处)
+```
+
+那道门禁问的是「表里登记过的名字不许在发码侧另有一份补档抄法」。收法不是往例外名单里加名字，而是把决定挪到**根本不需要按实参个数判断**的地方：读侧折叠直接给 `vb6_ErrRaiseEx`，三/四/五参**一律**发这个出口，缺哪档由那张表补。于是发码侧那一段整段消失，`$notPadding` 里对应的那条理由也随之撤掉（段没了就不该再留一条永不会命中的名册行）。
+
+**踩到的坑：`Err.HelpContext` 被当成 String**
+
+第一版改完，P331.exe 一起来就 `0xC0000005`（`exit=-1073741819`），探针输出文件长度 0。`--emit-c` 一看：
+
+```c
+vb6_DebugWriteBSTR(vb6_BSTR_ConcatFree(..., vb6_ErrHelpContext()), ...);
+```
+
+整数 `42` 直接进了 BSTR 形参 —— 因为 `inferExprType` 里 Err 那一臂把 `helpcontext` 与 `helpfile` 排在**同一条「一律 String」的臂**上：
+
+```cpp
+if (memLower == "helppath" || memLower == "helpfile" || memLower == "helpcontext") return Vb6Type::String;
+```
+
+类型答 String ⇒ 拼接站不套 `vb6_CStrLong` ⇒ 整数当指针传。拆成两行（`helppath`/`helpfile` 答 String，`helpcontext` 答 Long）即愈。这正是 §11.208 那条老账的又一例：**按名字猜类型**在同一个对象的不同成员上并不成立，得按成员各自的真类型说话。
+
+**另一个坑：跨行声明读不出形参个数**
+
+`vb6_ErrRaiseEx` 的声明起初折成两行，`check_builtin_opt_defaults` 的 R0 只认一行一枚 ⇒ `R0 死名: vb6_ErrRaiseEx`。声明改成一行即愈（表里那行也就有了可对账的档数 5）。
+
+**夹具与哨兵**
+
+- 新夹具 `tests/b243_err_help`（9 行，逐格对应 P331，工程名 `B243Res`），x64 + x86。
+- `scripts/check_float_to_int_round.ps1` 新增 **S20**（现 S1..S20）：(a) 两格在 RTL 各有一对读写出口；(b) `Err.HelpContext` 必须答 `Long`（答 String 就是本刀那个 `0xC0000005`）；(c) 两处折叠都发 `vb6_ErrRaiseEx`、表里有那一行（五档补档还在）；(d) b243 两套在跑。
+- KEEPS 快照：`vb6_ErrRaiseEx` 的 source / description 与三参那一枚同口径登记为 `store`（`keeps_pointer=1`，不提名）→ `-Bless` 登记 3 行。
+- 清单：本次发码只多出夹具那几行 + 新出口，语料里没有 `Err.HelpFile` / `Err.HelpContext` 的用法，既有行的哈希未动。
+
+**验证**
+
+- 夹具 x64 / x86 九格与真机 P331 逐行相同；b241（8 格）/ b242（10 格）复跑不变。
+- 本机 16 条门禁全绿（含 `check_builtin_opt_defaults`、`check_app_title_authority`、`check_owned_temp_keeps`）。
+
+**第一次推送暴露的三处形状洞（同刀收尾）**
+
+head `3ebf0df6` → 19/23，红在四处，全是「新写面没顺着既有形状接」：
+
+1. `[STATIC] manifest_coverage` K1 —— 新夹具两份输入不在 `emit-manifest.expected.txt` 里。登记要按 CI 交回的那份清单（`ci/emit-manifest` 分支），不拿本机的。
+2. `[STATIC] bstr_borrow_slot` Q6 —— `vb6_ErrHelpFile` 是 `return vb6_err.helpFile;`，交回的是**借来的**块，必须进 `kBorrowedBstrExports167`（编译器侧）与 `ownedTempBorrowedExits()`（发码侧）两份同名单，哨兵的钉数 3 → 4。漏这一名，槽会在语句末把 Err 自己那只块放掉。
+3. `[EMITC-SHAPE] b241_named_arg_slot` —— 上一刀钉的是 `vb6_ErrRaise(...)` 三参文案，本刀出口改名成 `vb6_ErrRaiseEx(...)` 五参，那条钉子连同它的反面 lesion 一起改。**这正是那一钉的价值**：出口名一改，它立刻说话。
+4. `check_builtin_opt_defaults` R4 —— 见上面第 4 条，收法是撤段而不是加例外。
+
+收完（head `44060fba`）→ GA **46100280902 = 23/23 success**；CI 交回的清单与本仓 `emit-manifest.expected.txt` 逐行相同（980 行，0 差异）。
+
+**背账**
+
+1. 五参 `Err.Raise` 的**显式 0**（`Err.Raise 5,"s","d","hf",0`）与「省掉」今天同口径（都保留旧值）—— 真机未量，暂按缺省处理。
+2. `Err.Description` 默认表里未量过的号仍是空串。
+3. `Hex/Oct` 的 `LongLong` 16 位宽那一档。
