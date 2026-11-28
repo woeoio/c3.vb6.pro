@@ -881,8 +881,42 @@ if (@([regex]::Matches($runnerText, 'b254_mid_stmt_edges2\\B254Res\.vbp')).Count
     $bad += "S32 b254 is not run on both arches"
 }
 
+# ---- S33: 定长串各条赋值路径与收口 (账 §11.232 第二百五十刀) ----
+# 真机 P362 B10/B11: `a(1)="abcdefgh"` ⇒ abcde、`a(2)="ab"` ⇒ `ab   `；
+# P363 C1: 未赋值元素 Len=5/Asc=0/VarType=8；C7/C8: 二维同样收口。
+$arr233 = Get-CodeText (Join-Path $root "src\backend\expr\cgen_expr_array.cpp")
+if ($arr233 -notmatch 'ASTNodeKind::FixedStringTypeRef\) return Vb6Type::String') {
+    $bad += "S33 a fixed-string array element must resolve to String"
+}
+$rtlArr233 = Get-CodeText (Join-Path $root "src\rtl\core\vb6rtl\vb6rtl_array.c")
+foreach ($fn233 in @('vb6_SafeArrayCreate1D_FixedStr', 'vb6_SafeArrayCreateND_FixedStr')) {
+    if ($rtlArr233 -notmatch [regex]::Escape("$fn233(")) { $bad += "S33 $fn233 is missing" }
+}
+$local233 = Get-CodeText (Join-Path $root "src\backend\decl\cgen_localdecl.cpp")
+if ($local233 -notmatch 'fixedStrArrayElemLen_\[lower\] = fsFillLen') {
+    $bad += "S33 a local fixed-string array must register its element width"
+}
+if ($local233 -notmatch 'vb6_SafeArrayCreate1D_FixedStr') {
+    $bad += "S33 a local fixed-string array must be created with the FixedStr initializer"
+}
+$decl233 = Get-CodeText (Join-Path $root "src\backend\decl\cgen_decl_var.cpp")
+if ($decl233 -notmatch 'moduleFixedStrArrayElemLen_\[lower\] = fsFillLen') {
+    $bad += "S33 a module-level fixed-string array must register its width across procedures"
+}
+$cls233 = Get-CodeText (Join-Path $root "src\backend\cgen_util_classtype.cpp")
+if ($cls233 -notmatch 'fixedStrArrayElemLen_\.find\(baseFs\)') {
+    $bad += "S33 fixedStrLenOfExpr must answer for an array element"
+}
+$type233 = Get-CodeText (Join-Path $root "src\backend\cgen_util_type.cpp")
+if ($type233 -notmatch 'VB6_SA_ND_AT2\(vb6_VARIANT') {
+    $bad += "S33 an ND Variant array element must count as a Variant slot"
+}
+if (@([regex]::Matches($runnerText, 'b255_fixedstr_array\\B255Res\.vbp')).Count -ne 2) {
+    $bad += "S33 b255 is not run on both arches"
+}
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table, S24 Error(n) function face, S25 vbNullString null-pointer fidelity, S26 the & operator against Null/Empty, S27 the + operator against Null/Empty, S28 the + operator between a string and a number, S29 Null in & over array elements and UDT/With members, S30 On Error GoTo 0 clears Err and keeps its resume point, S31 the Mid statement edges, S32 the Mid statement remaining edges)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table, S24 Error(n) function face, S25 vbNullString null-pointer fidelity, S26 the & operator against Null/Empty, S27 the + operator against Null/Empty, S28 the + operator between a string and a number, S29 Null in & over array elements and UDT/With members, S30 On Error GoTo 0 clears Err and keeps its resume point, S31 the Mid statement edges, S32 the Mid statement remaining edges, S33 the fixed-length string assignment paths and their grid)"

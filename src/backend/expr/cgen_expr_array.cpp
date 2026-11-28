@@ -61,6 +61,13 @@ Vb6Type CCodeGen::resolveArrayElemType(ASTNode* typeRef) const {
         auto& arrType = static_cast<ArrayTypeRef&>(*typeRef);
         return resolveArrayElemType(arrType.elementType.get());
     }
+    // §11.232 (第二百五十刀): 定长串数组 (`Dim a(1 To 2) As String * 5`) 的元素是**串**。
+    // 旧行为落到最底下的 Variant ⇒ 元素成为 Variant 槽: `a(1) = "abcdefgh"` 原样存 8 个字符
+    // (真机 P362 B10 = `abcde`), `a(1) = "ab"` 不补空格 (B11 = `ab   `), 而且 2 维那一形
+    // 的 `Len(b(1,2))` 直接 C2440 (`vb6_Len(vb6_VARIANT)`)。
+    // 元素档改成 String 后, 存储是 BSTR 槽 (与模块级 `Private g As String * N` 同模型),
+    // 赋值站按元素宽度 N 收口 (fixedStrLenOfExpr 新增的那个分支持这一形)。
+    if (typeRef->kind == ASTNodeKind::FixedStringTypeRef) return Vb6Type::String;
     if (typeRef->kind == ASTNodeKind::SimpleTypeRef) {
         auto& simple = static_cast<SimpleTypeRef&>(*typeRef);
         Vb6Type t = typeSys_.resolveTypeName(simple.name);

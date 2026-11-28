@@ -132,6 +132,29 @@ vb6_SafeArray1D* vb6_SafeArrayReDim1D(vb6_safearray_elemtype elemType,
     return arr;
 }
 
+// §11.232 (第二百五十刀): 定长串数组的出厂值。元素是 BSTR 槽, 初值 = N 个 NUL
+// (与标量 vb6_BSTR_FixedSTR 同一口径, 真机 P363 C1: Len=5 / Asc=0)。data 是 calloc
+// 出来的, 槽里本来是 NULL, 所以这里直接写, 不需要先 free。
+vb6_SafeArray1D* vb6_SafeArrayCreate1D_FixedStr(int32_t lBound, int32_t uBound, int32_t n) {
+    vb6_SafeArray1D* arr = vb6_SafeArrayCreate1D(vb6_sa_bstr, lBound, uBound);
+    if (!arr || !arr->data) return arr;
+    BSTR* slots = (BSTR*)arr->data;
+    for (int32_t i = 0; i < arr->count; i++) slots[i] = vb6_BSTR_FixedSTR(n);
+    return arr;
+}
+
+// §11.232: 多维那一支。ND 的数据块是**连续**的 totalElements 个 elemSize 槽 (见
+// vb6_SafeArrayCreateND / DestroyND 的逐元素循环), 所以这里按同一个步长铺。
+vb6_SafeArrayND* vb6_SafeArrayCreateND_FixedStr(int32_t dimCount, vb6_SafeArrayBound bounds[], int32_t n) {
+    vb6_SafeArrayND* arr = vb6_SafeArrayCreateND(vb6_sa_bstr, dimCount, bounds);
+    if (!arr || !arr->data) return arr;
+    for (int32_t i = 0; i < arr->totalElements; i++) {
+        BSTR* slot = (BSTR*)((char*)arr->data + (size_t)i * (size_t)arr->elemSize);
+        *slot = vb6_BSTR_FixedSTR(n);
+    }
+    return arr;
+}
+
 vb6_SafeArray1D* vb6_SafeArrayReDim1D_Udt(int32_t elemSize,
     int32_t lBound, int32_t uBound) {
     vb6_SafeArray1D* arr = (vb6_SafeArray1D*)calloc(1, sizeof(vb6_SafeArray1D));

@@ -20,6 +20,7 @@
     classUdtMembers_.clear();  // Fix 010n
     moduleUdtMembers_.clear();  // Fix 010n (扩展): 普通模块模块级UDT变量
     moduleFixedStringLen_.clear();  // 账 #118: 模块级定长串 (类模块与普通模块都要)
+    moduleFixedStrArrayElemLen_.clear();  // §11.232: 模块级定长串数组的元素宽度
     // 账 #118: UDT 定长字段表按**本模块**重建。不 clear 的话, 上一个模块的
     // `Type Rec: f As String * 8` 会在本模块同名 UDT (哪怕字段形状不同或根本不是定长)
     // 上诈尸 —— 表键是 C 类型名, 两个模块各有自己的 `vb6_type_Rec`。
@@ -198,9 +199,16 @@
         if (lastExpr_.empty()) continue;
         std::string oLowerFs = varFs.name;
         std::transform(oLowerFs.begin(), oLowerFs.end(), oLowerFs.begin(), ::tolower);
-        moduleFixedStringLen_[oLowerFs] = lastExpr_;
         std::string mLowerFs = "m_" + varFs.name;
         std::transform(mLowerFs.begin(), mLowerFs.end(), mLowerFs.begin(), ::tolower);
+        // §11.232 (第二百五十刀): **定长串数组** (`Private ga(1 To 2) As String * 5`) 另一张表 ——
+        // 它答的是元素宽 N (`ga(1)` 的收口宽度), 不是「ga 是一只定长串标量」。
+        if (!varFs.dimensions.empty() || varFs.isDynamicArray) {
+            moduleFixedStrArrayElemLen_[oLowerFs] = lastExpr_;
+            moduleFixedStrArrayElemLen_[mLowerFs] = lastExpr_;
+            continue;
+        }
+        moduleFixedStringLen_[oLowerFs] = lastExpr_;
         moduleFixedStringLen_[mLowerFs] = lastExpr_;
     }
     // Fix 010n (扩展): 普通模块(.bas/.frm)模块级UDT变量持久化.

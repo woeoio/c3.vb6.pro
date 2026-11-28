@@ -19,6 +19,15 @@ void CCodeGen::visit(VariableDecl& node) {
     if (!node.dimensions.empty()) {
         Vb6Type elemType = resolveArrayElemType(node.asType.get());
         std::string saElemType = mapSaElemType(elemType);
+        // §11.232 (第二百五十刀): 模块级定长串数组 (`Private ga(1 To 2) As String * 4`)。
+        // 元素宽 N 的表达式在**声明处**求一次 (与模块级定长串标量同一口径), 创建口用
+        // *_FixedStr 逐格铺 N 个 NUL; 同时登记到 fixedStrArrayElemLen_ (过程入口随
+        // moduleFixedStrArrayElemLen_ 恢复)。
+        std::string fsFillLen;
+        if (!trackOnly_ && node.asType && node.asType->kind == ASTNodeKind::FixedStringTypeRef) {
+            emitExpr(*static_cast<FixedStringTypeRef&>(*node.asType).length);
+            fsFillLen = lastExpr_;
+        }
         // A UDT element must be allocated with its real element size.
         // resolveArrayElemType folds an unknown type name to Variant, so the old
         // `vb6_SafeArrayCreate1D(vb6_sa_variant, ...)` handed out 16-byte slots
@@ -44,7 +53,9 @@ void CCodeGen::visit(VariableDecl& node) {
             if (dim.lower) { emitExpr(*dim.lower); lBound = std::move(lastExpr_); }
             if (dim.upper) { emitExpr(*dim.upper); uBound = std::move(lastExpr_); }
             std::string initCode = udtCType.empty()
-                ? ("vb6_SafeArrayCreate1D(" + saElemType + ", " + lBound + ", " + uBound + ")")
+                ? (!fsFillLen.empty()
+                    ? ("vb6_SafeArrayCreate1D_FixedStr(" + lBound + ", " + uBound + ", " + fsFillLen + ")")
+                    : ("vb6_SafeArrayCreate1D(" + saElemType + ", " + lBound + ", " + uBound + ")"))
                 : ("vb6_SafeArrayReDim1D_Udt((int32_t)sizeof(" + udtCType + "), " + lBound + ", " + uBound + ")");
             // Fix 054: C语言文件作用域变量必须用常量表达式初始化 (C2099)
             // 改为先声明为NULL, 再在模块初始化函数中赋值
@@ -74,7 +85,9 @@ void CCodeGen::visit(VariableDecl& node) {
             c_.dedent();
             c_.emitLine("};");
             std::string initCode = udtCType.empty()
-                ? ("vb6_SafeArrayCreateND(" + saElemType + ", " + std::to_string(dimCount) + ", " + boundsVar + ")")
+                ? (!fsFillLen.empty()
+                    ? ("vb6_SafeArrayCreateND_FixedStr(" + std::to_string(dimCount) + ", " + boundsVar + ", " + fsFillLen + ")")
+                    : ("vb6_SafeArrayCreateND(" + saElemType + ", " + std::to_string(dimCount) + ", " + boundsVar + ")"))
                 : ("vb6_SafeArrayReDimND_Udt((int32_t)sizeof(" + udtCType + "), " + std::to_string(dimCount) + ", " + boundsVar + ")");
             // Fix 054: C语言文件作用域变量必须用常量表达式初始化 (C2099)
             if (isPublicModuleDecl(node)) {
@@ -94,6 +107,8 @@ void CCodeGen::visit(VariableDecl& node) {
         knownArrays_.insert(lower);
         arrayElemTypes_[lower] = elemType;
         arrayDimCounts_[lower] = dimCount;
+        if (!fsFillLen.empty()) fixedStrArrayElemLen_[lower] = fsFillLen;  // §11.232
+        if (!fsFillLen.empty()) moduleFixedStrArrayElemLen_[lower] = fsFillLen;  // §11.232: 跨过程恢复用
         // Fix 062: Byte 数组变量注册
         if (elemType == Vb6Type::Byte) knownByteArrayVars_.insert(lower);
         // Fix 055: 注册UDT数组元素C类型

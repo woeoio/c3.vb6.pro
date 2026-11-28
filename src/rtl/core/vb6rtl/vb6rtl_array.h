@@ -148,6 +148,13 @@ BSTR vb6_Join(vb6_SafeArray1D* arr, BSTR delimiter);
 vb6_SafeArray1D* vb6_SafeArrayCreate1D(vb6_safearray_elemtype elemType,
     int32_t lBound, int32_t uBound);
 
+// §11.232 (第二百五十刀): 定长串数组 (`Dim a(1 To 2) As String * N`) 的创建。
+// 元素存储仍是 BSTR 槽 (与模块级 `Private g As String * N` 同一模型), 但**出厂值**要按
+// 定长串的口径给: N 个 NUL, 不是空串 —— 真机 .temp/k233p/P363 C1 未赋值元素读出
+// `Len=5 / Asc=0 / VarType=8`, C2 `a(1) = ""` 为 False (NUL 补位不等于空格补位)。
+// 赋值站的收口 (短补空格/长截右) 在发码侧, 这里只负责初值就位。
+vb6_SafeArray1D* vb6_SafeArrayCreate1D_FixedStr(int32_t lBound, int32_t uBound, int32_t n);
+
 // 创建一维动态数组 (ReDim)
 vb6_SafeArray1D* vb6_SafeArrayReDim1D(vb6_safearray_elemtype elemType,
     int32_t lBound, int32_t uBound);
@@ -275,6 +282,9 @@ typedef struct vb6_SafeArrayND {
 
 vb6_SafeArrayND* vb6_SafeArrayCreateND(vb6_safearray_elemtype elemType,
     int32_t dimCount, vb6_SafeArrayBound bounds[]);
+// §11.232: 多维定长串数组的创建 (元素初值 = N 个 NUL)。声明位置必须在 vb6_SafeArrayBound /
+// vb6_SafeArrayND 的 typedef 之后 —— 放到上面 1D 那一批会 C2081 (形参里的名字不合法)。
+vb6_SafeArrayND* vb6_SafeArrayCreateND_FixedStr(int32_t dimCount, vb6_SafeArrayBound bounds[], int32_t n);
 void vb6_SafeArrayDestroyND(vb6_SafeArrayND* arr);
 // 账 #305 §B218 (甲) 腿⑤ 第五格 (第一百四十九刀): 上面 1D 那位 vb6_SA_ReleaseElements 的**多维兄弟** ——
 // 元素是本工程类裸实例 (vb6_sa_ptr) 的 ND 载体在销毁前逐枚交回。步进口径与 vb6_SafeArrayDestroyND 里

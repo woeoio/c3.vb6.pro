@@ -467,6 +467,16 @@
     // 在 cgen_base_generate_state_scan.inc 里扫一遍留底, 每个过程入口再插回来。
     std::unordered_map<std::string, std::string> moduleFixedStringLen_;
 
+    // §11.232 (第二百五十刀): **定长串数组**的元素宽度 (小写数组名 → 长度表达式)。
+    // 与 knownFixedStringLen_ 分两张表: 那张答的是「这个名字是一枚定长串标量」, 所有按
+    // 标量名查的站 (LSet / Len / 赋值收口) 都会把它当标量用; 数组要答的是「元素宽 N」,
+    // 只有 `arr(i)` 这一形才该命中。
+    // 登记点: 局部/模块级数组声明。局部那份随过程入口 clear (与 knownFixedStringLen_
+    // 同一条纪律), 模块级那份与 moduleFixedStringLen_ 同一趟在状态扫描里留底、同一批
+    // 过程入口插回。
+    std::unordered_map<std::string, std::string> fixedStrArrayElemLen_;
+    std::unordered_map<std::string, std::string> moduleFixedStrArrayElemLen_;
+
     // M22: Declare A版API函数名集合 (小写) - 需要BSTR->ANSI转换的ByVal String参数
     // 判断: 函数名或Alias以'A'结尾 (如 GetWindowTextA, Alias "WritePrivateProfileStringA")
     std::unordered_set<std::string> knownDeclareAnsi_;

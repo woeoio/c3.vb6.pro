@@ -99,6 +99,15 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
             if (!var.dimensions.empty()) {
                 Vb6Type elemType = resolveArrayElemType(var.asType.get());
                 std::string saElemType = mapSaElemType(elemType);
+                // §11.232 (第二百五十刀): 定长串数组 (`Dim a(1 To 2) As String * 5`) 的元素宽度。
+                // 元素档已是 String (resolveArrayElemType), 这里把**出厂值**按定长串口径铺
+                // (创建口 vb6_SafeArrayCreate1D/ND_FixedStr 逐格填 N 个 NUL, 真机 P363 C1)。
+                // 宽度表达式同时登记到 fixedStrArrayElemLen_, 赋值站与 Len/LSet 靠它收口。
+                std::string fsFillLen;
+                if (var.asType && var.asType->kind == ASTNodeKind::FixedStringTypeRef) {
+                    emitExpr(*static_cast<FixedStringTypeRef&>(*var.asType).length);
+                    fsFillLen = lastExpr_;
+                }
                 // Bug4-Fix: UDT数组
                 std::string udtCType = resolveArrayUdtElemCType(var.asType.get());
                 bool isUdtArr = !udtCType.empty();
@@ -125,6 +134,8 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                     std::string initCode;
                     if (isUdtArr) {
                         initCode = "vb6_SafeArrayReDim1D_Udt((int32_t)sizeof(" + udtCType + "), " + lBound + ", " + uBound + ")";
+                    } else if (!fsFillLen.empty()) {
+                        initCode = "vb6_SafeArrayCreate1D_FixedStr(" + lBound + ", " + uBound + ", " + fsFillLen + ")";
                     } else {
                         initCode = "vb6_SafeArrayCreate1D(" + saElemType + ", " + lBound + ", " + uBound + ")";
                     }
@@ -147,17 +158,20 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                     }
                     c_.dedent();
                     c_.emitLine("};");
-                    emitArrayCarrierDecl(
-                        arrayCarrierCType(var), cName,
-                        "vb6_SafeArrayCreateND(" + saElemType + ", " +
-                            std::to_string(dimCount) + ", " + boundsVar + ")",
-                        wantsStaticLocalStorage(var), declaredInPrelude);
+                    std::string initNd = !fsFillLen.empty()
+                        ? ("vb6_SafeArrayCreateND_FixedStr(" + std::to_string(dimCount) + ", " + boundsVar
+                           + ", " + fsFillLen + ")")
+                        : ("vb6_SafeArrayCreateND(" + saElemType + ", " + std::to_string(dimCount)
+                           + ", " + boundsVar + ")");
+                    emitArrayCarrierDecl(arrayCarrierCType(var), cName, initNd,
+                                         wantsStaticLocalStorage(var), declaredInPrelude);
                 }
 
                 // 注册到已知数组集合 (lower 已在分支头上算好)
                 knownArrays_.insert(lower);
                 arrayElemTypes_[lower] = elemType;
                 arrayDimCounts_[lower] = dimCount;
+                if (!fsFillLen.empty()) fixedStrArrayElemLen_[lower] = fsFillLen;  // §11.232
                 if (elemType == Vb6Type::Byte) knownByteArrayVars_.insert(lower);
                 // Fix 055: 注册UDT数组元素C类型
                 {

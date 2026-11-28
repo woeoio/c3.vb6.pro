@@ -1498,6 +1498,22 @@ std::string CCodeGen::fixedStrLenOfExpr(const ASTNode& expr,
         if (mit == uit->second.end()) return "";
         return mit->second;
     }
+    // ④ §11.232 (第二百五十刀): 定长串**数组元素** `a(1)` / `b(1,2)` —— 基名在
+    //    fixedStrArrayElemLen_ 里 (数组声明处登记, 模块级那份跨过程恢复)。
+    //    不认这一档的后果 (真机 P362 B10/B11): `a(1) = "abcdefgh"` 原样存 8 个字符、
+    //    `a(2) = "ab"` 不补空格 —— 元素被当成普通动态串槽。
+    //    只认「基名 + 下标」这一形: 函数调用 `F(1)` 的 callee 也是标识符, 但它不会在
+    //    这张表里 (表只由 Dim/Private 的数组声明填), 所以不需要再区分调用/下标。
+    if (expr.kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& icFs = static_cast<const IndexOrCallExpr&>(expr);
+        if (icFs.callee && icFs.callee->kind == ASTNodeKind::IdentifierExpr) {
+            const std::string baseFs = Symbol::toLower(
+                static_cast<const IdentifierExpr&>(*icFs.callee).name);
+            auto itFs = fixedStrArrayElemLen_.find(baseFs);
+            if (itFs != fixedStrArrayElemLen_.end()) return itFs->second;
+        }
+        return "";
+    }
     return "";
 }
 

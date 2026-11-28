@@ -60,6 +60,7 @@ void CCodeGen::visit(FunctionDecl& node) {
     // M22-fix: 只清空UDT变量map(旧条目会冲突), set类型不清空(WithEvents等模块级条目需跨过程保留)
     knownUdtVars_.clear();
     knownFixedStringLen_.clear();
+    fixedStrArrayElemLen_.clear();  // §11.232: 局部定长串数组的元素宽度（过程级）
     // Fix 010o: 清空局部变量集合
     knownLocalVars_.clear();
     procNonArrayLocalVars_.clear();
@@ -96,6 +97,7 @@ void CCodeGen::visit(FunctionDecl& node) {
     // `knownFixedStringLen_.clear()` 就把 declaration 阶段那条登记抹了
     // (`Private gT As String * 5` 的 `gT = "ab"` / `Len(gT)` 双双退回动态串口径)。
     knownFixedStringLen_.insert(moduleFixedStringLen_.begin(), moduleFixedStringLen_.end());
+    fixedStrArrayElemLen_.insert(moduleFixedStrArrayElemLen_.begin(), moduleFixedStrArrayElemLen_.end());  // §11.232
     knownDoubleVars_.insert(classDoubleMembers_.begin(), classDoubleMembers_.end());
     knownLongVars_.insert(classLongMembers_.begin(), classLongMembers_.end());
     // 账 #305 §B183: Integer 类字段的窄档名单也要在过程入口恢复一份，否则裸名成员左值问「有多窄」只查到放宽档。

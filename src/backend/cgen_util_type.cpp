@@ -1674,6 +1674,19 @@ bool CCodeGen::isVariantSlot(const std::string& cExpr, const Expr* ast) const {
     // of type vb6_VARIANT — also a Variant expression.
     if (cExpr.compare(start, 21, "VB6_SA_AT(vb6_VARIANT") == 0) return true;
 
+    // §11.232 (第二百五十刀): 多维 Variant 数组元素 (`VB6_SA_ND_AT2(vb6_VARIANT, …)`) 同样是
+    // Variant 槽。旧判据只认 1 维那一形，于是 `Dim b(1 To 2, 1 To 2) As Variant` 的
+    // `Len(b(1,2))` 发成 `vb6_Len(vb6_VARIANT)` —— 当场 C2440（真机 P363 那一版的 C7/C8）。
+    {
+        static const std::string kNdVariantPrefixes[] = {
+            "VB6_SA_ND_AT2(vb6_VARIANT", "VB6_SA_ND_AT3(vb6_VARIANT",
+            "VB6_SA_ND_AT4(vb6_VARIANT", "VB6_SA_ND_ATN(vb6_VARIANT",
+        };
+        for (const auto& pfxNd : kNdVariantPrefixes) {
+            if (cExpr.compare(start, pfxNd.size(), pfxNd) == 0) return true;
+        }
+    }
+
     // Fix 045: 检查项目函数是否返回 Variant — 通过 driver.cpp 预扫描构建的
     // C 函数名集合. 提取 C 表达式中的函数名 (从 start 到第一个 '(') 并查集合.
     if (variantReturnFuncs_) {

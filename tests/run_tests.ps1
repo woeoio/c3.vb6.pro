@@ -14163,6 +14163,47 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "F10|num=0|[azc]")
     Test-Vbp 'b254_mid_stmt_edges2' "$Tests\b254_mid_stmt_edges2\B254Res.vbp" $b254Needles
     Test-Vbp 'b254_mid_stmt_edges2_x86' "$Tests\b254_mid_stmt_edges2\B254Res.vbp" $b254Needles -Arch "x86"
+    # §11.232 第二百五十刀: 定长串的各条赋值路径 (局部/模块级/UDT 字段/一维二维数组元素)
+    # 与收口 (短补空格、长截右)、Empty/Null 右值、未赋值元素 = N 个 NUL。
+    $b255Needles = @(
+    "A1|[abcde]|len=5|num=0",
+    "A2|[ab   ]|len=5|cat=[ab   x]",
+    "A3|[     ]|len=5",
+    "A4|[123  ]|len=5|num=0",
+    "A5|[12.7 ]|len=5",
+    "A6|[True ]|len=5",
+    "A7|[     ]|len=5|num=0",
+    "A8|[abc  ]|len=5|num=94",
+    "A9|[abcde]|len=5|num=0",
+    "A10|[ab   ]|len=5",
+    "A11|[     ]|len=5|num=0",
+    "A12|[abc  ]|len=5|num=94",
+    "A13|fy=[abc]|len=3",
+    "A14|len=5|[abcde]",
+    "A15|[abcde]|len=5|num=0",
+    "A16|[ZZZZZ]|len=5",
+    "A17|[abcde]|len=5",
+    "A18|[abcde]|len=5|num=0",
+    "A19|[ab   ]|len=5",
+    "A20|[     ]|len=5",
+    "A21|[     ]|len=5|num=0",
+    "A22|[abc  ]|len=5|num=94",
+    "A23|[123  ]|len=5",
+    "A24|[azc  ]|len=5|num=0",
+    "A25|[abcde]|len=5",
+    "A26|[abcde]|len=5|num=0",
+    "A27|[ab   ]|len=5",
+    "A28|len=5|asc=0|vt=8",
+    "A29|isempty=False|catlen=5",
+    "A30|[abc  ]|len=5|num=94",
+    "A31|[     ]|len=5|num=0",
+    "A32|[abcd]|len=4|num=0",
+    "A33|[ab  ]|len=4",
+    "A34|[abcd]|len=4|num=0",
+    "A35|[ab  ]|len=4",
+    "A36|lb=1|ub=2|lb2=1|ub2=2")
+    Test-Vbp 'b255_fixedstr_array' "$Tests\b255_fixedstr_array\B255Res.vbp" $b255Needles
+    Test-Vbp 'b255_fixedstr_array_x86' "$Tests\b255_fixedstr_array\B255Res.vbp" $b255Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
