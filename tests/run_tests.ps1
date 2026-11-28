@@ -14150,6 +14150,19 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "M14|num=5|[]|vt=8")
     Test-Vbp 'b253_mid_stmt_edges' "$Tests\b253_mid_stmt_edges\B253Res.vbp" $b253Needles
     Test-Vbp 'b253_mid_stmt_edges_x86' "$Tests\b253_mid_stmt_edges\B253Res.vbp" $b253Needles -Arch "x86"
+    # §11.231 第二百四十九刀: Mid 余下边角（定长串 / Empty / Null 替换串 / 长度不一致 / Mid$）。
+    $b254Needles = @(
+    "F2|num=0|[azcde]|len=5",
+    "F3|num=0|[abcde]",
+    "F4|num=0|[abcz ]",
+    "F5|num=5|isempty=False|vt=8",
+    "F6|num=94|[abc]",
+    "F7|num=0|[abc]",
+    "F8|num=0|[abx]",
+    "F9|num=0|[axc]",
+    "F10|num=0|[azc]")
+    Test-Vbp 'b254_mid_stmt_edges2' "$Tests\b254_mid_stmt_edges2\B254Res.vbp" $b254Needles
+    Test-Vbp 'b254_mid_stmt_edges2_x86' "$Tests\b254_mid_stmt_edges2\B254Res.vbp" $b254Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

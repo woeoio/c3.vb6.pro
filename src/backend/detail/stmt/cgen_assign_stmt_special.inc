@@ -188,7 +188,8 @@
                     // Fix 086: 与 visit(MidStmt) 的 Fix 084b 一致 — Variant值
                     // (vb6_VariantArrayGet 等) 需转 BSTR, 否则 C2440
                     if (isVariantSlot(midValue, node.value.get())) {
-                        midValue = "vb6_VariantToString(" + midValue + ")";
+                        // §11.231: Null 替换串必报 94（与 visit(MidStmt) 同一条严格站）。
+                        midValue = "vb6_CStrStrict(" + midValue + ")";
                     }
                     c_.emitLine("vb6_MidSet(&" + midTarget + ", " + midStart + ", " + midLen + ", " + (call.positional.size() >= 3 ? "1" : "0") + ", " + midValue + ");  /* Mid$ statement */");
                     return;

@@ -369,7 +369,9 @@ void CCodeGen::visit(MidStmt& node) {
     // vb6_VARIANT) → 需 vb6_VariantToString 转 BSTR, 否则 vb6_MidSet 第4参数
     // 类型不匹配触发 C2440.
     if (isVariantSlot(valueVar, node.value.get())) {
-        valueVar = "vb6_VariantToString(" + valueVar + ")";
+        // §11.231 (第二百四十九刀): 真机 F6 `Mid(s,1)=Null变量` ⇒ **94**。
+        // vb6_VariantToString 对 Null 静默给空串；严格站才与真机同号。
+        valueVar = "vb6_CStrStrict(" + valueVar + ")";
     }
     // Emit target variable address
     // 左值求值期间关掉虚表派发 (ai/022 B08e-4 站点⑭: Pattern C/D2 要对这段文本做

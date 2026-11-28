@@ -440,11 +440,19 @@ void vb6_MidSetV(vb6_VARIANT* target, int32_t start, int32_t len, int32_t hasLen
         vb6_RaiseError(94, vb6_BSTR_FromStr(L"Invalid use of Null"));
         return;
     }
+    /* §11.231 (第二百四十九刀): 真机 F5 —— Variant **Empty** 目标报 5 之后，槽里变成
+     * `""`（vt=8, IsEmpty=False）：VB6 把 Empty 当串读时已经物化成空串，报错不改这一点。
+     * 物化必须放在**调用 vb6_MidSet 之前** —— 它会 vb6_RaiseError，Resume Next 下是 longjmp，
+     * 报错后的代码根本跑不到（本刀第一版就是这么漏的）。对照 M14 `v = ""` 报 5 后仍是 `""`。 */
+    if (target->vt == VT_EMPTY) {
+        vb6_VariantClear(target);
+        *target = vb6_VariantString(vb6_BSTR_FromStr(L""));
+    }
     BSTR work = vb6_VariantToString(*target);   /* vb6_CStr: 新 BSTR, 归本函数 */
     if (!work) work = vb6_BSTR_FromStr(L"");
     if (vb6_MidSet(&work, start, len, hasLen, replacement) != 0) {
         vb6_BSTR_Free(work);
-        return;                                  /* 报错已发生: 目标保持原值 */
+        return;                                  /* 报错已发生: 目标保持原值（Empty 已物化） */
     }
     vb6_VariantClear(target);
     *target = vb6_VariantString(work);            /* 直接接管 work */
