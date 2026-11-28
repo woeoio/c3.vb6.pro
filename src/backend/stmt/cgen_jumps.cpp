@@ -79,20 +79,20 @@ void CCodeGen::visit(GoToStmt& node) {
 }
 
 void CCodeGen::visit(OnErrorStmt& node) {
-    // 账 #271: **Err 的清空点只挂在 `On Error Resume Next` 与 `On Error GoTo label`
-    // 上, 不挂 `On Error GoTo 0`** —— 这是被两处实测夹出来的唯一解:
-    //   ① tests/test_bstr_concat_scalar.bas 照 native VB6 定的口径是
-    //        On Error Resume Next / Err.Raise 5 / On Error GoTo 0 / "a=" & Err.Number
-    //      VB6 交 "a=5" ⇒ **`On Error GoTo 0` 不清 Err** (这也与 VBA 那条众所周知的
-    //      提醒一致: GoTo 0 只关闸, 要清得自己 Err.Clear)。整刀清空会让它交 "a=0",
-    //      GA run 38442708160 的 test_bstr_concat_scalar 就是这么红的。
+    // 账 #271 + §11.229 (第二百四十七刀): Err 的清空点 = `On Error Resume Next` /
+    // `On Error GoTo label` / `On Error GoTo 0` **三条都清**。
+    //   ① 真机 .temp/k233p/P357: On Error Resume Next / Err.Raise 5 / On Error GoTo 0
+    //      ⇒ Err.Number=0、Description=""、Source="" (A2/A3/A5 三格); Err.Clear 那格 A7=0 作对照。
+    //      同族旁证: Windows 自带 VBScript (err0.vbs) 同一段也是 A2=0。
+    //      (旧顶注写“GoTo 0 不清”是拿 tests/test_bstr_concat_scalar.bas 的旧针脚当真机读数;
+    //       那一针已按 P357 改成 a=0。)
     //   ② ComCtlsDemo 启动那个未处理错误 380 (CoolBar.ctl:3173 ControlIsValid)
     //        On Error Resume Next: Set Container = Control.Container
     //        ControlIsValid = CBool(Err.Number = 0 And ...)
     //      要求进 ControlIsValid 时 Err 已被清 —— 它上面那一句正是 `On Error Resume Next`。
     //      不清则读到上一层 `Value.hWndUserControl` 留下的错误号 ⇒ 恒 False ⇒ 380。
-    // 于是: ResumeNext / GoToLabel 清, GoToZero 不动。清空放在**最前**, 语句自身的
-    // 副作用 (GoToLabel 的 setjmp 登记) 不依赖 Err。
+    // 清空放在**最前**, 语句自身的副作用 (GoToLabel 的 setjmp 登记) 不依赖 Err;
+    // GoToZero 的清空在 RTL 里 (vb6_ErrGoToZero 开头 vb6_ErrClear), 单一主人。
     switch (node.errorKind) {
         case OnErrorKind::GoToLabel: {
             // On Error GoTo label
@@ -179,7 +179,10 @@ void CCodeGen::visit(OnErrorStmt& node) {
             // Strict 模式抛 5011, 调用方 TryParseStrict 的 ParseError 接不住,
             // vb6_ErrRaise 走 "Unhandled error" → ExitProcess (第 5 按钮一点就死)。
             // 交给 RTL 把栈顶那一帧 (调用方状态) 还回去, 函数出口照旧 Restore。
-            c_.emitLine("vb6_ErrGoToZero();  /* On Error GoTo 0: 恢复到调用方帧, 见账 #611 */");
+            // §11.229 (第二百四十七刀): 这个语句**也清 Err**。真机 P357:
+            //   `On Error Resume Next` / `Err.Raise 5` / `On Error GoTo 0` ⇒ Err 全零。
+            //   清空放在 RTL `vb6_ErrGoToZero` 开头, 与帧恢复同一主人, 发码站不再另发一句。
+            c_.emitLine("vb6_ErrGoToZero();  /* On Error GoTo 0: 恢复到调用方帧 + 清 Err, 见账 #611 / §11.229 */");
             break;
     }
 }

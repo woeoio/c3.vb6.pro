@@ -25,8 +25,12 @@ void CCodeGen::emitStmtList(StmtList& stmts, bool emitResumePoints) {
         // 就落到块尾**之后**（`tests/b137_resume_in_block` 的 B 路：块内剩下的语句被跳过、
         // 块尾那句放手也被跳过）。`Resume` 的语义是「回到出错语句的下一条」，与嵌套深浅无关，
         // 所以这里按保护区走、不按层走；处理器的体不在保护区内（cgen_jumps.cpp 标签处清旗）。
+        //
+        // §11.229 (第二百四十七刀): 早先这里把 `OnErrorStmt` 也排除在外 —— 后果是
+        // `Err.Raise 5` / `On Error GoTo 0` 相邻时，Resume Next 落到**下一条被编号的语句**,
+        // 把 GoTo 0 整句跳掉了（真机 P357 的 A2=0 就是执行了它; C3 当时 a=5 是因为没执行）。
+        // `On Error ...` 也只是一条语句 —— Resume Next 回到的就是它, 所以它也得有编号。
         if (inProtectedBlock_ &&
-            stmt->kind != ASTNodeKind::OnErrorStmt &&
             stmt->kind != ASTNodeKind::LabelStmt) {
             int pt = resumePointCounter_++;
             // 第一百九十五刀 (§11.178): 标签必须在「推进 next 点」的**前面**。

@@ -14118,6 +14118,20 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "F8|num=0|[xb]")
     Test-Vbp 'b251_amp_null_member' "$Tests\b251_amp_null_member\B251Res.vbp" $b251Needles
     Test-Vbp 'b251_amp_null_member_x86' "$Tests\b251_amp_null_member\B251Res.vbp" $b251Needles -Arch "x86"
+    # §11.229 第二百四十七刀: `On Error GoTo 0` 也清 Err（真机 P357 9 格）。
+    # 连带修好：Resume Next 不得跳过紧跟其后的 `On Error ...` 语句（真机 BCS 的 a=0）。
+    $b252Needles = @(
+    "A1|num=5|[Invalid procedure call or argument]|src=B252Res",
+    "A2|num=0|[]|src=",
+    "A3|num=0",
+    "A4|num=6",
+    "A5|num=0",
+    "A6|num=7",
+    "A7|num=0",
+    "B2|num=5|[Invalid procedure call or argument]",
+    "B1|num=0")
+    Test-Vbp 'b252_onerror_goto0' "$Tests\b252_onerror_goto0\B252Res.vbp" $b252Needles
+    Test-Vbp 'b252_onerror_goto0_x86' "$Tests\b252_onerror_goto0\B252Res.vbp" $b252Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

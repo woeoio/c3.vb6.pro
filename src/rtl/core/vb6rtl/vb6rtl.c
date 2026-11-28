@@ -764,7 +764,14 @@ void vb6_RestoreErrState(void) {
 // 状态 —— 这里不弹栈 (函数出口仍要 RestoreErrState 弹一次), 只把当前全局状态
 // 换成栈顶那份。改前发码是 `vb6_err_jmp_active = 0; vb6_error_jmp_set = 0;`,
 // 外层 setjmp 帧被一并作废 ⇒ 未处理错误直接 ExitProcess (JSonFast 第 5 按钮)。
+//
+// §11.229 (第二百四十七刀): 这个语句**也清 Err**。真机 P357 逐格读数:
+//   On Error Resume Next / Err.Raise 5 / On Error GoTo 0 ⇒
+//   Err.Number=0、Description=""、Source="" (A2/A3/A5), 与 Err.Clear 那格 (A7=0) 同值;
+//   Windows 自带 VBScript (err0.vbs) 同一段也是 A2=0。旧注释里“GoTo 0 不清”
+//   是拿 test_bstr_concat_scalar 的旧针脚当真机读数, 已按 P357 把该夹具改成 a=0。
 void vb6_ErrGoToZero(void) {
+    vb6_ErrClear();   /* §11.229: 真机 GoTo 0 之后 Err 全零 */
     vb6_err_resume_next = 0;
     if (vb6_err_stack_top > 0) {
         const vb6_ErrFrame* caller = &vb6_err_stack[vb6_err_stack_top - 1];

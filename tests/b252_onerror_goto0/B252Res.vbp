@@ -1,0 +1,6 @@
+Type=Exe
+Reference=*\G{00020430-0000-0000-C000-000000000046}#2.0#0#C:\Windows\System32\stdole2.tlb#OLE Automation
+Module=Module1; B252Main.bas
+Startup="Module1"
+ExeName32="B252Res.exe"
+Name="B252Res"

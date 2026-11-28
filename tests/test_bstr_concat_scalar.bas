@@ -15,6 +15,9 @@ Sub Main()
     On Error GoTo 0
 
     ' A-2: member scalar WITHOUT string arguments (was passed through bare)
+    ' §11.229 (第二百四十七刀): 真机在这里是 **a=0** —— `On Error GoTo 0` 也清 Err
+    ' (VB6Mini 实测 .temp/k233p/P357 A2/A3/A5=0，同段 VBScript 亦为 0)。
+    ' 旧针脚 a=5 是当年把“GoTo 0 不清”当成了真机口径。
     s = "a=" & Err.Number
 
     ' A-1: scalar functions WITH string arguments (substring hit bypassed them)
@@ -54,7 +57,7 @@ Sub Main()
 
     ' stdout markers for run_tests.ps1
     Dim okAll As Boolean
-    okAll = InStr(s, "a=5") > 0
+    okAll = InStr(s, "a=0") > 0
     okAll = okAll And InStr(s, "b=4") > 0
     okAll = okAll And InStr(s, "c=2.5") > 0
     okAll = okAll And InStr(s, "d=3") > 0
