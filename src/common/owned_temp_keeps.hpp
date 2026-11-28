@@ -162,6 +162,10 @@ inline const OwnedTempConsumes* ownedTempConsumes() {
         { "vb6_IIfVariant",      1, '1' },
         { "vb6_IIfVariant",      2, '1' },
         { "vb6_LSetFree",        0, '0' },
+        // §11.230 (第二百四十八刀): vb6_MidSetV 在写回前先 VariantClear(target) ——
+        // 那是**出参**（调用方交的是变量地址 &v，不是临时量），清一次是语义要求；
+        // 消费轴登记它，免得发码侧对同一格再放一次。
+        { "vb6_MidSetV",         0, '0' },
         // C30-10 第五十六刀: Str$ 数值档的共用尾巴（static，只活在 RTL 里）—— 它接管并
         // SysFreeString 掉 CStr 交来的那枚数字文本。普查从 RTL 实读得到这一格，
         // 这里不登记就报 K13d（发码侧会双放）；名字进不了用户 TU，所以这行是**对账用**的。

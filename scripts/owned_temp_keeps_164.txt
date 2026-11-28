@@ -168,7 +168,8 @@ vb6_LTrimV|0	1	store	0	open	VARIANT
 vb6_LTrimVar|0	0	handoff-reads:vb6_LTrim	0	open	VARIANT
 vb6_Mid|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_MidB|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
-vb6_MidSet|3	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_MidSet|4	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_MidSetV|4	0	handoff-reads:vb6_MidSet	0	open	BSTR
 vb6_MkDir|0	0	handoff-reads:vb6_path_from	0	open	BSTR
 vb6_MsgBox|0	0		0	open	BSTR
 vb6_MsgBox|2	0		0	open	BSTR
@@ -474,6 +475,7 @@ vb6_IIfBSTR|2	1	vb6_BSTR_Free	falsepart
 vb6_IIfVariant|1	1	vb6_VariantClear	truepart
 vb6_IIfVariant|2	1	vb6_VariantClear	falsepart
 vb6_LSetFree|0	0	vb6_BSTR_Free	str
+vb6_MidSetV|0	0	vb6_VariantClear	target
 vb6_StrFromNumText|0	0	SysFreeString	num
 vb6_VarConcatNullV|2	0	vb6_BSTR_Free	sa
 vb6_VarConcatNullV|3	0	vb6_BSTR_Free	sb
