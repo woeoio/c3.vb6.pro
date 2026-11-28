@@ -14272,6 +14272,40 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "U14|False")
     Test-Vbp 'b257_text_cmp_nul' "$Tests\b257_text_cmp_nul\B257Res.vbp" $b257Needles
     Test-Vbp 'b257_text_cmp_nul_x86' "$Tests\b257_text_cmp_nul\B257Res.vbp" $b257Needles -Arch "x86"
+    # §11.235 第二百五十三刀: 搜索面遇内嵌 NUL —— InStr/InStrRev 不截断、Like 的 `?` `#` `*`
+    # `[...]` 都把 NUL 当普通字符（源串与模式两侧都算）；空 haystack/needle 老口径不变。
+    # 真机 P370 / P371。
+    $b258Needles = @(
+    "V1|1",
+    "V2|2",
+    "V3|3",
+    "V4|0",
+    "V5|3",
+    "V6|2",
+    "V7|3",
+    "V8|False",
+    "V9|True",
+    "V10|1",
+    "V11|0",
+    "V12|3",
+    "V13|1",
+    "V14|3",
+    "V15|2",
+    "W1|True",
+    "W2|False",
+    "W3|True",
+    "W4|True",
+    "W5|True",
+    "W6|False",
+    "W7|False",
+    "W8|True",
+    "W9|True",
+    "W10|True",
+    "W11|False",
+    "W12|True",
+    "W13|True")
+    Test-Vbp 'b258_search_nul' "$Tests\b258_search_nul\B258Res.vbp" $b258Needles
+    Test-Vbp 'b258_search_nul_x86' "$Tests\b258_search_nul\B258Res.vbp" $b258Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

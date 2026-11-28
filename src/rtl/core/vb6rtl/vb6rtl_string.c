@@ -826,65 +826,76 @@ BSTR vb6_UCase_str(BSTR s) { return vb6_UCase(s); }
 // <vbeclipse>: mode != 0 ⇒ 文本形 (Option Compare Text / vbTextCompare 同口径):
 // 逐字符比较与字符区间都按大小写折叠取。旧实现只有二进制一形, 于是
 // "abc" Like "[A-Z]*" 在 Option Compare Text 模块里 VB6 答 True 而 C3 答 False。
-static int likeMatch(const wchar_t* src, const wchar_t* pat, int mode) {
-    wchar_t sc;
-    while (*pat) {
-        if (*pat == L'*') {
-            while (*pat == L'*') pat++;
-            if (*pat == L'\0') return 1;
-            while (*src) {
-                if (likeMatch(src, pat, mode)) return 1;
-                src++;
+// §11.235 (第二百五十三刀): 源串与模式都按**真实长度**走 —— 内嵌 NUL 是普通字符,
+// 不是串尾。真机读数 (.temp/k235p/P370 V9 / P371 W1..W12):
+//   `("a" & Chr$(0)) Like "a?"` True    `("a" & Chr$(0) & "b") Like "a?b"` True
+//   `("a" & Chr$(0)) Like "a"` False    `("a" & Chr$(0)) Like "a" & Chr$(0)` True
+//   `Chr$(0) Like "?"` True             `Chr$(0) & "5" Like "#5"` False
+// 旧实现逐指针扫到 L'\0' 为止 ⇒ `?` 在 NUL 处答不匹配, 模式里的 NUL 直接当结束。
+static int likeMatchSpan(const wchar_t* src, int32_t sn, const wchar_t* pat, int32_t pn,
+                         int mode) {
+    int32_t si = 0, pi = 0;
+    while (pi < pn) {
+        wchar_t pc = pat[pi];
+        if (pc == L'*') {
+            while (pi < pn && pat[pi] == L'*') pi++;
+            if (pi >= pn) return 1;
+            for (int32_t k = si; k <= sn; k++) {
+                if (likeMatchSpan(src + k, sn - k, pat + pi, pn - pi, mode)) return 1;
             }
-            return likeMatch(src, pat, mode);
+            return 0;
         }
-        else if (*pat == L'?') {
-            if (*src == L'\0') return 0;
-            src++; pat++;
+        if (pc == L'?') {
+            if (si >= sn) return 0;
+            si++; pi++; continue;
         }
-        else if (*pat == L'#') {
-            if (*src == L'\0') return 0;
-            if (*src < L'0' || *src > L'9') return 0;
-            src++; pat++;
+        if (pc == L'#') {
+            if (si >= sn) return 0;
+            if (src[si] < L'0' || src[si] > L'9') return 0;
+            si++; pi++; continue;
         }
-        else if (*pat == L'[') {
-            pat++;
+        if (pc == L'[') {
+            pi++;
             int negate = 0;
-            if (*pat == L'!') { negate = 1; pat++; }
-            int match = 0;
-            if (*src == L'\0') return 0;
-            sc = mode ? (wchar_t)towlower(*src) : *src;
-            while (*pat && *pat != L']') {
-                if (pat[1] == L'-' && pat[2] && pat[2] != L']') {
-                    wchar_t lo = *pat, hi = pat[2];
+            if (pi < pn && pat[pi] == L'!') { negate = 1; pi++; }
+            int hit = 0;
+            if (si >= sn) return 0;
+            wchar_t sc = mode ? (wchar_t)towlower(src[si]) : src[si];
+            while (pi < pn && pat[pi] != L']') {
+                if (pi + 2 < pn && pat[pi + 1] == L'-' && pat[pi + 2] != L']') {
+                    wchar_t lo = pat[pi], hi = pat[pi + 2];
                     if (mode) { lo = (wchar_t)towlower(lo); hi = (wchar_t)towlower(hi); }
-                    if (sc >= lo && sc <= hi) match = 1;
-                    pat += 3;
+                    if (sc >= lo && sc <= hi) hit = 1;
+                    pi += 3;
                 } else {
-                    wchar_t pc = mode ? (wchar_t)towlower(*pat) : *pat;
-                    if (sc == pc) match = 1;
-                    pat++;
+                    wchar_t pcc = mode ? (wchar_t)towlower(pat[pi]) : pat[pi];
+                    if (sc == pcc) hit = 1;
+                    pi++;
                 }
             }
-            if (*pat == L']') pat++;
-            if (negate) match = !match;
-            if (!match) return 0;
-            src++;
+            if (pi < pn && pat[pi] == L']') pi++;
+            if (negate) hit = !hit;
+            if (!hit) return 0;
+            si++;
+            continue;
         }
-        else {
-            wchar_t pc = mode ? (wchar_t)towlower(*pat) : *pat;
-            wchar_t cc = mode ? (wchar_t)towlower(*src) : *src;
-            if (cc != pc) return 0;
-            src++; pat++;
+        if (si >= sn) return 0;
+        {
+            wchar_t pcc = mode ? (wchar_t)towlower(pc) : pc;
+            wchar_t cc = mode ? (wchar_t)towlower(src[si]) : src[si];
+            if (cc != pcc) return 0;
         }
+        si++; pi++;
     }
-    return (*src == L'\0');
+    return si >= sn;
 }
 
 int16_t vb6_LikeC(BSTR source, BSTR pattern, int32_t mode) {
     const wchar_t* s = source ? source : L"";
     const wchar_t* p = pattern ? pattern : L"";
-    return likeMatch(s, p, mode ? 1 : 0) ? -1 : 0;
+    int32_t sn = source ? vb6_BSTR_Len(source) : 0;
+    int32_t pn = pattern ? vb6_BSTR_Len(pattern) : 0;
+    return likeMatchSpan(s, sn, p, pn, mode ? 1 : 0) ? -1 : 0;
 }
 
 int16_t vb6_Like(BSTR source, BSTR pattern) {

@@ -152,8 +152,8 @@ vb6_LenBV|0	0	handoff-reads:vb6_VariantToString	0	open	VARIANT
 vb6_LenV|0	0	handoff-to-plain:vb6_VariantLong	0	open	VARIANT
 vb6_Like|0	0	handoff-reads:vb6_LikeC	0	open	BSTR
 vb6_Like|1	0	handoff-reads:vb6_LikeC	0	open	BSTR
-vb6_LikeC|0	0		0	open	BSTR
-vb6_LikeC|1	0		0	open	BSTR
+vb6_LikeC|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_LikeC|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_LoadPictureEx|0	0		0	open	BSTR
 vb6_LoadResData|0	1	write	0	open	VARIANT
 vb6_LoadResData|1	1	write	0	open	VARIANT
