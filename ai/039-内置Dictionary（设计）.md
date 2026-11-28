@@ -16436,3 +16436,78 @@ C3 是 **True**。那一格量的不是定长串的收口，而是字符串比�
 
 `Option Compare Text` 下的 NUL/空格口径；`StrComp` 第三参为 1（文本）时的同一族读数；
 `InStr` / `Like` 与 NUL 的交互 —— 都还没量，留在背账。
+
+### §11.234 第二百五十二刀：`Option Compare Text` 下的同一族口径 —— NUL 要剔掉，空串仍不等于非空
+
+§11.233 明确留了一档没动：`Option Compare Text`。本刀把它量完。
+
+**真机读数**（`.temp/k234p/P368` 主读数 15 格 + `P369` 追量 14 格，都是 `Option Compare Text` 模块）
+
+| 格 | 表达式 | 真机 | 改前 C3 |
+| --- | --- | --- | --- |
+| T1 | `"a" = "A"` | True | True |
+| T2 | `"a" = "a "` | **False** | False |
+| T3 | `"a" = "a" & Chr$(0)` | **True** | True（碰巧对） |
+| T4 | `"" = Chr$(0)` | **False** | **True** |
+| T5 | `"a" & Chr$(0) = "A"` | True | True |
+| T6 | `"a" < "a "` | True | True |
+| T7 | `StrComp("a","A",1)` | 0 | 0 |
+| T8 | `StrComp("a","a ",1)` | -1 | -1 |
+| T9 | `StrComp("a","a"&Chr$(0),1)` | 0 | 0 |
+| T11 | `"ABC" < "abd"` | True | True |
+| T12 | `"a"&Chr$(0) < "A"` | False | False |
+| T13 | `Chr$(0) = " "` | False | False |
+| T14 | 变量 `"a"&Chr$(0)` 进 Select Case `Case "A"` | **HIT** | HIT |
+| T15 | 变量 `"a "` 进 Select Case `Case "A"` | MISS | MISS |
+| U2 | `Chr$(0) = ""` | False | False |
+| U3 | `"a" = Chr$(0)` | False | False |
+| U4 | `"a" = Chr$(0) & "a"` | **True** | True |
+| U5 | `"ab" = "a" & Chr$(0)` | False | False |
+| U6 | `"ab" = "a" & Chr$(0) & "b"` | **True** | True |
+| U7 | `"" = Chr$(0) & Chr$(0)` | False | False |
+| U8 | `StrComp("", Chr$(0), 1)` | -1 | -1 |
+| U9 | `StrComp(Chr$(0), "", 1)` | 1 | 1 |
+
+**规则**（由 U2..U9 反推，与 Binary 档**不同**）
+
+1. **一侧长度 0、另一侧非 0 ⇒ 一律不等**（空的一侧小）。这条要**先判**：
+   U2 `Chr$(0) = ""` 与 U7 `"" = Chr$(0) & Chr$(0)` 都是 False，若只按第 2 条剔完再比会错成相等。
+2. 否则把两侧的内嵌 NUL **全部剔掉**再按字符比（大小写不敏感）：
+   T3/U4/U6 是"剔完相等 ⇒ True"（`"a"` vs `"a\0\0"`、`"ab"` vs `"a\0b"`），
+   U5/T13 是"剔完不等"。
+3. **空格不补**：T2/T6 与 Binary 档一致，`"a" = "a "` 仍 False。
+
+也就是说 Text 档里 NUL 不是"普通字符"（Binary 档那条），也不是"串尾"——而是**被忽略**；
+唯独"整串为空"这件事不能靠忽略得到，必须单独先答。
+
+**根因**
+
+`vb6_TextCmp` 走 `CompareStringW(LOCALE_USER_DEFAULT, NORM_IGNORECASE, a, -1, b, -1)`：
+`-1` 让 API 按 NUL 定长 —— 于是 `""` 与 `Chr$(0)` 都读成空串、答**相等**（T4 错），
+而 `"a"` vs `"a" & Chr$(0)` 靠截断碰巧答对（T3）、`"ab"` vs `"a" & Chr$(0) & "b"` 靠截断
+答成"a" vs "ab" ⇒ 碰巧也对（U6）。U4 同理。真正错的只有"空 vs 带 NUL"这一族。
+
+**改动**（`src/rtl/core/vb6rtl/vb6rtl_string.c`）
+
+- 抽出 `vb6_TextCmpSpan(a, la, b, lb)`：显式长度喂 `CompareStringW`（`1/2/3 → -1/0/1`），
+  非 Windows 或 API 失败退逐字符 `towlower` 比。
+- `vb6_TextCmp` 先取两侧 BSTR 长度：**长度 0 与非 0 混搭先答**（空的小）；
+  没有内嵌 NUL 就直接 `vb6_TextCmpSpan`（快路，不分配）；有 NUL 才落临时缓冲、剔掉全部
+  `L'\0'` 再比，比完 `free`。
+- `StrComp(...,vbTextCompare)`、`Option Compare Text` 模块的 `=`/`<`/Select Case
+  都已经走 `vb6_TextCmp`，一处改动覆盖三面。
+
+**验证**
+
+- 夹具 `tests/b257_text_cmp_nul`（29 格，双架构）：T1..T15 + U1..U14，全部按真机读数钉针；
+  改前 29 格里只有 T4 一格错，改后 x64 / x86 逐行一致。
+- 门禁 **S35**：`vb6_TextCmp` 存在、空 vs 非空先判、内嵌 NUL 剔除法在、不许再退回
+  `CompareStringW(..., -1, ..., -1)`、b257 双架构。
+- 本机 S1..S35 全绿 + `check_owned_temp_keeps` 绿。
+- 改前的两档探针（P368/P369）与改后 C3 在 x64/x86 四个组合上逐行 SAME。
+- CI：head `54de405c` 首跑只红清单两格（+2 个新夹具），登记后 `f4c3c67c` → GA **46184244311 = 23/23**。
+
+**留着没动的**
+
+`Like` 与 NUL 的交互；`InStr` 的文本档（`compare=1`）是否也走同一套剔 NUL 口径；
+`Option Compare Text` 下的非 ASCII 折叠（`ß`/`İ` 这类）—— 都还没量，留在背账。
