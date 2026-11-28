@@ -542,9 +542,12 @@ static const char* const kOD_Randomize[]   = { "0.0" };
     //   Boolean             → vb6_StrBool (" True"/" False")，否则被当成 int16 打 " -1"
     //   其余整数档 (Integer/Long/Byte/SByte/UInteger/ULong) 一律留 vb6_Str(int32_t)。
     // 只动静态档确实判得出的那几形；判不准的 (Variant 槽/UDT 字段失配) 保持 int32 旧路。
+    // §11.223 (第二百四十一刀): `Error(n)` 实参就是 VB6 的 CLng 语义（银行家舍入 / 13 / 94），
+    // 所以出口直接收 **vb6_VARIANT**（与 vb6_CStr / vb6_CCur 同形），装箱交给既有那只主人；
+    // 不再在发码侧写一把棱转换 —— 先前用 `vb6_CLng(x)` 宏时，BSTR 在 C 里是 `wchar_t*`，
+    // _Generic 落到 default 把地址当号 ⇒ `Error("abc")` 报 6 而不是 13（实测过）。
     if (callee == "vb6_Str" && !node.positional.empty()) {
-        switch (inferExprType(*node.positional[0])) {
-            case Vb6Type::Single:   callee = "vb6_StrSng";  break;
+        switch (inferExprType(*node.positional[0])) {            case Vb6Type::Single:   callee = "vb6_StrSng";  break;
             case Vb6Type::Double:
             case Vb6Type::Currency: callee = "vb6_StrDbl";  break;
             case Vb6Type::Boolean:  callee = "vb6_StrBool"; break;

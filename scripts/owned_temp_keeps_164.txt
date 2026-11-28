@@ -325,6 +325,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_Dir BSTR
 [own] vb6_Environ BSTR
 [own] vb6_ErrDefaultDescription BSTR
+[own] vb6_ErrorFunc BSTR
 [own] vb6_FileBoolText BSTR
 [own] vb6_FileDateText BSTR
 [own] vb6_FileLongText BSTR

@@ -682,8 +682,40 @@ if (@([regex]::Matches($runnerText, 'b246_err_default_desc\\B246Res\.vbp')).Coun
     $bad += "S23 b246 is not run on both arches"
 }
 
+# ---- S24: `Error(n)` 函数面 (账 §11.223 第二百四十一刀) ----
+# 判据真机 .temp/k231p/P340..P347。四条：(a) 带参那一形不再被裸名折叠吃掉；
+# (b) RTL 出口存在且三条规则齐（0→NULL、负→兑底、>65535→6）；
+# (c) 发码站按静态档选 CLngV/CLngBSTR/CLng(double)（不许用 `vb6_CLng(x)` 宏 ——
+#     BSTR 是 wchar_t*，_Generic 会把地址当号，实测把 `Error("abc")` 的 13 变成 6）；
+# (d) 夹具 b247 两架构都在跑。
+$rtl223 = Get-CodeText (Join-Path $root "src\rtl\core\vb6rtl\vb6rtl.c")
+if ($rtl223 -notmatch 'BSTR vb6_ErrorFunc\(int32_t n\)') { $bad += "S24 RTL vb6_ErrorFunc is gone" }
+$efAt = $rtl223.IndexOf('BSTR vb6_ErrorFunc(int32_t n)')
+if ($efAt -ge 0) {
+    $efBody = $rtl223.Substring($efAt, [Math]::Min(900, $rtl223.Length - $efAt))
+    if ($efBody -notmatch 'if \(n == 0\) return NULL;') { $bad += "S24 Error(0) must be vbNullString" }
+    if ($efBody -notmatch 'if \(n > 65535\) \{ vb6_ErrRaise\(6, NULL, NULL\); return NULL; \}') {
+        $bad += "S24 Error(n) upper gate must raise 6 (Overflow), not 5"
+    }
+    if ($efBody -notmatch 'Application-defined or object-defined error') {
+        $bad += "S24 Error(<0) must answer the generic sentence"
+    }
+}
+$pre223 = Get-CodeText (Join-Path $root "src\backend\detail\expr\cgen_expr_call_builtin_pre.inc")
+if ($pre223 -notmatch 'errLower == "error"') { $bad += "S24 the one-argument Error(n) intercept is gone" }
+if ($pre223 -notmatch 'vb6_CLngBSTR\(') { $bad += "S24 string arrival must go through vb6_CLngBSTR" }
+if ($pre223 -notmatch 'vb6_CLngV\(') { $bad += "S24 Variant arrival must go through vb6_CLngV" }
+if ($pre223 -match 'vb6_ErrorFunc\(" \+ "vb6_CLng\(') { $bad += "S24 must not route BSTR through the vb6_CLng macro" }
+$disp223 = Get-CodeText (Join-Path $root "src\backend\detail\expr\cgen_expr_ident_dispatch.inc")
+if ($disp223 -notmatch 'asCallCallee_ \? "vb6_ErrorFunc\(\)" : "vb6_ErrDescription\(\)"') {
+    $bad += "S24 the bare-Error fold must split call vs bare contexts"
+}
+if (@([regex]::Matches($runnerText, 'b247_err_function\\B247Res\.vbp')).Count -ne 2) {
+    $bad += "S24 b247 is not run on both arches"
+}
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table, S24 Error(n) function face)"

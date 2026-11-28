@@ -144,7 +144,10 @@
     // the semantics list addObj does not register」—— GA 实测红过。
     // 所以它排在常量段之后：既保住拦截，也不混进那张对象表。
     if (lower == "error") {
-        lastExpr_ = "vb6_ErrDescription()";
+        // §11.223 (第二百四十一刀): 带参的 `Error(n)` 是 **函数**，不是现在的 Err.Description ——
+        // 以前这一支不区分，`Error(11)` 发成 `vb6_ErrDescription(11)`（参数被丢、读数永远是空串）。
+        // callee 上下文交函数名，让调用站去括号填参；裸名仍然只读当前那一格。
+        lastExpr_ = asCallCallee_ ? "vb6_ErrorFunc()" : "vb6_ErrDescription()";
         return;
     }
 

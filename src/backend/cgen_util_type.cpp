@@ -1933,6 +1933,7 @@ std::string CCodeGen::getRuntimeParamCType(const std::string& funcName, size_t p
         {"vb6_ErrSetHelpContext", {"int32_t"}},
         {"vb6_ErrNumber",       {}},
         {"vb6_ErrDescription",  {}},
+        {"vb6_ErrorFunc",      {"int32_t"}},   // §11.223: Error(n) 函数面
         {"vb6_ErrSource",       {}},
         {"vb6_ErrClear",        {}},
         // IsMissing

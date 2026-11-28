@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 // vb6rtl_array.h - SAFEARRAY（一维 / 多维）与错误状态栈
 // 由 vb6rtl.h 伞头 include；生成代码不要直接 include 本文件
 #include "vb6rtl_base.h"
@@ -483,6 +483,7 @@ void vb6_ErrRaiseNumber(int32_t errNum);
 void vb6_SetErrSourceSeed(const wchar_t* name);
 int vb6_ErrSourceIsInternal(BSTR src);
 BSTR vb6_ErrDefaultDescription(int32_t errNum);
+BSTR vb6_ErrorFunc(int32_t n);   // §11.223: `Error(n)` 函数面（与默认表同一位主人，但号门与负号规则不同）
 // §11.218 (第二百三十五刀): `Err.Source = v` / `Err.Description = v` 的写面（只动那一格，
 // `Err.Number` 不动；存一份真 BSTR）。
 void vb6_ErrSetSource(BSTR value);

@@ -309,6 +309,8 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_HexSlot",
         // §11.220 (第二百三十七刀): 第四阶（64 位载体）也是 vb6_BSTR_FromStr 的产物，
         // 与前三阶同一张“新造 BSTR”表。
+        // §11.223 (第二百四十一刀): `Error(n)` 每次都给一枚新造的 BSTR（0 那格给 NULL ⇒ 由槽/赋值站接）。
+        "vb6_ErrorFunc",
         "vb6_HexLng64",
         "vb6_OctLng64",
         // §11.221 (第二百三十八刀): 第五阶（指针宽）的两枚也是现造（转手给前两阶的出口）。

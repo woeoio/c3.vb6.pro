@@ -991,6 +991,26 @@ BSTR vb6_ErrDefaultDescription(int32_t errNum) {
     }
 }
 
+// §11.223 (第二百四十一刀): `Error(n)` 函数面 —— 与 `Err.Raise` 的默认描述同一位主人，
+// 但**三条规则不一样**，所以不能直接拿 vb6_ErrDefaultDescription 的入参档当号：
+// 真机 .temp/k231p/P340..P346 (VB6Mini):
+//   · `Error(0)` = **vbNullString**（StrPtr=0，P341 W1），不是空 BSTR；
+//   · 负数号一律兑底句 —— 注意**不是** `Err.Raise -1` 那枚 "Automation error"（P340 V4）；
+//   · 正数 1..65535 查表；**`Error(65536)` 及以上报 6 (Overflow)**，而 `Err.Raise 65536` 报 5 ——
+//     两个面各自一道门（P345 Z5/Z6/Z7、P341 W2）；
+//   · 参数先按 VB6 的 CLng 语义收（银行家舍入：11.6→12、11.4→11、0.5→0；
+//     "11"→11、"abc"/""→13；Null→94；Empty→0），见 P340 V5/V9、P343、P346 T4..T9。
+BSTR vb6_ErrorFunc(int32_t n) {
+    // 号的到达方式也是量过的：真机 `Error("abc")` 报 13、`Error(Null)` 报 94、`Error(Empty)` = 0，
+    // 而 `Error(11.6)` = 12 —— 这就是 VB6 的 `CLng` 那一套，所以直接问 vb6_CLngV，
+    // 不在这里自己写一遍字符串解析/判空。
+    // 号已由发码站按 VB6 的 CLng 语义收好（见 cgen_expr_call_builtin_pre.inc）。
+    if (n == 0) return NULL;
+    if (n < 0) return vb6_BSTR_FromStr(L"Application-defined or object-defined error");
+    if (n > 65535) { vb6_ErrRaise(6, NULL, NULL); return NULL; }
+    return vb6_ErrDefaultDescription(n);
+}
+
 void vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description) {
     ++vb6_err_serial;
     vb6_err.number = errNum;

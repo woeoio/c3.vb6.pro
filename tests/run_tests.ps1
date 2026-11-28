@@ -14016,6 +14016,23 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "D13=5/Invalid procedure call or argument/hf=hf1/hc=88/src=B246Res")
     Test-Vbp 'b246_err_default_desc' "$Tests\b246_err_default_desc\B246Res.vbp" $b246Needles
     Test-Vbp 'b246_err_default_desc_x86' "$Tests\b246_err_default_desc\B246Res.vbp" $b246Needles -Arch "x86"
+    # §11.223 第二百四十一刀: `Error(n)` 函数面（与 Err.Raise 的默认描述同表，但号门/负号不同）。
+    # 真机 twin .temp/k231p/P347（同一份夹具源码改 Print #f）逐格对照；两架构同值。
+    $b247Needles = @(
+    "E1=[Division by zero]",
+    "E2=[Application-defined or object-defined error]",
+    "E3=[]/len=0",
+    "E4=[Application-defined or object-defined error]",
+    "E5=[Type mismatch]",
+    "E6=num=6/[Overflow]/s=[]",
+    "E7=[Application-defined or object-defined error]/num=0",
+    "E8=num=13/[Type mismatch]",
+    "E9=num=94/[Invalid use of Null]",
+    "E10=[Application-defined or object-defined error]/[Division by zero]/num=0",
+    "E11=[Invalid procedure call or argument]/[Invalid procedure call or argument]",
+    "E12=[]/num=0/[Type mismatch]")
+    Test-Vbp 'b247_err_function' "$Tests\b247_err_function\B247Res.vbp" $b247Needles
+    Test-Vbp 'b247_err_function_x86' "$Tests\b247_err_function\B247Res.vbp" $b247Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

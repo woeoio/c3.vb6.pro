@@ -31,6 +31,33 @@
         }
     }
 
+    // §11.223 (第二百四十一刀): `Error(n)` —— 这一段自己把整个调用发完（与上面 If/IIf 同形）。
+    // 为什么不在 fixup 里改装 args：`Error` 在语义层没有符号，参数表空 ⇒ 走到 fixup 时
+    // args 已被清空，改不到那一格（实测：改写没生效）。
+    // 号按 VB6 的 CLng 语义收（真机 .temp/k231p/P340/P343/P345/P346）：
+    //   Variant → vb6_CLngV（Null 报 94、"abc" 报 13、Empty = 0）；
+    //   String  → vb6_CLngBSTR（"" 也报 13）；
+    //   数值档 → vb6_CLng((double)(x))（银行家舍入：11.6→12 / 0.5→0）。
+    // ⚠ 不能一把棱用 `vb6_CLng(x)` 宏：BSTR 在 C 里是 `wchar_t*`，_Generic 只看指针类型，
+    // 落到 default 把地址当号 ⇒ `Error("abc")` 报 6 而不是 13（实测过）。
+    if (node.callee && node.callee->kind == ASTNodeKind::IdentifierExpr
+        && node.positional.size() == 1) {
+        auto& identErr = static_cast<IdentifierExpr&>(*node.callee);
+        std::string errLower = identErr.name;
+        std::transform(errLower.begin(), errLower.end(), errLower.begin(), ::tolower);
+        if (errLower == "error") {
+            emitExpr(*node.positional[0]);
+            std::string errArg = std::move(lastExpr_);
+            switch (inferExprType(*node.positional[0])) {
+                case Vb6Type::Variant: errArg = "vb6_CLngV(" + errArg + ")"; break;
+                case Vb6Type::String:  errArg = "vb6_CLngBSTR(" + errArg + ")"; break;
+                default:               errArg = "vb6_CLng((double)(" + errArg + "))"; break;
+            }
+            lastExpr_ = "vb6_ErrorFunc(" + errArg + ")";
+            return;
+        }
+    }
+
     // P14.2.4: IIf特殊处理 - 调用类型化RTL函数(函数调用语义确保两个分支都求值,符合VB6规范)
     if (node.callee && node.callee->kind == ASTNodeKind::IdentifierExpr && node.positional.size() == 3) {
         auto& ident = static_cast<IdentifierExpr&>(*node.callee);
