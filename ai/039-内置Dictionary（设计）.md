@@ -15769,3 +15769,85 @@ Next
 1. 表里的 87 行取自 **en-US** VB6 资源；多语言 VB6 的文本差异未量、不追。
 2. 号 > 65535 的「改报 5」只做在五参 `vb6_ErrRaiseEx` 上 —— 三参 `vb6_ErrRaise` 是内部站点专用，未加校验（真机无从对照）。
 3. `Err.Raise` 的号门在**拒绝**这次 raise 时，`HelpFile`/`HelpContext` 保留旧值是量过的；但 `Err.Number`/`Description` 被换成 5 那套之后，`Err.Source` 走的是工程名播种 —— negative 号那一支的 `Source` 未单独量。
+
+
+### §11.223 第二百四十一刀：`Error(n)` 函数面 —— 同一张表，另一道门
+
+上一刀把 `Err.Description` 的默认表补到 87 行。但 VB6 里读描述有**两个入口**：`Err.Description` 和 `Error(n)`。C3 里后者是坏的 —— 裸名折叠把参数一起吞了：
+
+```
+VB6 源:  Debug.Print Error(11)
+C3 改前: vb6_ErrorDesc (11)      ← 其实是 vb6_ErrDescription(11)，参数被丢、永远空串
+实测读数: V1=[]                  ← 真机 V1=[Division by zero]
+```
+
+**真机把这一面量了五轮**（`.temp/k231p/P340` `P343` `P345` `P346`，另加夹具孪生 `P347`）：
+
+| 格 | 语句 | 真机 |
+| --- | --- | --- |
+| V1/V2 | `Error(11)` / `Error(5)` | `Division by zero` / `Invalid procedure call or argument` |
+| V3 | `Error(9999)` | 兜底句 |
+| V4 | `Error(-1)` | **兜底句**（不是 `Automation error`！） |
+| V5 | `Error(0)` | 空串，且 `StrPtr = 0`（vbNullString，不是空 BSTR） |
+| V6 | `Err.Raise 13` 之后 `Error` / `Error(0)` / `Error(13)` | `Type mismatch` / **空串** / `Type mismatch` |
+| V9/V10 | `Error(11)` 装进 Variant / `Error$(11)` | `VarType=8` / `len=16` |
+| Z1..Z4 | `Error(32767)` / `32768` / `40000` / `65535` | 全部兜底句，**不报错** |
+| Z5..Z7 | `Error(65536)` / `70000` / `131072` | **6 Overflow**（语句中止） |
+| Z8..Z10 | `Error(-32768)` / `-32769` / `-65536` | 兜底句，不报错（负数从不越界） |
+| T1..T3 | `Error(-65537)` / `-131072` / `-65535` | 兜底句 |
+| W3 | `Error(11.6)` / `11.4` / `12.5` | 兜底（→12） / `Division by zero`（→11） / 兜底（→12） —— 银行家舍入 |
+| T4/T7 | `Error("abc")` / `Error("")` | **13 Type mismatch** |
+| T5 | `Error(Null)` | **94 Invalid use of Null** |
+| T6 | `Error(Empty)` | 空、不报错（Num=0） |
+
+**三条与 `Err.Raise` 不同的规则（这就是不能用同一道门的原因）**
+
+1. `Err.Raise -1` 的默认描述是 `Automation error`，`Error(-1)` 却是兜底句。
+2. `Err.Raise 65536` → **5**（号不在 0..65535），`Error(65536)` → **6 Overflow**。
+3. `Error(0)` 是 vbNullString；`Err.Raise 0` 则直接改报 5。
+
+另一条容易踩的：**`Error(32768)`/`Error(40000)` 不报错**。别按 `Integer` 越界去判 —— 只有 ≥ 65536 才报 6。
+
+**改法**
+
+```c
+BSTR vb6_ErrorFunc(int32_t n) {          // RTL，表仍只问 vb6_ErrDefaultDescription
+    if (n == 0) return NULL;             // vbNullString
+    if (n < 0) return vb6_BSTR_FromStr(L"Application-defined or object-defined error");
+    if (n > 65535) { vb6_ErrRaise(6, NULL, NULL); return NULL; }
+    return vb6_ErrDefaultDescription(n);
+}
+```
+
+发码侧在 `cgen_expr_call_builtin_pre.inc` 里把**单参** `Error(...)` 整条发完（与 `If`/`IIf` 同形）：
+
+```cpp
+switch (inferExprType(*node.positional[0])) {
+    case Vb6Type::Variant: errArg = "vb6_CLngV(" + errArg + ")"; break;
+    case Vb6Type::String:  errArg = "vb6_CLngBSTR(" + errArg + ")"; break;
+    default:               errArg = "vb6_CLng((double)(" + errArg + "))"; break;
+}
+lastExpr_ = "vb6_ErrorFunc(" + errArg + ")";
+```
+
+裸名那一支同时分家：`asCallCallee_ ? "vb6_ErrorFunc()" : "vb6_ErrDescription()"` —— 带参才是函数，裸名仍是当前那一格。
+
+**两个坑（都实测过）**
+
+- **不能一把梭用 `vb6_CLng(x)` 宏**：`BSTR` 在 C 里就是 `wchar_t*`，`_Generic` 只看得见指针类型，落到 `default: vb6_CLng(double)` 把**地址**当号 ⇒ `Error("abc")` 报 6 而不是 13。所以三档各报各的名字。
+- **不能在 fixup 站改实参**：`Error` 在语义层没有符号 ⇒ `calleeParams` 为空 ⇒ 到 fixup 时 `args` 已被清空（实测改写不生效）；而声明成 `vb6_VARIANT` 形参又不会自动装箱（`vb6_CStr` 那一族是靠专用站做的）。所以整条调用在 `builtin_pre` 里发完，那里 `node.positional` 永远在。
+
+**验证**
+
+- 探针：`P340`（12 格）、`P343`（7 格）、`P345`（22 格）、`P346`（9 格）改后与真机逐格相同；唯一不同的是 `Error(0)` 赋给 String 变量之后 `StrPtr`（C3 非 0、VB6 = 0）—— **那是另一个面**（vbNullString 绑到 String 变量），记在背账里。
+- 夹具 `tests/b247_err_function`（12 格，工程名 `B247Res`），针脚取自**同一份源码的 VB6 孪生**（`P347`，只把 `Debug.Print` 换成 `Print #f`），x64/x86 各跑一次、读数一致。
+- `check_float_to_int_round.ps1` 新增 **S24**（现 S1..S24）：带参拦截存在、RTL 三条规则齐、三档转换名齐、**不许**出现 `vb6_ErrorFunc(vb6_CLng(` 这条（就是上面那个坑的形状）、裸名分家、b247 两架构都在跑。
+- `check_owned_temp_keeps`：`vb6_ErrorFunc` 每次给一枚新造 BSTR ⇒ 登记进 owned（150 枚），快照 `-Bless`。
+- 本机 16 条门禁全绿。
+- CI：head `3fc10a83` → 21/23（只剩 b247 两份输入未登记的 manifest K1）→ 按 CI 清单 `96dcefbe` 登记（**只多出 b247 那 2 行** —— 语料里没有 `Error(n)` 这一形，既有发码形状一行未动）→ head `2b1f845e` → GA **46114994012 = 23/23 success**（12 个 vbp 分片全绿）。
+
+**背账**
+
+1. `s = Error(0)` 之后 `StrPtr(s)`：VB6 = 0，C3 非 0 —— vbNullString 绑到 String 变量那一面还没统一。
+2. 负数号的描述在 `Error(n)` 与 `Err.Raise` 两处**故意不同**，别再拿一处去套另一处。
+3. `Error()`（空括号）真机是编译错，C3 未单独报错。
