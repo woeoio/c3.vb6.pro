@@ -654,7 +654,8 @@ void    vb6_SetAttr(BSTR pathname, int32_t attributes); // SetAttr: 设置文件
 void   vb6_SendKeys(BSTR keys, int32_t wait);    // SendKeys: 发送按键
 void   vb6_AppActivate(BSTR title, int32_t wait); // AppActivate: 激活窗口(标题或数字PID)
 void   vb6_AppActivateByPid(int32_t pid, int32_t wait); // AppActivate: 按进程ID激活窗口
-void   vb6_MidSet(BSTR* target, int32_t start, int32_t len, BSTR replacement); // Mid$ statement赋值
+int32_t vb6_MidSet(BSTR* target, int32_t start, int32_t len, int32_t hasLen, BSTR replacement); // Mid$ statement赋值（§11.230: 真机 P359 口径）
+void   vb6_MidSetV(vb6_VARIANT* target, int32_t start, int32_t len, int32_t hasLen, BSTR replacement); // §11.230: Variant 目标（Null⇒94）
 
 // P18-D: 兼容性填平 — 字符串/指针/格式化函数
 int32_t vb6_AscW(BSTR s);           // AscW: Unicode code point

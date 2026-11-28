@@ -373,20 +373,46 @@ vb6_VARIANT vb6_CDec(vb6_VARIANT v) {
     return result;
 }
 
-void vb6_MidSet(BSTR* target, int32_t start, int32_t len, BSTR replacement) {
-    /* P18-A: Mid$ statement assignment — Mid$(target, start, len) = replacement */
-    /* Replaces len characters of target starting at position start (1-based) */
-    if (!target || !*target || start < 1) return;
-    int32_t tLen = vb6_BSTR_Len(*target);
-    if (start > tLen) return;
+/* §11.230 (第二百四十八刀): Mid$ 语句的边角按真机 P359 收口。
+ * 真机读数（P359，Err 逐格记）：
+ *   M1  Mid("",1)=""      ⇒ 5，目标不变      | 零长串目标一律 5（M2/M3/M14 同）
+ *   M4  Mid("abc",2)=""   ⇒ 0，"abc"        | 缺省长度 + 空替换 = 不动作
+ *   M5  Mid("abc",2,0)="z"⇒ 0，"abc"        | **显式长度 0 = 不动作、不报错**
+ *   M6  Mid("abc",0)="z"  ⇒ 5              | start < 1
+ *   M7  Mid("abc",5)="z"  ⇒ 5              | start > Len(s)
+ *   M8  Mid("abc",4)=""   ⇒ 5              | start = Len+1 也是 5（与替换串长无关）
+ *   M11 Mid("abc",-1)="z" ⇒ 5
+ *   M12 Mid("abc",2,-1)="z"⇒ 5             | **负长度 = 5 且不动作**
+ *   M10 Mid("abc",2,5)="z"⇒ "azc"          | 长度向剩余字符夹紧（不改长度）
+ * 返回值：0 = 已处理（含无动作），非 0 = 报错号（已 vb6_RaiseError，Resume Next 下返回
+ * 时调用方不能再写回目标 —— 真机的目标保持原值）。
+ * hasLen 区分「省略长度」与「显式长度 0」：早期用 len=0 兼表两者，M5 因此 错。 */
+int32_t vb6_MidSet(BSTR* target, int32_t start, int32_t len, int32_t hasLen, BSTR replacement) {
+    if (!target) return 0;
+    int32_t tLen = (*target) ? vb6_BSTR_Len(*target) : 0;
+    /* 零长串目标：无论起点/长度/替换串如何都是 5 */
+    if (tLen == 0) {
+        vb6_RaiseError(5, vb6_BSTR_FromStr(L"Invalid procedure call or argument"));
+        return 5;
+    }
+    if (start < 1 || start > tLen) {
+        vb6_RaiseError(5, vb6_BSTR_FromStr(L"Invalid procedure call or argument"));
+        return 5;
+    }
+    if (hasLen && len < 0) {
+        vb6_RaiseError(5, vb6_BSTR_FromStr(L"Invalid procedure call or argument"));
+        return 5;
+    }
+    /* 显式长度 0：不动作，也不报错（真机 M5） */
+    if (hasLen && len == 0) return 0;
     int32_t rLen = replacement ? vb6_BSTR_Len(replacement) : 0;
-    /* If len <= 0, use replacement length (VB6 behavior when length omitted) */
-    if (len <= 0) len = rLen;
+    /* 省略长度：按替换串长（到末尾夹紧） */
+    if (!hasLen) len = rLen;
     /* Clamp to available characters */
     int32_t avail = tLen - start + 1;
     if (len > avail) len = avail;
     if (len > rLen) len = rLen;
-    if (len <= 0) return;
+    if (len <= 0) return 0;
     /* Build new string: prefix + replacement[0..len-1] + suffix */
     int32_t newLen = tLen;  /* Mid$ doesn't change length, only replaces in-place */
     BSTR result = SysAllocStringLen(NULL, newLen);
@@ -402,6 +428,26 @@ void vb6_MidSet(BSTR* target, int32_t start, int32_t len, BSTR replacement) {
     /* Replace target */
     SysFreeString(*target);
     *target = result;
+    return 0;
+}
+
+/* §11.230: Variant 目标那一档 —— 真机 M13 `Mid(Null,1)="z"` ⇒ **94**（目标仍是 Null）；
+ * M14 `v = ""` ⇒ 5，v 仍是 ""。字符串档在 M1..M12 已收口，这里只负责
+ * 1) Null 先报 94；2) 拿一份工作拷贝去改，成功了才写回（失败时目标原值不动）。 */
+void vb6_MidSetV(vb6_VARIANT* target, int32_t start, int32_t len, int32_t hasLen, BSTR replacement) {
+    if (!target) return;
+    if (target->vt == VT_NULL) {
+        vb6_RaiseError(94, vb6_BSTR_FromStr(L"Invalid use of Null"));
+        return;
+    }
+    BSTR work = vb6_VariantToString(*target);   /* vb6_CStr: 新 BSTR, 归本函数 */
+    if (!work) work = vb6_BSTR_FromStr(L"");
+    if (vb6_MidSet(&work, start, len, hasLen, replacement) != 0) {
+        vb6_BSTR_Free(work);
+        return;                                  /* 报错已发生: 目标保持原值 */
+    }
+    vb6_VariantClear(target);
+    *target = vb6_VariantString(work);            /* 直接接管 work */
 }
 
 // ============================================================

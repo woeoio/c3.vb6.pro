@@ -379,7 +379,21 @@ void CCodeGen::visit(MidStmt& node) {
     emitExpr(*node.target);
     suppressVirtDispatch_ = savedVirtLhs;
     std::string targetVar = std::move(lastExpr_);
-    c_.emitLine("vb6_MidSet(&" + targetVar + ", " + startVar + ", " + lenVar + ", " + valueVar + ");");
+    // §11.230 (第二百四十八刀): 真机 P359 —— hasLen 必须显式传（旧口径用 len=0 兼表
+    // 「省略」与「显式 0」，M5 `Mid(s,2,0)="z"` 因此被当成省略、错误地改了串）。
+    const char* hasLenLit = node.hasLength ? "1" : "0";
+    // Variant 目标（真机 M13: Null ⇒ 94；M14: "" ⇒ 5）走地址正确的 MidSetV，
+    // 否则 `&v` 会被当成 BSTR* 写坏 VARIANT（改前 M13/M14 根本不打印）。
+    const bool targetIsVariant230 =
+        (node.target->kind == ASTNodeKind::IdentifierExpr ||
+         node.target->kind == ASTNodeKind::MemberAccessExpr ||
+         node.target->kind == ASTNodeKind::WithMemberExpr) &&
+        inferExprType(*node.target) == Vb6Type::Variant;
+    if (targetIsVariant230) {
+        c_.emitLine("vb6_MidSetV(&" + targetVar + ", " + startVar + ", " + lenVar + ", " + hasLenLit + ", " + valueVar + ");");
+    } else {
+        c_.emitLine("vb6_MidSet(&" + targetVar + ", " + startVar + ", " + lenVar + ", " + hasLenLit + ", " + valueVar + ");");
+    }
 }
 
 

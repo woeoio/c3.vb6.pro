@@ -190,7 +190,7 @@
                     if (isVariantSlot(midValue, node.value.get())) {
                         midValue = "vb6_VariantToString(" + midValue + ")";
                     }
-                    c_.emitLine("vb6_MidSet(&" + midTarget + ", " + midStart + ", " + midLen + ", " + midValue + ");  /* Mid$ statement */");
+                    c_.emitLine("vb6_MidSet(&" + midTarget + ", " + midStart + ", " + midLen + ", " + (call.positional.size() >= 3 ? "1" : "0") + ", " + midValue + ");  /* Mid$ statement */");
                     return;
                 }
             }

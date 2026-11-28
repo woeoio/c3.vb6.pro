@@ -846,8 +846,31 @@ if ($bcsText230 -notmatch 'InStr\(s, "a=0"\)') {
     $bad += "S30 test_bstr_concat_scalar must pin a=0"
 }
 
+# ---- S31: Mid 语句的边角 (账 §11.230 第二百四十八刀) ----
+# 真机 P359: 零长串/越界起点/负长 均 5、显式长 0 不动作、Variant Null ⇒ 94。
+$misc231 = Get-CodeText (Join-Path $root "src\rtl\core\vb6rtl\vb6rtl_misc.c")
+if ($misc231 -notmatch 'int32_t vb6_MidSet\(BSTR\* target, int32_t start, int32_t len, int32_t hasLen') {
+    $bad += "S31 vb6_MidSet must take the hasLen flag (len=0 also means explicit zero)"
+}
+if ($misc231 -notmatch 'if \(hasLen && len == 0\) return 0;') {
+    $bad += "S31 explicit length 0 must be a no-op"
+}
+if ($misc231 -notmatch 'if \(hasLen && len < 0\)') {
+    $bad += "S31 negative length must raise 5"
+}
+if ($misc231 -notmatch 'target->vt == VT_NULL[\s\S]{0,200}vb6_RaiseError\(94') {
+    $bad += "S31 Mid on a Null Variant must raise 94"
+}
+$setlet231 = Get-CodeText (Join-Path $root "src\backend\stmt\cgen_setlet.cpp")
+if ($setlet231 -notmatch 'vb6_MidSetV\(&') {
+    $bad += "S31 a Variant Mid target must go through vb6_MidSetV"
+}
+if (@([regex]::Matches($runnerText, 'b253_mid_stmt_edges\\B253Res\.vbp')).Count -ne 2) {
+    $bad += "S31 b253 is not run on both arches"
+}
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table, S24 Error(n) function face, S25 vbNullString null-pointer fidelity, S26 the & operator against Null/Empty, S27 the + operator against Null/Empty, S28 the + operator between a string and a number, S29 Null in & over array elements and UDT/With members, S30 On Error GoTo 0 clears Err and keeps its resume point)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table, S24 Error(n) function face, S25 vbNullString null-pointer fidelity, S26 the & operator against Null/Empty, S27 the + operator against Null/Empty, S28 the + operator between a string and a number, S29 Null in & over array elements and UDT/With members, S30 On Error GoTo 0 clears Err and keeps its resume point, S31 the Mid statement edges)"
