@@ -16103,3 +16103,46 @@ vb6_CStrDbl(vb6_Val(<str>) + (double)(<num>))
 2. `+` 里 Empty 与非 String 侧（`Empty + #1/1/2000#`、`Empty + True`）、日期串参与数值加法（`"1/1/2000" + 1`）未量。
 3. 非数字串现在**中途报 13**（与真机一致），但「两个操作数的求值次序 / 报错后目标是否保持」没有单独量。
 4. §11.225/§11.226 的其余背账仍在：`On Error GoTo 0` 不清 Err、`Mid(s,1) = ""`（零长串）报 5、成员/数组元素的 Null 走旧口径、Declare 传 NULL。
+
+### §11.228 第二百四十六刀：`&` 里 Null 的数组元素 / UDT 成员 / With 成员
+
+§11.225 定下 `&` 的四条口径（一侧 Null 当空串、两侧都 Null ⇒ 结果 Null），但判据 `concatOperandCanBeNull` 只认「声明过的形」里的四种：标识符、类成员（`classVariantMembers_`）、声明返回 Variant 的调用、Concat 壳。**数组元素、UDT 成员、`With .V`** 这三形一律答「不可能 Null」，于是「两侧都 Null」永远凑不齐，掉回旧的 94 口径。
+
+**真机读数**（`.temp/k233p/P358`，8 格，`Print #f` 落文件）：
+
+| 格 | 语句（值） | 真机 |
+| --- | --- | --- |
+| F1 | `s = "x" & arr(0)`（`arr(0)=Null`） | `x`，num=0 |
+| F2 | `s = arr(0) & "y"` | `y`，num=0 |
+| F3 | `s = "x" & u.V`（`u.V=Null`） | `x`，num=0 |
+| F4 | `With u: s = "x" & .V` | `x`，num=0 |
+| F5 | `v = arr(0) & arr(1)`（两侧 Null） | **IsNull=True** |
+| F6 | `s = arr(0) & arr(1)` | **94 Invalid use of Null** |
+| F7 | `s = "x" & arr(0)`（`arr(0)="a"`） | `xa`，num=0 |
+| F8 | `s = "x" & u.V`（`u.V="b"`） | `xb`，num=0 |
+
+三条形与 §11.225 的口径完全同族：**一侧 Null 当空串**（F1–F4）、**两侧都 Null ⇒ Null**（F5）、**String 目标落 94**（F6）。C3 改前 F1–F4、F7/F8 已经对 —— 那几格走的是元素读的 AmpStr 通路，不需要判据表态；差的是 F5/F6：`isnull=False`、`num=0`，因为「两侧都 Null」只有判据两侧都答「可能 Null」才会发 `vb6_AmpVar`。
+
+**实现**（`concatOperandCanBeNull`，`cgen_expr_binary_util.cpp`）
+
+- `MemberAccessExpr`：`classVariantMembers_` 之外再加一条 —— `inferUdtFieldVb6Type(&e) == Variant`（UDT 成员声明成 Variant 才算）。
+- 新增 `WithMemberExpr` 分支：同一条类型表（`inferUdtFieldVb6Type` 只对 UDT 那一支给答案，类的 `With` 仍回 Unknown）。
+- `IndexOrCallExpr`：callee 是标识符且 `arrayElemTypes_[lower] == Variant` ⇒ 可能 Null；「声明返回 Variant 的函数/属性」那条原有规则保留。
+
+判据仍然**只认声明**，没有文本前缀、没有「推断不出来就当 Null」的回退；类型 oracle 与发码站共用这同一个函数，所以 F5 的 IsNull 与 F6 的 94 是同一个答案的两个面，不会一处认、一处不认。
+
+**验证**
+
+- 夹具 `tests/b251_amp_null_member`：8 格，与 `P358` 同一份源码（只把 `Print #f` 换成 `Debug.Print`）；x64/x86 与真机**逐字一致**。
+- `check_float_to_int_round.ps1` 新增 **S29**（现 S1..S29）：两处声明判据必须在位、`b251` 双架构必须挂上。
+- 本机 S1..S29 全绿。
+- CI：head `aeb2f61e` → **21/23**（红的只有 `Emit manifest (shape oracle)` 与 `manifest_coverage`，**没有一个 vbp 分片报行为错**）→ 按 CI 清单 `cbc0fb26` 登记（**9 行：7 改 2 增**）→ head `2fb6d2d9` → GA **46140838613 = 23/23 success**。
+- 刀号对齐文档（只改注释）后 head `511397a3` → GA **46141817008 = 23/23 success**，且清单**零变化** —— 注释不进发码，清单管的是产物，不是源码字节。
+
+清单只动 9 行这件事也是证据：全语料里 `&` 用到 Variant 数组元素 / UDT 成员的只有 `b190_memberarray`、`b204_variant_array_copy`、`test_let_variant_slot`、`ve_list` 四处，换道后它们的非 Null 格照旧（F7/F8 同形对照）。
+
+**背账**
+
+1. **`On Error GoTo 0` 与 Err 仍是悬案**：VB6Mini 探针 `P357` 答 A2=**0**（清）、A5=0；同一段代码用 Windows 自带 VBScript（`cscript`，`err0.vbs`）也是 A2=**0**、A5=0。但 MS 文档只把 Resume / Exit Sub 等列进清空点，VBA 常见写法（`On Error GoTo 0` 之后查 `Err.Number`）又依赖它**不**清；C3 现在不清，`tests/test_bstr_concat_scalar.bas` 也钉着 `a=5`。三份证据对不上，本机没有真 VB6 可判，本刀**不动代码**，记为待真 VB6 复量。
+2. 类的 `With`（`With obj: .P`，属性返回 Variant）没量也没接；对象属性 `o.V`（非 UDT、非 `classVariantMembers_` 声明）同样没接。
+3. `Mid(s,1) = ""`（零长串报 5）、`Declare` 传 NULL、String+数值的结果子类型、`Empty + 日期/布尔` 等 §11.226/§11.227 的背账原样保留。
