@@ -126,8 +126,27 @@ void CCodeGen::visit(BinaryExpr& node) {
     // 嵌套Concat时用ConcatFree释放中间临时BSTR，避免内存泄漏
     // M22: 非BSTR操作数自动包装为BSTR (int→vb6_CStr(vb6_CLng(x)), double→vb6_CStr(vb6_CDbl(x)))
     if (node.op == BinaryOp::Concat) {
-        left = wrapToBSTR(left, *node.left);
-        right = wrapToBSTR(right, *node.right);
+        // §11.225 (第二百四十三刀): VB6 的 `&` 是唯一让 Null 走过去的串运算。
+        // 真机 .temp/k233p/P350/P352/P353 的四条口径:
+        //   ① 一侧 Null ⇒ 当空串 ("x" & Null ⇒ "x", err=0; Len(v & "") ⇒ 0);
+        //      改前这一侧走 wrapToBSTR ⇒ vb6_CStrLong(vb6_VariantNull()) ⇒ 94;
+        //   ② Empty ⇒ 空串 ("x" & Empty ⇒ "x"; 改前打成 "x0");
+        //   ③ **两侧都 Null ⇒ Null** (v = v & w ⇒ IsNull=True; String 目标 ⇒ 94);
+        //   ④ 其余数字/布尔/日期照 CStr ("x" & 1.5 ⇒ "x1.5", "x" & True ⇒ "xTrue")。
+        // 选哪一条只看**静态能不能是 Null** (字面量 Null / 静态档 Variant)，不看文本前缀。
+        const bool lNull225 = concatOperandCanBeNull(*node.left);
+        const bool rNull225 = concatOperandCanBeNull(*node.right);
+        if (lNull225 && rNull225) {
+            // ③ 结果可以是 Null ⇒ 交回 Variant（94 由 String 目标自己报，运算符不 raise）。
+            std::string a225 = (left.compare(0, 11, "vb6_Variant") == 0)
+                                   ? left : "vb6_VariantFromValue(" + left + ")";
+            std::string b225 = (right.compare(0, 11, "vb6_Variant") == 0)
+                                   ? right : "vb6_VariantFromValue(" + right + ")";
+            lastExpr_ = "vb6_AmpVar(" + a225 + ", " + b225 + ")";
+            return;
+        }
+        left = concatOperandToBSTR(left, *node.left);
+        right = concatOperandToBSTR(right, *node.right);
         // 账 #464 §B164 回收刀: **右操作数**若是「整枚就是一个 mint 调用」, 提成具名临时量,
         // 语句末按档收回（拼接站这一族是漏面里最大的一支: 右操作数没人放）。
         // 为什么只动右操作数: ① 左操作数的**发码文本**被下面那条「含 vb6_BSTR_Concat 子串」的

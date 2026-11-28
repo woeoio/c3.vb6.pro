@@ -146,6 +146,12 @@ BSTR vb6_CStr(vb6_VARIANT x);
 // 与 vb6_CStr 分开的理由: & 运算与 Debug.Print 仍然按"宽松"走(各自另有口径,
 // 后者 VB6 打的是文本 "Null"), 不能一刀切。
 BSTR vb6_CStrStrict(vb6_VARIANT x);
+// §11.225 (第二百四十三刀): `&` 的两个出口。
+//   vb6_AmpStr: 一侧能是 Null 时，把这一侧折成 BSTR —— Null ⇒ NULL（当空串用）、
+//               Empty ⇒ 空串、其余照 vb6_CStr。
+//   vb6_AmpVar: **两侧**都能是 Null 时的运算符本体 —— 两边都 Null ⇒ Null，否则串。
+BSTR vb6_AmpStr(vb6_VARIANT v);
+vb6_VARIANT vb6_AmpVar(vb6_VARIANT a, vb6_VARIANT b);
 // C30-11 第七十三刀 (§B221): 「把一枚 Variant 右值收进 String 槽」—— Null 按 VB6 口径
 // 报 94 且**目标不变** (E6/E7/E8 读数: err=94、s 仍是赋前的值)。单开一枚而不是直接用
 // vb6_CStrStrict: 后者 raise 后交回空串, 赋值方会把空串写进目标 —— 与 VB6 不同。

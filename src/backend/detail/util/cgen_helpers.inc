@@ -594,6 +594,15 @@
     // M22: 将非BSTR表达式包装为BSTR (用于字符串连接运算)
     std::string wrapToBSTR(const std::string& expr, Expr& node);
 
+    // §11.225 (第二百四十三刀): `&` 的操作数「能不能是 Null」。
+    // 只认两位主人: LiteralKind::Null 字面量、静态档 Variant（排除 knownBstrVars_ ——
+    // 那是 inferExprType 对未知符号的回退，不是真的 Variant）。Empty 不是 Null：
+    // 它在 `&` 里恒当空串，永远不会让结果变 Null（真机 B6 `Empty & Empty` ⇒ ""）。
+    bool concatOperandCanBeNull(const Expr& e) const;
+    // §11.225: 能是 Null 的那一侧的折算文本 —— 走 vb6_AmpStr（Null⇒NULL、Empty⇒""），
+    // 不走过 wrapToBSTR：后者对 Null 是 94（String 形参口径），`&` 恰好相反。
+    std::string concatOperandToBSTR(const std::string& expr, Expr& node);
+
     // B11 第三批: Print # / Write # 的**单项文本**出口 (按真 VB6 实测字节)。
     // writeMode=false → " " + CStr + " " (Print #); true → Str 去前导 0/空格 (Write #)。
     // 返回的 C 表达式是 BSTR; 类型判不准时回退旧数值路径 (vb6_Str(int32_t))。

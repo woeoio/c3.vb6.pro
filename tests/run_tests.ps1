@@ -14053,6 +14053,30 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "N15=False")
     Test-Vbp 'b248_null_bstr_face' "$Tests\b248_null_bstr_face\B248Res.vbp" $b248Needles
     Test-Vbp 'b248_null_bstr_face_x86' "$Tests\b248_null_bstr_face\B248Res.vbp" $b248Needles -Arch "x86"
+    # §11.225 第二百四十三刀: `&` 与 Null/Empty 的口径（一侧 Null 当空串、Empty 当空串、
+    # 两侧都 Null ⇒ Null）。针脚取自同一份源码的 VB6 孪生 .temp/k233p/P354。
+    $b249Needles = @(
+    "D1=0/[x]",
+    "D2=0/[xy]",
+    "D3=0/[x]",
+    "D4=0/[]",
+    "D5=0/True",
+    "D6=0/False/8/[x]",
+    "D7=0/False",
+    "D8=94/[Invalid use of Null]",
+    "D9=94/[Invalid use of Null]",
+    "D10=0/[1]",
+    "D11=0/[x1.5]",
+    "D12=0/[xTrue]",
+    "D13=0/False/[3.5]",
+    "D14=0/False/[True]",
+    "D15=0/[x]",
+    "D16=0/[x]",
+    "D17=0/0",
+    "D18=0/[x]",
+    "D19=0/[ab]")
+    Test-Vbp 'b249_amp_null_face' "$Tests\b249_amp_null_face\B249Res.vbp" $b249Needles
+    Test-Vbp 'b249_amp_null_face_x86' "$Tests\b249_amp_null_face\B249Res.vbp" $b249Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

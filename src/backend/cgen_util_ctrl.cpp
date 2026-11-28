@@ -3116,6 +3116,15 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
             }
         }
     }
+    // §11.225 (第二百四十三刀): `&` 的**两侧都能是 Null** 那一壳发回来的是 Variant
+    // （`vb6_AmpVar`，静态档见 inferExprType），与变体槽同一条收口: String 目标收到
+    // Null 报 94、且目标一字不动（真机 .temp/k233p/P352 的 B1）。不接这一句时，
+    // 下面按“自有临时串”那条会把 Variant 裸交给 vb6_BSTR_AssignMove ⇒ cl C2440。
+    if (!valueIsVariant && rhs && rhs->kind == ASTNodeKind::BinaryExpr
+        && static_cast<BinaryExpr&>(*rhs).op == BinaryOp::Concat
+        && inferExprType(*rhs) == Vb6Type::Variant) {
+        valueIsVariant = true;
+    }
     if (valueIsVariant) {
         // C30-11 第七十三刀 (§B221): Variant 右值 → String 槽走**严格**出口。
         // 读数 (探针 E6/E7/E8): `s = Trim(Null)` / `s = Len(Null)` / `s = Null` 在真 VB6

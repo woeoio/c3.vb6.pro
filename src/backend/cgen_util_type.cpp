@@ -329,7 +329,15 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
         case ASTNodeKind::BinaryExpr: {
             auto& bin = static_cast<BinaryExpr&>(expr);
             // 字符串连接运算符 → String
-            if (bin.op == BinaryOp::Concat) return Vb6Type::String;
+            // §11.225 (第二百四十三刀): 但**两侧都能是 Null** 时结果可以是 Null
+            // （真机 .temp/k233p: v = Null: w = Null: y = v & w ⇒ IsNull(y)=True）。
+            // 这一格必须答 Variant，否则下游会把「可能是 Null 的串」当必真串用：
+            // String 目标该报 94，Variant 目标该拿到 Null。
+            if (bin.op == BinaryOp::Concat) {
+                if (concatOperandCanBeNull(*bin.left) && concatOperandCanBeNull(*bin.right))
+                    return Vb6Type::Variant;
+                return Vb6Type::String;
+            }
             // 比较运算符 → Boolean
             if (bin.op == BinaryOp::Eq || bin.op == BinaryOp::Neq ||
                 bin.op == BinaryOp::Lt || bin.op == BinaryOp::Gt ||

@@ -738,8 +738,39 @@ if (@([regex]::Matches($runnerText, 'b248_null_bstr_face\\B248Res\.vbp')).Count 
     $bad += "S25 b248 is not run on both arches"
 }
 
+# ---- S26: `&` 与 Null/Empty 的口径 (账 §11.225 第二百四十三刀) ----
+# 真机 .temp/k233p/P350/P352/P353: 一侧 Null ⊃ 当空串、Empty ⊃ 空串、两侧都 Null ⊃ Null。
+# 四条: (a) RTL 只开两个出口 vb6_AmpStr / vb6_AmpVar; (b) 拼接站的 Null 判据只看
+# 字面量 kind 与静态档 (不许回到文本前缀); (c) 结果类型只在 inferExprType 一处答; (d) 夹具两架构。
+$conv225 = Get-CodeText (Join-Path $root "src\rtl\core\vb6rtl\vb6rtl_conv.c")
+if (@([regex]::Matches($conv225, 'BSTR vb6_AmpStr\(vb6_VARIANT v\)')).Count -ne 1) {
+    $bad += "S26 vb6_AmpStr must have exactly one definition"
+}
+if (@([regex]::Matches($conv225, 'vb6_VARIANT vb6_AmpVar\(vb6_VARIANT a, vb6_VARIANT b\)')).Count -ne 1) {
+    $bad += "S26 vb6_AmpVar must have exactly one definition"
+}
+if ($conv225 -notmatch '(?s)vb6_AmpStr\(vb6_VARIANT v\).*?vb6_vtNull.*?vb6_vtEmpty') {
+    $bad += "S26 vb6_AmpStr must send Null to NULL and Empty to an empty string"
+}
+$b225 = Get-CodeText (Join-Path $root "src\backend\expr\cgen_expr_binary.cpp")
+if ($b225 -notmatch 'concatOperandCanBeNull\(\*node\.left\)' -or
+    $b225 -notmatch 'concatOperandToBSTR\(left, \*node\.left\)') {
+    $bad += "S26 the concat station must ask the two helpers (no text-prefix gate)"
+}
+$bool225 = Get-CodeText (Join-Path $root "src\backend\expr\cgen_expr_binary_util.cpp")
+if ($bool225 -notmatch 'lit\.literalKind == LiteralKind::Null') {
+    $bad += "S26 concatOperandCanBeNull must be anchored on the literal kind"
+}
+$ty225 = Get-CodeText (Join-Path $root "src\backend\cgen_util_type.cpp")
+if ($ty225 -notmatch '(?s)BinaryOp::Concat\).{0,80}concatOperandCanBeNull') {
+    $bad += "S26 the concat result type must be Variant only when both sides can be Null"
+}
+if (@([regex]::Matches($runnerText, 'b249_amp_null_face\\B249Res\.vbp')).Count -ne 2) {
+    $bad += "S26 b249 is not run on both arches"
+}
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table, S24 Error(n) function face, S25 vbNullString null-pointer fidelity)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table, S24 Error(n) function face, S25 vbNullString null-pointer fidelity, S26 the & operator against Null/Empty)"

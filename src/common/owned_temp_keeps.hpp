@@ -47,6 +47,10 @@ struct OwnedTempException {
 inline const OwnedTempException* ownedTempExceptions() {
     static const OwnedTempException kRows[] = {
         { "vb6_AbsV",            0, '1', "ret" },
+        // §11.225 (第二百四十三刀): `&` 两侧都能是 Null 时的那一枚 —— 它把实参 0 交给
+        // vb6_VariantString（那一枚已登记为 store，指针落进比调用活得久的壳）⇒
+        // 推导给 '1'/'store'，登记为例外 = 不提名。实参 1 是 handoff 给 vb6_AmpStr。
+        { "vb6_AmpVar",          0, '1', "store" },
         { "vb6_ArraySetVariant",  2, '1', "write" },
         // C30-11 第七十六刀 (§B224): Boolean 目标上的 Null —— 报 94 且目标不变
         // (真机 NullExtProbe A4)。派生侧给的是 keeps=1 'store' ⇒ 不提名。
@@ -246,7 +250,10 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_Console_ReadKey",
         "vb6_Console_ReadLine",
         "vb6_CStr",
-"vb6_CStrStrict",
+        // §11.225 (第二百四十三刀): `&` 的 Null 侧折算 —— 交出去的是 vb6_CStr 现造的串
+        // （Null 那格给 NULL，不是新造 ⇒ 由拼接站当空串接）。
+        "vb6_AmpStr",
+        "vb6_CStrStrict",
         "vb6_CStrBool",
         "vb6_CStrByte",
         "vb6_CStrDate",

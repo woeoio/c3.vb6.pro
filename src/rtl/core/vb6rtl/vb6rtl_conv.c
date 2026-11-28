@@ -564,6 +564,29 @@ BSTR vb6_CStrStrict(vb6_VARIANT x) {
     return vb6_CStr(x);
 }
 
+// §11.225 (第二百四十三刀): `&` 的操作数折算 —— VB6 的 `&` 是**唯一**允许 Null 走过去的
+// 串运算：Null 当空串用（不是 "Null" 文本，也不是 94）。真机 .temp/k233p/P350/P352/P353：
+//   v = Null:  "x" & v  ⇒ "x" (err=0)          v = Null:  "[" & v & "]" ⇒ "[]"
+//   v = Empty: "x" & v  ⇒ "x"                  v = Null:  Len(v & "") ⇒ 0
+// 交回 NULL（而不是空 BSTR）是本仓的口径：`vb6_BSTR_Concat` 把 NULL 当长度 0，
+// 而 §11.224 之后 NULL 与 "" 在 `StrPtr` 面上是两件事，串接站自己会造新串。
+BSTR vb6_AmpStr(vb6_VARIANT v) {
+    if (v.vt == (vb6_vartype)vb6_vtNull) return NULL;
+    if (v.vt == (vb6_vartype)vb6_vtEmpty) return vb6_BSTR_FromStr(L"");
+    return vb6_CStr(v);
+}
+
+// §11.225: **两侧**都能是 Null 时，结果可以是 Null。真机读数（.temp/k233p）：
+//   v = Null: w = Null:  x = v & w  ⇒ 94 "Invalid use of Null"（String 目标）
+//   v = Null: w = Null:  y = v & w  ⇒ IsNull(y) = True（Variant 目标，err=0）
+// 即：Null 传播只在**两边都 Null** 时发生，一侧 Null 一律当空串。运算符本身不报错，
+// 94 由下游（String 目标）自己报 —— 所以这里交回 Variant，不在这里 raise。
+vb6_VARIANT vb6_AmpVar(vb6_VARIANT a, vb6_VARIANT b) {
+    if (a.vt == (vb6_vartype)vb6_vtNull && b.vt == (vb6_vartype)vb6_vtNull)
+        return vb6_VariantNull();
+    return vb6_VariantString(vb6_BSTR_ConcatFree(vb6_AmpStr(a), vb6_AmpStr(b)));
+}
+
 // C30-11 第七十五刀 (§B223): 「String 右值 → Double 目标」赋值站。
 // 真 VB6 是隐式 String→Double: 数字串折成数 ("1.5" ⇒ 1.5), 其余含空串 ⇒ **13**
 // (Type mismatch), 且**目标不变** (与 94 那一族同一口径)。以前这一形把 BSTR 裸交给

@@ -16,6 +16,8 @@ namespace vb6c3 {
 static const char* kBstrReturningCalls[] = {
     "vb6_BSTR_",            // vb6_BSTR_FromStr / vb6_BSTR_Empty / vb6_BSTR_Concat ... 全族
     "vb6_CStr",             // vb6_CStr / vb6_CStrLong / vb6_CStrDbl / vb6_CStrBool ...
+    // §11.225: `&` 的 Null 侧折算（BSTR 返回），否则会被再套一层 CStr。
+    "vb6_AmpStr(",
     "vb6_ChrW(", "vb6_Chr(",
     "vb6_Mid(", "vb6_Left(", "vb6_Right(", "vb6_LTrim(", "vb6_RTrim(", "vb6_Trim(",
     "vb6_UCase(", "vb6_LCase(",
@@ -91,6 +93,45 @@ bool CCodeGen::isScalarImplicitStr159(Vb6Type t) {
         case Vb6Type::Currency:  return true;
         default:                 return false;
     }
+}
+
+bool CCodeGen::concatOperandCanBeNull(const Expr& e) const {
+    if (e.kind == ASTNodeKind::LiteralExpr) {
+        const auto& lit = static_cast<const LiteralExpr&>(e);
+        // 只有 Null 字面量能是 Null。Empty（以及数值/串/日期）永远不是 Null。
+        return lit.literalKind == LiteralKind::Null;
+    }
+    // inferExprType 的形参是历史签名 (Expr&)，常量性对推断结果无影响 —— 不改它。
+    if (inferExprType(const_cast<Expr&>(e)) != Vb6Type::Variant) return false;
+    // inferExprType 对**未知符号**也答 Variant（历史回退口径），而未知符号里大量是真
+    // BSTR 变量 —— 那族已被 wrapToBSTR 用 knownBstrVars_ 洗过一轮，这里同口径跟随，
+    // 否则 `s & t` 这种普通串拼接会整片改道（= 发码面翻面的风险远大于收益）。
+    if (e.kind == ASTNodeKind::IdentifierExpr) {
+        std::string lower = static_cast<const IdentifierExpr&>(e).name;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (knownBstrVars_.count(lower)) return false;
+    }
+    return true;
+}
+
+std::string CCodeGen::concatOperandToBSTR(const std::string& expr, Expr& node) {
+    // Empty 不是 Null，但它在 `&` 里恒当**空串**（真机 B6 `Empty & Empty` ⇒ ""，
+    // A2 `"x" & Empty` ⇒ "x"）。改前这一格落 wrapToBSTR 的数值臂 ⇒
+    // vb6_CStrLong(vb6_VariantEmpty()) ⇒ 打成 "x0"。
+    if (node.kind == ASTNodeKind::LiteralExpr
+        && static_cast<LiteralExpr&>(node).literalKind == LiteralKind::Empty) {
+        return "vb6_AmpStr(vb6_VariantEmpty())";
+    }
+    if (!concatOperandCanBeNull(node)) return wrapToBSTR(expr, node);
+    // 字面量 Null / 真 Variant 槽: 折成 vb6_AmpStr（Null⇒NULL、Empty⇒""、其余 CStr）。
+    // 已是 vb6_VARIANT 的表达式原样进；其余（未知符号回退的）用 VariantFromValue 包一层
+    // —— 与 wrapToBSTR 的 Variant 臂同一个包法（_Generic 按 C 实参类型分派）。
+    if (expr.compare(0, 12, "vb6_AmpStr(") == 0) return expr;
+    if (expr.compare(0, 11, "vb6_Variant") == 0 || expr.compare(0, 11, "vb6_AmpVar(") == 0
+        || isVariantSlotElemRead(expr)) {
+        return "vb6_AmpStr(" + expr + ")";
+    }
+    return "vb6_AmpStr(vb6_VariantFromValue(" + expr + "))";
 }
 
 std::string CCodeGen::wrapToBSTR(const std::string& expr, Expr& node) {
