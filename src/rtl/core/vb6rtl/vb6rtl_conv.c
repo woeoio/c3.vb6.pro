@@ -538,6 +538,10 @@ intptr_t vb6_CLngPtr(double x) {
 intptr_t vb6_CLngPtrBSTR(BSTR s) { return vb6_CLngPtr(vb6_NumVal(s)); }
 
 BSTR vb6_CStr(vb6_VARIANT x) {
+    // §11.224 (第二百四十二刀): 变体槽里的 vbNullString 要**原样交回 NULL** ——
+    // 真机 .temp/k232p/P348 的 N9: `v = vbNullString: StrPtr(CStr(v))` = 0，
+    // 而 N10 `v = ""` 是非 0。改前一律过 Format，NULL 被洗成空串，赋值再传到变量上就失真了。
+    if (x.vt == vb6_vtBSTR && !x.bstrVal) return NULL;
     return vb6_Format(x, NULL, 1, 1);
 }
 

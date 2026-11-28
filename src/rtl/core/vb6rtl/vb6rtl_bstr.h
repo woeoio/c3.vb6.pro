@@ -271,9 +271,14 @@ static inline void vb6_FixedStrAssignFree(char* buf, int32_t cap, BSTR value) {
 }
 
 // BSTR赋值 (释放旧值, 复制新值, 防止悬垂指针和双重释放)
+// §11.224 (第二百四十二刀): **NULL 要保真**. 真机 .temp/k232p/P348:
+//   `s = vbNullString` ⇒ StrPtr(s)=0 (N1/N3), 而 `s = ""` ⇒ 非 0 (N2);
+//   函数返回 vbNullString (N6/N8)、String 形参透传 (N7)、`CStr(v)` 的变体槽 (N9)
+//   都得把 0 带过去; 反方向 `Left("abc",0)` / `Space(0)` / `Trim("")` 给的是**真空串** (N12..N16)。
+// 改前这一句把 NULL 洗成 vb6_BSTR_Empty() ⇒ 所有 NULL 源头在第一次赋值就丢干净。
 static inline void vb6_BSTR_Assign(BSTR* target, BSTR source) {
     if (target) {
-        BSTR copy = source ? vb6_BSTR_FromBSTR(source) : vb6_BSTR_Empty();
+        BSTR copy = source ? vb6_BSTR_FromBSTR(source) : NULL;
         vb6_BSTR_Free(*target);
         *target = copy;
     }

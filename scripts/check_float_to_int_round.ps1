@@ -714,8 +714,32 @@ if (@([regex]::Matches($runnerText, 'b247_err_function\\B247Res\.vbp')).Count -n
     $bad += "S24 b247 is not run on both arches"
 }
 
+# ---- S25: vbNullString 的空指针保真 (账 §11.224 第二百四十二刀) ----
+# 真机 .temp/k232p/P348/P349：NULL 只从 vbNullString 那一族流过去（赋值/返回/形参/变体槽/Error(0)），
+# 而 Left/Space/Trim 算出的空串是真 BSTR。三条：(a) vb6_BSTR_Assign 不再把 NULL 洗成 Empty；
+# (b) vb6_CStr 对 VT_BSTR + NULL 提前交回 NULL；(c) 夹具 b248 两架构都在跑。
+$bstr224 = Get-CodeText (Join-Path $root "src\rtl\core\vb6rtl\vb6rtl_bstr.h")
+$assignAt = $bstr224.IndexOf('static inline void vb6_BSTR_Assign(BSTR* target, BSTR source)')
+if ($assignAt -lt 0) { $bad += "S25 vb6_BSTR_Assign is gone" }
+else {
+    $assignBody = $bstr224.Substring($assignAt, [Math]::Min(600, $bstr224.Length - $assignAt))
+    if ($assignBody -match 'source \? vb6_BSTR_FromBSTR\(source\) : vb6_BSTR_Empty\(\)') {
+        $bad += "S25 vb6_BSTR_Assign still washes NULL into an empty BSTR"
+    }
+    if ($assignBody -notmatch 'source \? vb6_BSTR_FromBSTR\(source\) : NULL') {
+        $bad += "S25 vb6_BSTR_Assign must keep NULL"
+    }
+}
+$conv224 = Get-CodeText (Join-Path $root "src\rtl\core\vb6rtl\vb6rtl_conv.c")
+if ($conv224 -notmatch 'if \(x\.vt == vb6_vtBSTR && !x\.bstrVal\) return NULL;') {
+    $bad += "S25 vb6_CStr must hand back NULL for a vbNullString variant slot"
+}
+if (@([regex]::Matches($runnerText, 'b248_null_bstr_face\\B248Res\.vbp')).Count -ne 2) {
+    $bad += "S25 b248 is not run on both arches"
+}
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table, S24 Error(n) function face)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table, S24 Error(n) function face, S25 vbNullString null-pointer fidelity)"

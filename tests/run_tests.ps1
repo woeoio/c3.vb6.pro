@@ -14033,6 +14033,26 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "E12=[]/num=0/[Type mismatch]")
     Test-Vbp 'b247_err_function' "$Tests\b247_err_function\B247Res.vbp" $b247Needles
     Test-Vbp 'b247_err_function_x86' "$Tests\b247_err_function\B247Res.vbp" $b247Needles -Arch "x86"
+    # §11.224 第二百四十二刀: vbNullString 的空指针语义沿赋值/返回/形参/变体槽保真。
+    # 针脚取自同一份源码的 VB6 孪生 .temp/k232p/P349（只把 Debug.Print 换成 Print #f）。
+    $b248Needles = @(
+    "N1=True/0/0",
+    "N2=False",
+    "N3=True/0",
+    "N4=[x]/False",
+    "N5=True/1",
+    "N6=True/False",
+    "N7=True/False",
+    "N8=True",
+    "N9=8/True",
+    "N10=8/False",
+    "N11=True",
+    "N12=False/0",
+    "N13=False",
+    "N14=False",
+    "N15=False")
+    Test-Vbp 'b248_null_bstr_face' "$Tests\b248_null_bstr_face\B248Res.vbp" $b248Needles
+    Test-Vbp 'b248_null_bstr_face_x86' "$Tests\b248_null_bstr_face\B248Res.vbp" $b248Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
