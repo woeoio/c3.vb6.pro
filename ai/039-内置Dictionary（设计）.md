@@ -15916,3 +15916,88 @@ lastExpr_ = "vb6_ErrorFunc(" + errArg + ")";
 1. 夹具里原有一格 `Mid(s, 1) = ""`（s 为零长串）在真机上直接报 5、把程序停掉 —— 说明 **Mid 语句遇零长串是错误**，这一支 C3 未单独量，先从句里摘掉，记在这里。
 2. `&` 运算符对 NULL 的传播（N4）走的是 `vb6_BSTR_Concat`，本刀没动它 —— 真机 N4 是 `t="x"`，C3 也早就是；但 `Null`（varianted）参与 `&` 的传播属另一族，未量。
 3. 传 `NULL` 给 Declare 的 `ByVal String` / `ByRef String` 在 VB6 里的具体形（传 0 还是传空串指针）未单独量。
+
+### §11.225 第二百四十三刀：`&` 与 Null / Empty 的口径
+
+§11.224 的背账第 2 条留着这一格：`Null`（装进变体槽的那个 Null）参与 `&` 的传播没量。量完发现 C3 在这一族上**两个方向都错**：一侧 Null 该当空串，C3 报 94；`Empty` 该当空串，C3 打成 `"0"`；而两侧都 Null 该把 Null 传下去，C3 反倒当空串吞了。
+
+**真机量了 21 格**（`.temp/k233p/P350`、`P352`、`P353`，另加夹具孪生 `P354`）：
+
+| 格 | 语句 | 真机 |
+| --- | --- | --- |
+| A1 | `s = "x" & Null` | `err=0`、`s="x"` |
+| A2 | `s = "x" & Empty` | `err=0`、`s="x"`（改前 C3 是 `"x0"`） |
+| A3 | `s = "x" & Null & "y"` | `"xy"` |
+| A4 | `v = "x" & Null` | `IsNull=False`、`VarType=8`、`"x"` |
+| A5 | `v = Null & Null` | `IsNull=True` |
+| A6 | `v = Null & ""` | `IsNull=False`、`""` |
+| A7 | `v = Empty & "x"` | `IsNull=False`、`"x"` |
+| A8 | `v = 1 & Null` | `IsNull=False`、`"1"` |
+| A10 | `Print "[" & ("a" & Null) & "]"` | `[a]` |
+| A12 | `v = "1" + Null` | **`IsNull=True`** —— `+` 与 `&` 不同族，见背账 |
+| B1 | `s = Null & Null` | `err=94`、`s` 保持原值 |
+| B2 | `s = Null & ""` | `err=0`、`s=""` |
+| B3 | `s = 1 & Null` | `err=0`、`s="1"` |
+| B5 | `s = "" & Null` | `err=0`、`s=""` |
+| B6 | `s = Empty & Empty` | `err=0`、`s=""` |
+| B7/B8/B9 | `v = 1 & Null` / `3.5 & Null` / `True & Null` | `IsNull=False`、`"1"` / `"3.5"` / `"True"` |
+| B10/B11 | `"x" & 1.5` / `"x" & True` | `"x1.5"` / `"xTrue"` |
+| C3/C4 | `s = v & w`（都 Null）/ `s = v & "x"` | `94` / `"x"` |
+| C8 | `Len(v & "")`（v 为 Null） | `0` |
+| D19 | `"a" & (v & w) & "b"`（都 Null） | `"ab"` |
+| D20/D21 | `v = (v & w & w)` / `(v & w & "x")` | `IsNull=True` / `False`、`"x"` |
+
+四条口径：
+
+1. **一侧 Null ⇒ 当空串**（`err=0`）。改前这一侧走 `wrapToBSTR` 的变体臂 ⇒ `vb6_CStrLong(vb6_VariantNull())` ⇒ 94。
+2. **Empty ⇒ 空串**。改前落数值臂 ⇒ `vb6_CStrLong(vb6_VariantEmpty())` ⇒ 打成 `"x0"`。
+3. **两侧都 Null ⇒ 结果 Null**：Variant 目标拿到 `IsNull=True`，String 目标由赋值站报 94 且目标一字不动。**运算符本身不 raise** —— 94 是下游 String 目标的事。
+4. 其余（数字/布尔/日期）照 `CStr`。
+
+**RTL 两个出口**（`vb6rtl_conv.c`，声明进 `vb6rtl_builtin.h`）
+
+```c
+BSTR vb6_AmpStr(vb6_VARIANT v) {
+    if (v.vt == (vb6_vartype)vb6_vtNull) return NULL;
+    if (v.vt == (vb6_vartype)vb6_vtEmpty) return vb6_BSTR_FromStr(L"");
+    return vb6_CStr(v);
+}
+vb6_VARIANT vb6_AmpVar(vb6_VARIANT a, vb6_VARIANT b) {
+    if (a.vt == (vb6_vartype)vb6_vtNull && b.vt == (vb6_vartype)vb6_vtNull)
+        return vb6_VariantNull();
+    return vb6_VariantString(vb6_BSTR_ConcatFree(vb6_AmpStr(a), vb6_AmpStr(b)));
+}
+```
+
+Null 交回 `NULL` 而不是空 BSTR：`vb6_BSTR_Concat` 把 NULL 当长度 0，而 §11.224 之后 NULL 与 `""` 在 `StrPtr` 面上是两件事，串接站自己会造新串。
+
+**cgen 侧**
+
+- 判据两枚，都在 `cgen_expr_binary_util.cpp`：`concatOperandCanBeNull`（能否是 Null）、`concatOperandToBSTR`（能是 Null 那一侧的折算文本）。拼接站（`cgen_expr_binary.cpp`）只有两句话：两侧都能 Null ⇒ 发 `vb6_AmpVar`；否则两侧各走 `concatOperandToBSTR`。
+- `concatOperandCanBeNull` 只认**真声明过**的形：Null 字面量；声明成 Variant 的变量（先排除 `knownBstrVars_`）与成员（`classVariantMembers_`）；声明返回 Variant 的 Function / Property Get；以及**拼接壳递归**（`Concat` 的「能否 Null」= 两侧都能）。`Empty` 与数值/串/日期一律不算。
+- 结果类型只在 `inferExprType`（`cgen_util_type.cpp`）**一处**答：`Concat` 平时答 String，两侧都能 Null 时答 Variant。下游（赋值站、形参、`Print #`）都从这一处取，不再各自判。
+- String 赋值站（`cgen_util_ctrl.cpp` 的 `emitBstrSlotStore`）把「`Concat` 且 `inferExprType==Variant`」那一壳当变体槽收口：走 §B221 的严格出口（94、目标不变）。不接这一句，下面按「自有临时串」会把 Variant 裸交给 `vb6_BSTR_AssignMove` ⇒ cl **C2440**。
+- 记账：`vb6_AmpVar(` 进 `variantPrefixes`（69 条）；`vb6_AmpStr` 进 `ownedTempOwnedReturnExits`；`vb6_AmpVar` 登记为 `{ 0, '1', "store" }` 例外（实参 0 的指针落进比调用活得久的壳）。
+
+**三轮返工（教训比结论值钱）**
+
+第一版把「`inferExprType` 答 Variant」当成了「能是 Null」。可 `inferExprType` 对**未知符号**（含控件属性 getter）一律回退 Variant —— 于是 `SSTab.TabCaption` / `TabToolTipText` 被套进 `vb6_AmpStr(vb6_VariantFromValue(...))`，GUI 的 `ctrlsstab` 丢 4/39 检查点、值成了空串，`ctrlimagelist` / `frmevents` 输出也跟着错。COM 一路更直接：`m.SubMatches(k)` 是 `vb6_ComCall(...)` 交回的 `void*`，套 `VariantFromValue` 等于把指针当值 ⇒ `regexp_ext` 的 e04 打空。修法：判据收窄到**声明过的形**，推断回退不参与；COM 那几形在折算前先折 `vb6_VariantFromComResult`（与 `wrapToBSTR` 同口径）。
+
+第二版栽在拼接链：`nc = (nv & nv & nv)` 的左边是一个 Concat 壳，窄化后答「不可能 Null」⇒ 内层 Null 壳被当串折成文本 `"Null"`，`test_joinfilter` 的 JF-nullcat3/4/4g 三格从 True 翻成 False。修法：`concatOperandCanBeNull` 补递归，与 `inferExprType` 对 Concat 的回答同源。
+
+**验证**
+
+- 探针 `P350` / `P352` / `P353` / `P354` 改后与真机逐格相同（21 格）。
+- 夹具 `tests/b249_amp_null_face`（21 格，工程名 `B249Res`），针脚取自**同一份源码的 VB6 孪生** `P354`，x64/x86 各跑一次、读数一致。
+- 回归抽查：`b248`（vbNullString）、`b221`、`b236`、`b241`；`test_joinfilter` 全针；`regexp_ext` 45 行逐字一致；`ctrlsstab` 发码回到 `vb6_SSTab_GetTabCaption(...)` 直交。
+- `check_float_to_int_round.ps1` 新增 **S26**（现 S1..S26）：两个 RTL 出口各**恰好一处**定义、`vb6_AmpStr` 的 Null→NULL / Empty→空串顺序、拼接站必须问这两枚助手（不许回到文本前缀）、判据锚在 `LiteralKind::Null`、拼接链递归、结果类型只在 `inferExprType` 一处答、b249 两架构都在跑。
+- 本机 16 条门禁全绿。
+- CI：head `f943e6a6` → 21/23（`Emit manifest (shape oracle)` 与 `[STATIC] manifest_coverage` 两条红，都是形状变了没登记）→ 按 CI 清单 `934cae13` **整份 bless**（改 32 行、新增 2 行）→ head `451bcfdf` → GA **46129337053 = 23/23 success**（12 个 vbp 分片全绿）。
+
+**背账**
+
+1. `+` 遇 Null 是另一族：真机 `v = "1" + Null` ⇒ `IsNull=True`（Null 传播），C3 在 `1 + Null` 这一形报 **C2440**，本刀没动（`1 & Null` 那格已好）。
+2. `On Error GoTo 0` 在 C3 里**不清 Err**，真机会清 —— 夹具 b249 里显式 `Err.Clear` 绕开，这一格待修。
+3. `Mid(s, 1) = ""`（`s` 为零长串）真机报 **5**、程序停；C3 该支未量。
+4. `Null` 参与 `&` 的**成员/数组元素/`With` 成员**那几形仍走旧的 94 口径（`concatOperandCanBeNull` 只认声明过的形 + 标识符/成员/调用/Concat 壳）。
+5. 传 `NULL` 给 Declare 的 `ByVal String` / `ByRef String` 的形（传 0 还是空串指针）未量。
