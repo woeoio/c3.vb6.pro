@@ -311,6 +311,9 @@ inline const char* const* ownedTempOwnedReturnExits() {
         // 与前三阶同一张“新造 BSTR”表。
         "vb6_HexLng64",
         "vb6_OctLng64",
+        // §11.221 (第二百三十八刀): 第五阶（指针宽）的两枚也是现造（转手给前两阶的出口）。
+        "vb6_HexLngPtr",
+        "vb6_OctLngPtr",
         "vb6_InputB",
         "vb6_InputBox",
         "vb6_InputString",

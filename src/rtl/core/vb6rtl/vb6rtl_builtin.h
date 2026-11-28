@@ -601,6 +601,14 @@ BSTR vb6_OctByte(int32_t n);
 // 与前三阶同一条递推：位数 = 载体的存储宽度（Byte 2 / Integer 4 / Long 8 / LongLong 16）。
 BSTR vb6_HexLng64(int64_t n);
 BSTR vb6_OctLng64(int64_t n);
+// §11.221 (第二百三十八刀): 阶梯的**第五阶** —— 指针宽载体 (LongPtr)。
+// 判断源也是 twinBASIC（VB6 没有 LongPtr），且两边各自出读数 (.temp/k229p/tbptr, 0.15.1047):
+//   win64 (LenB=8): Hex(LongPtr(-1)) = "FFFFFFFFFFFFFFFF" (16) / Oct 22 位
+//   win32 (LenB=4): Hex(LongPtr(-1)) = "FFFFFFFF" (8) / Oct 11 位
+// 仍同一条递推：位数 = 载体的存储宽度，而 LongPtr 的宽度就是 intptr_t 的宽度 ——
+// 所以这一阶不新开格式，只按指针宽把前两阶接起来（宽度主人仍只有一处）。
+BSTR vb6_HexLngPtr(intptr_t n);
+BSTR vb6_OctLngPtr(intptr_t n);
 // 整只变体槽那一形（发码里 `Hex(v)` 在**字符串上下文**落成
 // `vb6_Hex(vb6_VariantToLong(v))`，宽度信息在槽的 vt 上）：这两枚只读一次槽。
 BSTR vb6_HexW(int32_t n, int32_t vartype);

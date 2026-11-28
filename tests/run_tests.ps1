@@ -13971,6 +13971,32 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "L16=FFFFFFFFFFFFFFFF/1777777777777777777777")
     Test-Vbp 'b244_hex_oct_longlong' "$Tests\b244_hex_oct_longlong\B244Res.vbp" $b244Needles
     Test-Vbp 'b244_hex_oct_longlong_x86' "$Tests\b244_hex_oct_longlong\B244Res.vbp" $b244Needles -Arch "x86"
+    # §11.221 第二百三十八刀: Hex/Oct 的第五阶 —— 指针宽载体 (LongPtr)。
+    # 判据 twinBASIC 两边各量一遍 (.temp/k229p/tbptr, 0.15.1047):
+    #   win64 (LenB=8): 16 位 / Oct 22 位; win32 (LenB=4): 8 位 / Oct 11 位。
+    # 位数 = 载体宽度 ⇒ 这两套针按架构分开；P2/P3/P5/P6/P8/P9 两架构同值。
+    $b245x64 = @(
+    "P1=FFFFFFFFFFFFFFFF/1777777777777777777777/lenb=8",
+    "P2=10/20",
+    "P3=12345678/2215053170",
+    "P4=FFFFFFFFFFFFFFFF/1777777777777777777777",
+    "P5=FFFFFFFFFFFFFFFF/len=16",
+    "P6=12345678/2215053170",
+    "P7=FFFFFFFFFFFFFFFF/1777777777777777777777",
+    "P8=FFFFFFFF/37777777777",
+    "P9=FFFF/177777")
+    $b245x86 = @(
+    "P1=FFFFFFFF/37777777777/lenb=4",
+    "P2=10/20",
+    "P3=12345678/2215053170",
+    "P4=FFFFFFFF/37777777777",
+    "P5=FFFFFFFFFFFFFFFF/len=16",
+    "P6=12345678/2215053170",
+    "P7=FFFFFFFF/37777777777",
+    "P8=FFFFFFFF/37777777777",
+    "P9=FFFF/177777")
+    Test-Vbp 'b245_hex_oct_longptr' "$Tests\b245_hex_oct_longptr\B245Res.vbp" $b245x64
+    Test-Vbp 'b245_hex_oct_longptr_x86' "$Tests\b245_hex_oct_longptr\B245Res.vbp" $b245x86 -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

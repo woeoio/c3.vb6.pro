@@ -631,8 +631,32 @@ if ($at220 -notmatch 'callee \+= "Lng64";') {
 $b244Cells = @([regex]::Matches($runnerText, 'b244_hex_oct_longlong\\B244Res\.vbp')).Count
 if ($b244Cells -ne 2) { $bad += ("S21 b244 run cells = " + $b244Cells + " (want 2 = x64 + x86)") }
 
+# ---- S22: Hex/Oct 的指针宽阶 (账 §11.221 第二百三十八刀) ----
+# VB6 没有 LongPtr，判据仍由 twinBASIC 台出，两边各量一遍 (.temp/k229p/tbptr, 0.15.1047):
+#   win64 (LenB=8): Hex(LongPtr(-1)) = 16 位 / Oct 22 位；win32 (LenB=4): 8 位 / 11 位。
+# 判据四条：(a) RTL 的两枚按 sizeof(intptr_t) 接前两阶（不新开格式、不另写宽度表）；
+#           (b) 发码站按静态档把 LongPtr 换成 LngPtr；(c) 夹具 b245 两套针按架构分开；
+#           (d) 不许把 LongPtr 搪塞到 Lng64 / 32 位出口任意一侧（那会把另一架构弄错）。
+$rtl221 = Get-CodeText (Join-Path $root "src\rtl\core\vb6rtl\vb6rtl_conv.c")
+if ($rtl221 -notmatch 'BSTR vb6_HexLngPtr\(intptr_t n\)') { $bad += "S22 RTL vb6_HexLngPtr is gone" }
+if ($rtl221 -notmatch 'BSTR vb6_OctLngPtr\(intptr_t n\)') { $bad += "S22 RTL vb6_OctLngPtr is gone" }
+if (@([regex]::Matches($rtl221, 'if \(sizeof\(intptr_t\) == 8\) return vb6_(Hex|Oct)Lng64')).Count -ne 2) {
+    $bad += "S22 the pointer-width rung no longer delegates to the 64-bit exits by sizeof(intptr_t)"
+}
+if (@([regex]::Matches($rtl221, 'return vb6_(Hex|Oct)W\(\(int32_t\)n, vb6_vtLong\);')).Count -lt 2) {
+    $bad += "S22 the 32-bit half of the pointer-width rung is gone"
+}
+$at221 = Get-CodeText (Join-Path $root "src\backend\detail\expr\cgen_expr_call_builtin_argtype.inc")
+if ($at221 -notmatch 't209 == Vb6Type::LongPtr') {
+    $bad += "S22 the argtype station no longer routes LongPtr to the pointer-width rung"
+}
+if ($at221 -notmatch 'callee \+= "LngPtr";') { $bad += "S22 the LngPtr callee suffix is gone" }
+if (@([regex]::Matches($runnerText, 'b245_hex_oct_longptr\\B245Res\.vbp')).Count -ne 2) {
+    $bad += "S22 b245 is not run on both arches (the two rungs differ per arch)"
+}
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung)"

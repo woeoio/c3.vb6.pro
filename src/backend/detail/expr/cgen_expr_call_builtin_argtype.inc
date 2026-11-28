@@ -202,6 +202,14 @@
                 else if (t209 == Vb6Type::LongLong || t209 == Vb6Type::ULongLong) {
                     callee += "Lng64";
                 }
+                // §11.221 (第二百三十八刀): 第五阶 —— 指针宽载体（LongPtr）。
+                // 读数 twinBASIC (.temp/k229p/tbptr): win64 `Hex(LongPtr(-1))` = 16 位、
+                // win32 同句 = 8 位（LenB 8/4）。宽度就是 intptr_t 的宽度，所以这里不按架构分叉，
+                // 只把名字换成 `vb6_HexLngPtr` —— 那一枚自己按 sizeof(intptr_t) 接前两阶。
+                // 改前 x64 上 `Hex(p)` 落进 vb6_Hex(int32_t)：指针 8 字节、打出来 8 位（P1 = FFFFFFFF）。
+                else if (t209 == Vb6Type::LongPtr) {
+                    callee += "LngPtr";
+                }
             }
         }
         // §11.213 (第二百三十刀): 这一族在**非变体消费面**上都要严格。

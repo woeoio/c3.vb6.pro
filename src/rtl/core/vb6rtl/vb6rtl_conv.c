@@ -1314,6 +1314,22 @@ BSTR vb6_OctLng64(int64_t n) {
     return vb6_BSTR_FromStr(buf);
 }
 
+// §11.221 (第二百三十八刀): 指针宽那一阶 —— 宽度就是 intptr_t 的宽度，所以这里不新开格式、
+// 也不另写一张宽度表：直接把前两阶按指针宽接起来（十六进制 16/8 位、八进制 22/11 位）。
+// twinBASIC 两边读数 (.temp/k229p/tbptr, 0.15.1047):
+//   win64 P1 `Hex(LongPtr(-1))` = "FFFFFFFFFFFFFFFF" / win32 同句 = "FFFFFFFF"；
+//   正值两架构同形（P2 16 → "10"、P3 305419896 → "12345678"），所以夹具得按架构分两套针。
+// 用 sizeof 而不是 #ifdef：两条分支都能编过，分支判断在编译期就常量化，
+// 而且“宽度 = 载体宽度”这条判据留在 RTL 一处，发码侧不必要知道目标架构。
+BSTR vb6_HexLngPtr(intptr_t n) {
+    if (sizeof(intptr_t) == 8) return vb6_HexLng64((int64_t)n);
+    return vb6_HexW((int32_t)n, vb6_vtLong);
+}
+BSTR vb6_OctLngPtr(intptr_t n) {
+    if (sizeof(intptr_t) == 8) return vb6_OctLng64((int64_t)n);
+    return vb6_OctW((int32_t)n, vb6_vtLong);
+}
+
 // §11.212 (第二百二十九刀): 整枚数组进 Hex/Oct 的实参位 —— 真机报 13 (Type mismatch),
 // 且目标不动。读数 .temp/k225p/P320/P321 (VB6Mini 真机):
 //   A1 `s = "keep": s = Hex(a)`  ⇒ [keep]/13（a() As Long, 已 ReDim）

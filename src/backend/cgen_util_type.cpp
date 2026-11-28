@@ -1889,6 +1889,9 @@ std::string CCodeGen::getRuntimeParamCType(const std::string& funcName, size_t p
         // §11.220 (第二百三十七刀): 64 位载体那一阶（发码侧按静态档选名字）。
         {"vb6_HexLng64",        {"int64_t"}},
         {"vb6_OctLng64",        {"int64_t"}},
+        // §11.221 (第二百三十八刀): 指针宽那一阶（LongPtr）。
+        {"vb6_HexLngPtr",       {"intptr_t"}},
+        {"vb6_OctLngPtr",       {"intptr_t"}},
         {"vb6_Oct",             {"int32_t"}},
         // 类型转换
         {"vb6_CStr",            {"vb6_VARIANT"}},
