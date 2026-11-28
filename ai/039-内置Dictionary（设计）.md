@@ -15573,3 +15573,65 @@ head `3ebf0df6` → 19/23，红在四处，全是「新写面没顺着既有形�
 1. 五参 `Err.Raise` 的**显式 0**（`Err.Raise 5,"s","d","hf",0`）与「省掉」今天同口径（都保留旧值）—— 真机未量，暂按缺省处理。
 2. `Err.Description` 默认表里未量过的号仍是空串。
 3. `Hex/Oct` 的 `LongLong` 16 位宽那一档。
+
+### §11.220 第二百三十七刀：`Hex/Oct` 的第四阶 —— 64 位载体
+
+**判据源的更换（用户 2026-11-28 定）**：VB6 没有 `LongLong` 类型，这一阶在真机上**根本没有读数**。先量了 VB6 一侧能到哪儿 —— `.temp/k228p/p332.txt`（VB6Mini，工程名 `P332`）：
+
+| 格 | 语句 | VB6 真机 |
+| --- | --- | --- |
+| C1 | `Hex(-1)` / `Oct(-1)` | `FFFF` / `177777`（字面量是 Integer ⇒ 4 位档） |
+| C2 | `Hex(CCur(-1))` / `Oct(CCur(-1))` | `FFFFFFFF` / `37777777777` |
+| C5 | `Hex(CCur(922337203685477.5807))` | **Error 6**（整句没打出来） |
+| C9/C10 | `Hex(CByte(0))` / `Hex(0.0001)` 的 Currency 档 | `0` / `0` |
+
+即：**VB6 的 Hex/Oct 永远收窄到 Long**（8 位封顶，越界报 6），64 位那一阶在 VB6 里不存在 —— §11.210 的三阶阶梯（Byte 2 / Integer 4 / Long 8 位）就到头了。于是这一阶的读数由 twinBASIC 台出（`.temp/k228p/tbhex`，twinBASIC 0.15.1047 / `tblaunch` contract 9）：
+
+| 格 | 语句 | twinBASIC |
+| --- | --- | --- |
+| L1 | `q = -1` 的 `Hex(q)` / `Oct(q)` | `FFFFFFFFFFFFFFFF` / `1777777777777777777777` |
+| L2 | `q = 0` | `0` / `0`（`len=1`） |
+| L3 | `q = 16` | `10` / `20` |
+| L4 | `q = 2^31` | `80000000` / `20000000000`（8 / 11 位） |
+| L5 | `q = 2^32` | `100000000` / `40000000000`（9 / 11 位） |
+| L6 | `q = -(2^32)` | `FFFFFFFF00000000` / `1777777777740000000000` |
+| L9 | `Hex(CLng(-1))` | `FFFFFFFF`（Long 档不变） |
+| L10 | `Hex(CInt(-1))` | `FFFF`（Integer 档不变） |
+| L11 | `v = CLngLng(-1)` 的 `Hex(v)`（`VarType=20`） | `FFFFFFFFFFFFFFFF` |
+| L12 | `v = CLngLng(2^32)` | `100000000` |
+| L13/L14 | `Hex(CLngLng(-1))` / `Hex(CLngLng(305419896))` | 16 位 / `12345678` |
+
+一句话：**第四阶就是同一张阶梯的下一级 —— 位数 = 载体的存储宽度**（2 / 4 / 8 / 16 位十六进制；八进制 3 / 6 / 11 / 22）。正值仍不补零，负值掩到该宽度的二补码；变体槽那一面按槽的 `vt` 走，与实参文本无关。
+
+**改前（C3 探针 `.temp/k228p/P333`，x64）**
+
+```
+L1=FFFFFFFF/37777777777/len=8      ← 少了 8 位
+L5=0/0/len=1                        ← 2^32 整个没了
+L6=0/0/len=1                        ← 同上
+L11=FFFFFFFF/37777777777            ← 变体槽装 I8 也是 8 位
+L12=0/0
+L13=FFFFFFFF/37777777777
+```
+
+病灶：`vb6_Hex(int32_t)` 的形参是 32 位，`int64_t` 实参进 C 的隐式转换就是**低 32 位截断**（既不是 VB6 的「越界报 6」，也不是 64 位宽度）。`vb6_HexSlot` 同理 —— 它对 `VT_I8` 走 `vb6_VariantToLong`（§Task #44 的口径就是 C 截断）。
+
+**改了三处，宽度仍只有一位主人**
+
+1. **RTL 两枚 64 位出口**（`vb6rtl_conv.c`）：`vb6_HexLng64` / `vb6_OctLng64`，`swprintf(buf, 24, L"%llX"/L"%llo", (unsigned long long)n)`。24 字符缓冲 = 十六进制满档 16 位 + NUL、八进制满档 22 位 + NUL。
+2. **槽那两面**（`vb6_HexSlot` / `vb6_OctSlot`）：`vt == VT_I8` → `vb6_HexLng64(v.llVal)`、`VT_UI8` → `vb6_HexLng64((int64_t)v.ullVal)`。⚠ 这两条必须排在 `vb6_HexW(vb6_VariantToLong(v), vt)` 兜底**之前** —— 那一行就是截断发生的地方。
+3. **发码站**（`cgen_expr_call_builtin_argtype.inc` 的 `(2) 静态档`）：`t209 == LongLong || ULongLong` ⇒ `callee += "Lng64"`。仍按 `inferExprType` 的静态档选名字，不猜文本（§11.208 的老账）。
+
+**验证**
+
+- 探针 `.temp/k228p/P333` 改后 x64 / x86 逐行与 twinBASIC 的 L1..L14 相同。
+- 夹具 `tests/b244_hex_oct_longlong`（14 格，工程名 `B244Res`），x64 + x86 同值；L15/L16 是 `ULongLong` 那一档（`2^32` → `100000000`、`2^64-1` → 16 个 F）。
+- `check_float_to_int_round.ps1` 新增 **S21**（现 S1..S21）：(a) RTL 两枚 64 位出口各定义一次且用 64 位格式；(b) 槽那两面的 `VT_I8` 分支在 `VariantToLong` 兜底之前、且没丢 `VT_UI8`；(c) 发码站按静态档选 `Lng64`；(d) b244 两套在跑。
+- 本机 18 条门禁全绿（含 `check_owned_temp_keeps` —— 两枚新出口进「新造 BSTR」表，快照 `-Bless`）。
+- CI：head `59628085` → 21/23（只剩 `Emit manifest` + `compile #1` 的 `manifest_coverage` K1 —— 新夹具两份输入未登记，属于必经的那一格）；按 CI 清单 `9eb9ca0e` 登记（**只多出 b244 那 2 行**，既有 980 行的哈希一行未动 —— 也就是说语料里没有 LongLong 载体的 Hex/Oct，本刀只动了新阶）→ head `996fbc70` → GA **46105355905 = 23/23 success**。
+
+**背账**
+
+1. `LongPtr` 那一档还没量：x64 上 `intptr_t` 是 64 位、x86 上是 32 位，按本刀的递推应当是「跟着载体宽度走」，但发码站今天只认 `LongLong` / `ULongLong` 两档，`Hex(某 LongPtr)` 仍走 32 位出口。
+2. `ULongLong` 在 twinBASIC 里认不出（`TB5079 Unrecognized datatype symbol 'ULongLong'`），所以 L15/L16 没有台面读数，是按「同一条位数规则 + 按位同值」定的 —— 真机口径待补。
+3. `Err.Description` 默认表里未量过的号仍是空串。
