@@ -14074,7 +14074,9 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "D16=0/[x]",
     "D17=0/0",
     "D18=0/[x]",
-    "D19=0/[ab]")
+    "D19=0/[ab]",
+    "D20=0/True",
+    "D21=0/False/[x]")
     Test-Vbp 'b249_amp_null_face' "$Tests\b249_amp_null_face\B249Res.vbp" $b249Needles
     Test-Vbp 'b249_amp_null_face_x86' "$Tests\b249_amp_null_face\B249Res.vbp" $b249Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。

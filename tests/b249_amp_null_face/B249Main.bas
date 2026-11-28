@@ -65,4 +65,12 @@ Public Sub Main()
     v = Null
     w = Null
     Debug.Print "D19=" & CStr(Err.Number) & "/[" & ("a" & (v & w) & "b") & "]"
+    ' 拼接链一步步传下去：三步全 Null ⇒ Null；夹一个串 ⇒ 串
+    v = Null
+    w = Null
+    v = (v & w & w)
+    Debug.Print "D20=" & CStr(Err.Number) & "/" & CStr(IsNull(v))
+    v = Null
+    v = (v & w & "x")
+    Debug.Print "D21=" & CStr(Err.Number) & "/" & CStr(IsNull(v)) & "/[" & CStr(v) & "]"
 End Sub

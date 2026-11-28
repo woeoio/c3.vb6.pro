@@ -136,6 +136,14 @@ bool CCodeGen::concatOperandCanBeNull(const Expr& e) const {
         }
         return false;
     }
+    // 拼接链的那一壳: `(v & w) & x` —— 结果能不能是 Null 只在**两侧都能**时成立，
+    // 与 inferExprType 对 Concat 的那条回答同源（真机 .temp/k233p: (nv & nv & nv) 仍是 Null；
+    // 不接这一句时 tests/test_joinfilter 的 JF-nullcat3/4/4g 三格从 True 翻成 False）。
+    if (e.kind == ASTNodeKind::BinaryExpr) {
+        const auto& bin = static_cast<const BinaryExpr&>(e);
+        if (bin.op != BinaryOp::Concat) return false;
+        return concatOperandCanBeNull(*bin.left) && concatOperandCanBeNull(*bin.right);
+    }
     return false;
 }
 

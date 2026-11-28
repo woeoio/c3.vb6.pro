@@ -761,6 +761,9 @@ $bool225 = Get-CodeText (Join-Path $root "src\backend\expr\cgen_expr_binary_util
 if ($bool225 -notmatch 'lit\.literalKind == LiteralKind::Null') {
     $bad += "S26 concatOperandCanBeNull must be anchored on the literal kind"
 }
+if ($bool225 -notmatch '(?s)BinaryOp::Concat\).{0,120}concatOperandCanBeNull') {
+    $bad += "S26 a nested concat chain must keep its Null (tests/test_joinfilter JF-nullcat3/4/4g)"
+}
 $ty225 = Get-CodeText (Join-Path $root "src\backend\cgen_util_type.cpp")
 if ($ty225 -notmatch '(?s)BinaryOp::Concat\).{0,80}concatOperandCanBeNull') {
     $bad += "S26 the concat result type must be Variant only when both sides can be Null"
