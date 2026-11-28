@@ -351,6 +351,15 @@ void CCodeGen::visit(AssignmentStmt& node) {
     // 改前这里把读取侧的折算当左值: `vb6_App_EXEName() = vb6_BSTR_FromStr(L"...")` ⇒ C2106,
     // 整棵工程编不过。读写各一处出口: 写落 vb6_SetAppTitle (RTL 自持一份副本, 借入不交出),
     // 读走 vb6_App_Title。局部同名变量优先 (VB6 里局部遮蔽内建名), 与读取侧同一判据。
+    // §11.218 (第二百三十五刀): 「右值按 BSTR 交给 setter」只有一位主人 —— `App.Title` 与
+    // `Err.Source` / `Err.Description` 三处写面共用这一枚。两处各抄一遍的话，
+    // `check_app_title_authority` 的 R7 会把它数成两处出口（实测：那次 CI 红在 R7 = 2）。
+    // 数值/串的折算仍只走 wrapToBSTR（既有口径）。
+    auto emitBSTRValue = [&]() -> std::string {
+        emitExpr(*node.value);
+        return wrapToBSTR(std::move(lastExpr_), *node.value);
+    };
+
     if (node.target && node.target->kind == ASTNodeKind::MemberAccessExpr) {
         auto& maAt = static_cast<MemberAccessExpr&>(*node.target);
         if (maAt.object && maAt.object->kind == ASTNodeKind::IdentifierExpr) {
@@ -358,8 +367,7 @@ void CCodeGen::visit(AssignmentStmt& node) {
                 static_cast<IdentifierExpr&>(*maAt.object).name);
             const std::string memAt = Symbol::toLower(maAt.memberName);
             if (objAt == "app" && memAt == "title" && !knownLocalVars_.count(objAt)) {
-                emitExpr(*node.value);
-                std::string rhsAt = wrapToBSTR(std::move(lastExpr_), *node.value);
+                std::string rhsAt = emitBSTRValue();
                 c_.emitLine("vb6_SetAppTitle(" + rhsAt + ");");
                 memObjLetScalar_ = savedLetScalar;
                 return;
@@ -372,8 +380,7 @@ void CCodeGen::visit(AssignmentStmt& node) {
             if ((objAt == "err" || objAt == "lasterror") &&
                 (memAt == "source" || memAt == "description") &&
                 !knownLocalVars_.count(objAt)) {
-                emitExpr(*node.value);
-                std::string rhsErr = wrapToBSTR(std::move(lastExpr_), *node.value);
+                std::string rhsErr = emitBSTRValue();
                 c_.emitLine(std::string("vb6_ErrSet") +
                             (memAt == "source" ? "Source" : "Description") +
                             "(" + rhsErr + ");");
