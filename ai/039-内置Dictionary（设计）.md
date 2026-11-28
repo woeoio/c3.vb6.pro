@@ -16247,3 +16247,43 @@ vb6_CStrDbl(vb6_Val(<str>) + (double)(<num>))
 3. 替换串本身是 Null（`Mid(s,1)=NullVar`）未量。
 4. 显式长度 >0 但替换串为空（`Mid("abc",2,2)=""`）未量；现口径是先按替换串长夹紧 ⇒ 不动作。
 5. §11.226/§11.227 余项原样保留：String+数值结果子类型、`Empty + 日期/布尔`、`Declare` 传 NULL。
+
+### §11.231 第二百四十九刀：Mid 语句余下的边角（定长串 / Empty / Null 替换串 / 长度不一致 / `Mid$`）
+
+§11.230 的背账列了五种没量的边角。本刀先逐格复量，再补两处真实的差。
+
+**真机读数**（`.temp/k233p/P360`，9 格，`Print #f` 落文件）
+
+| 格 | 语句（`s`/`fx`/`v` 的值） | 真机 |
+| --- | --- | --- |
+| F2 | `Dim fx As String * 5`：`fx="abcde"`，`Mid(fx,2)="z"` | 0，`azcde`，`Len(fx)=5` |
+| F3 | `fx="abcde"`：`Mid(fx,1)=""` | 0，`abcde`（空替换 + 缺省长度 = 不动作） |
+| F4 | `fx="abc"`（补齐成 `abc  `）：`Mid(fx,4)="z"` | 0，`abcz `（定长串按 5 字符算） |
+| F5 | `v=Empty`：`Mid(v,1)="z"` | **5**，之后 `v` 变成 `""`（vt=8、IsEmpty=False） |
+| F6 | `nv=Null`：`Mid("abc",1)=nv` | **94**，`abc` 不变 |
+| F7 | `Mid("abc",2,2)=""` | 0，`abc`（显式长度 + 空替换 = 不动作） |
+| F8 | `Mid("abc",3)="xy"` | 0，`abx`（缺省长度按替换串算，向剩余 1 字符夹紧） |
+| F9 | `Mid("abc",2,1)="xyz"` | 0，`axc`（替换串被截到 1 字符） |
+| F10 | `Mid$(s,2)="z"` | 0，`azc`（与 `Mid` 同） |
+
+改前 C3 只差两格：**F6** 把 Null 静默当空串（`vb6_VariantToString` 对 Null 给 `""`，真机是 94），**F5** 报 5 之后槽里仍是 Empty（真机已物化成 `""` 再报错）。
+
+**实现**
+
+- 发码两站（`visit(MidStmt)` 与 AssignmentStmt 回退）：Mid 替换串若是 Variant 槽，改走 `vb6_CStrStrict`（Null ⇒ 94，与 String 目标的严格站同一主人）。
+- `vb6_MidSetV`：Variant **Empty** 在调 `vb6_MidSet` **之前**物化成 `""`。这一条是踩出来的 —— `vb6_MidSet` 报 5 时对 Resume Next 是 **longjmp**，报错后再写目标的代码根本跑不到（第一版把物化放在失败分支，实测 F5 仍 `IsEmpty=True`）。
+- 定长串、长度不一致、`Mid$` 三档改前就是对的，本刀只补读数，代码未动。
+
+**验证**
+
+- 真机孪生 `P360`：9 格 x64/x86 **逐字一致**（改前 F5/F6 差）。
+- 夹具 `tests/b254_mid_stmt_edges2`（9 格，双架构）；`b253` 14 格、`b251`/`b252` 无回归。
+- 门禁新增 **S32**（现 S1..S32）：Empty 必在 `MidSet` 之前物化、替换串必走严格站、b254 双架构；`check_owned_temp_keeps.ps1` 仍绿（本次未动形参面）。
+- CI：head `aad892b7` → 只有 `Emit manifest` 与 `manifest_coverage` 两处红（b254 两份新输入），**没有一个 vbp 分片报行为错** → 按清单 `00717e14` 登记（2 行）→ head `04ca2dd6` → GA **46154752575 = 23/23 success**。
+
+**背账**
+
+1. 定长串被赋超长/超短值的溢出行为（`fx = "abcdefgh"`）未量；本刀只量了 Mid 落在补齐位上的那一格。
+2. `Mid` 语句目标为**控件属性**（`Mid(Text1.Text, 1) = "x"`）、对象成员那几档未量。
+3. `MidB` 字节版（ANSI 语义）按 MEMORY 应走 TwinBASIC 判据，本刀未碰。
+4. §11.226/§11.227 余项原样保留：String+数值结果子类型、`Empty + 日期/布尔`、`Declare` 传 NULL。
