@@ -16363,3 +16363,76 @@ vb6_CStrDbl(vb6_Val(<str>) + (double)(<num>))
 真机 P363 C2 的 `a(1) = ""`：VB6 是 **False**，C3 是 **True**。这不是定长串收口的问题，是
 `vb6_StrCmp` 走 `wcscmp` —— 遇内嵌 NUL 就截断，而 VB6 的比较按「短的一侧补空格、比到较长者的长度」
 走，NUL ≠ 空格。同一族还有 `"a" = "a "` 这类补空格比较，一并留到字符串比较那一刀。
+
+### §11.233 第二百五十一刀：字符串二元比较 —— 按真实长度逐字符比，NUL 不是串尾
+
+§11.232 在量定长串数组时撞到一格对不上的：未赋值元素是 5 个 NUL，真机 `a(1) = ""` 是 **False**，
+C3 是 **True**。那一格量的不是定长串的收口，而是字符串比较本身。本刀把它量清楚。
+
+**真机读数**（四份探针，`Print #f` 落文件）
+
+| 探针 | 格数 | 覆盖面 |
+| --- | --- | --- |
+| `.temp/k233p/P364b` | 17 | `=` `<` `>` 的字面量对照、`StrComp`、`Mid$(..,0)`、空串 / 空格串 / NUL |
+| `.temp/k233p/P366` | 4 | 变量形式（两侧都是变量、一侧是 `"a" & Chr$(0)`） |
+| `.temp/k233p/P365` | 4 | Select Case 的字面量选择器（含 `Case "ab" To "abd"`） |
+| `.temp/k233p/P367` | 2 | Select Case 的变量选择器（NUL 结尾 / 空格结尾） |
+
+| 格 | 表达式 | 真机 | 改前 C3 |
+| --- | --- | --- | --- |
+| C1 | `"a" = "a "` | **False** | False |
+| C2 | `"a " = "a"` | False | False |
+| C3 | `"a" = "a" & Chr$(0)` | **False** | **True** |
+| C4 | `"a" & Chr$(0) = "a"` | **False** | **True** |
+| C5 | `"" = Chr$(0)` | **False** | **True** |
+| C6 | `Len(Chr$(0))` | 1 | 1 |
+| C7 | `"a" < "a "` | True | True |
+| C8 | `"a" & Chr$(0) < "a"` | **False** | False（碰巧对：截断后两侧相等） |
+| C9 | `"abc" > "ab"` | True | True |
+| C11 | `StrComp("a", "a ", 0)` | **-1** | -1（碰巧对：wcscmp 也让 NUL < 空格） |
+| C13 | `"a" & Chr$(0) & Chr$(0) = ""` | **False** | **True** |
+| C16 | `"   " = ""` | False | False |
+| C17 | `Chr$(0) = " "` | False | False |
+| D1 | `Select Case "a "` / `Case "a"` | MISS | MISS |
+| D3 | `Select Case ""` / `Case Chr$(0)` | **MISS** | **HIT** |
+| D5 | 变量 `"a" & Chr$(0)` 进 Select Case | **MISS** | **HIT** |
+| D6 | 变量 `"a "` 进 Select Case | MISS | MISS |
+
+**规则**（由 C1/C3/C7/C8/C11 反推，两条）
+
+1. **不补空格**：`"a" = "a "` 是 False —— 长度参与比较（旧顶注里「VB6 按较短的一侧补空格」那条
+   在二元比较上不成立）。
+2. **NUL 是普通字符**，不是串尾：`"a" = "a" & Chr$(0)` False、`"" = Chr$(0)` False。
+   共同前缀相同时**长者大**（C7 的 `<` 为 True、C8 的 `<` 为 False 是同一件事的两面）。
+
+**根因**
+
+`vb6_StrCmp` 走 `wcscmp`：遇到内嵌 NUL 就当串尾，于是「5 个 NUL」与「空串」相等（§11.232 的
+那一格）、`"a" & Chr$(0)` 与 `"a"` 相等。`Select Case` 那一站（`cgen_select.cpp`）自己拼
+`vb6_StrCmp(...)`，同一个口径，同一个错。
+
+**改动**
+
+- `src/rtl/core/vb6rtl/vb6rtl.c`：新增 `vb6_StrCmpL(BSTR, BSTR)` —— 长度取 BSTR 头，
+  按 min(la, lb) **逐字符**比（不能 `memcmp`：小端下高位字节先比，U+0100 vs U+00FF 会答反），
+  前缀相同则长者大。
+- `src/backend/expr/cgen_expr_binary.cpp`：二元比较在 `Option Compare Binary` 下改发
+  `vb6_StrCmpL`（Text 档仍发 `vb6_StrCmpT`）。
+- `src/backend/stmt/cgen_select.cpp`：4 处 Case 比较同一切换（单值 / 区间两端 / 单值再比）。
+- `src/rtl/core/vb6rtl/vb6rtl_runtime.h`：声明。
+
+**范围说明**：`Option Compare Text` 那一档（`vb6_StrCmpT` → `vb6_TextCmp`）**没动** —— 文本
+口径下的 NUL / 空格行为未量，不顺手改。`vb6_StrCmp` 本体保留给存量调用点。
+
+**验证**
+
+- 夹具 `tests/b256_strcmp_nul`（26 格，双架构）：C1..C21 与 D1/D3/D4/D5/D6，全部按真机读数钉针。
+- 门禁 **S34**：`vb6_StrCmpL` 存在且逐字符比、二元站用 `L`、Select Case 三处以上用 `L`、
+  b256 双架构。
+- 本机 S1..S34 全绿 + `check_owned_temp_keeps` 绿。
+- CI：head `f5b0f197` → GA **46174727310 = 23/23**（代码+清单两次提交都跑过：`895cbb55` 只红清单两格，`f5b0f197` 全绿）。
+
+**留着没动的**
+
+`Option Compare Text` 下的 NUL/空格口径；`StrComp` 第三参为 1（文本）时的同一族读数；
+`InStr` / `Like` 与 NUL 的交互 —— 都还没量，留在背账。
