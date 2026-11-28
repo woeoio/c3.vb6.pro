@@ -533,9 +533,24 @@ void CCodeGen::visit(BinaryExpr& node) {
         // 递进去 = C2440 (PhotoDemon Evaluator.c 474:
         // vb6_Like(vb6_Evaluator_Eval(l), vb6_Evaluator_Eval(r)))。按上下文拆箱。
         // <vbeclipse>: Option Compare Text 模块里 Like 的大小写与字符区间都按文本形
+        // §11.236 (第二百五十四刀): 非字符串操作数要按 CStr 折成串再比 —— 真机 P375:
+        // `1 Like "1"` True、`True Like "True"` True、`"1" Like 1` True。
+        // 旧发码把 int/Boolean 直接交给 BSTR 形参 (运行期 0xC0000005)。
+        std::string ls = toStringIfVariant(left, node.left.get());
+        std::string rs = toStringIfVariant(right, node.right.get());
+        std::string lw = wrapToBSTR(ls, *node.left);
+        std::string rw = wrapToBSTR(rs, *node.right);
+        const bool ownL = (lw != ls);
+        const bool ownR = (rw != rs);
+        if (ownL || ownR) {
+            // 现造的临时串交给 vb6_LikeX 收 (每次调用漏一枚就不是可接受的形状)。
+            lastExpr_ = std::string("vb6_LikeX(") + lw + ", " + rw + ", "
+                        + (optionCompareText_ ? "1" : "0") + ", "
+                        + (ownL ? "1" : "0") + ", " + (ownR ? "1" : "0") + ")";
+            return;
+        }
         lastExpr_ = std::string("vb6_Like") + (optionCompareText_ ? "C" : "")
-                    + "(" + toStringIfVariant(left, node.left.get())
-                    + ", " + toStringIfVariant(right, node.right.get())
+                    + "(" + ls + ", " + rs
                     + (optionCompareText_ ? ", 1" : "") + ")";
         return;
     }

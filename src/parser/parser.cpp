@@ -38,6 +38,7 @@ void Parser::initBindingPowers() {
     //      | Not (一元前缀)     |  -   |  5   | 前缀
     //  4   | Eqv, Imp           |  6   |  7   | 左
     //  5   | =, <>, <, >, <=, >=|  8   |  9   | 左
+    //      | Like, Is, IsNot     |  8   |  9   | 左 (§11.236 并入比较档)
     //  6   | & (Concat)         | 10   | 11   | 左
     //  7   | +, -               | 12   | 13   | 左
     //  8   | Mod                | 14   | 15   | 左
@@ -71,6 +72,12 @@ void Parser::initBindingPowers() {
         { TokenKind::GreaterThan, 8,  9 },
         { TokenKind::LessEqual,   8,  9 },
         { TokenKind::GreaterEqual,8,  9 },
+        // §11.236: Like / Is / IsNot 与比较同档 (原来是 22/23, 比算术还紧)。
+        // 真机 .temp/k236p: P373 Y5 `1 = 1 Like "True"` True ⇒ 左结合成
+        // `(1=1) Like "True"`; P374 Z1 `o Is Nothing = True` True ⇒ 同理。
+        { TokenKind::Like,        8,  9 },
+        { TokenKind::Is,          8,  9 },
+        { TokenKind::IsKeyword,   8,  9 },
         // 级6: 字符串连接
         { TokenKind::Ampersand, 10, 11 },
         // 级7: 加减
@@ -85,10 +92,6 @@ void Parser::initBindingPowers() {
         { TokenKind::Slash,  18, 19 },
         // 级11: 幂 (右结合: l_bp=21 > r_bp=20)
         { TokenKind::Caret,  21, 20 },
-        // 级13: Like, Is (Is在词法器中输出为IsKeyword，两者都需要注册)
-        { TokenKind::Like,     22, 23 },
-        { TokenKind::Is,       22, 23 },
-        { TokenKind::IsKeyword,22, 23 },
         // C3 扩展 (ai/032): 移位 (9,10) —— VB.NET 的优先级位置。
         // 取 (9,10) 的依据是两侧夹逼, 不是拍脑袋:
         //   l_bp=9  > 比较的 l_bp=8  ⇒ `a << b = c` 分组为 `(a << b) = c` (VB.NET 同)
@@ -100,7 +103,7 @@ void Parser::initBindingPowers() {
         { TokenKind::Shr,      9, 10 },
         // C3 扩展 (ai/032): IsNot 与 Is 同优先级 —— 它就是 Is 的否定形, 绑定范围
         // 必须完全一致, 否则 `Not obj IsNot x` 这类嵌套会分组不同。
-        { TokenKind::IsNot,   22, 23 },
+        { TokenKind::IsNot,       8,  9 },
     };
 
     for (auto& op : ops) {

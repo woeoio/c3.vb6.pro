@@ -976,8 +976,39 @@ if (@([regex]::Matches($runnerText, 'b258_search_nul\\B258Res\.vbp')).Count -ne 
     $bad += "S36 b258 is not run on both arches"
 }
 
+# ---- S37: Like / Is 的比较档优先级与非串操作数 (账 §11.236 第二百五十四刀) ----
+# 真机 P373 Y5 `1 = 1 Like "True"` True、P374 Z1 `o Is Nothing = True` True ⇒ 同比较档;
+# P375 N1..N8 ⇒ 非串操作数按 CStr 折串。
+$par237 = Get-CodeText (Join-Path $root "src\parser\parser.cpp")
+if ($par237 -notmatch '\{ TokenKind::Like,\s+8,\s+9 \}') {
+    $bad += "S37 Like must sit in the comparison tier (8,9)"
+}
+if ($par237 -notmatch '\{ TokenKind::Is,\s+8,\s+9 \}') {
+    $bad += "S37 Is must sit in the comparison tier (8,9)"
+}
+if ($par237 -match 'TokenKind::Like,\s+22,\s+23') {
+    $bad += "S37 Like must not stay at (22,23)"
+}
+$bin237 = Get-CodeText (Join-Path $root "src\backend\expr\cgen_expr_binary.cpp")
+if ($bin237 -notmatch 'std::string lw = wrapToBSTR\(ls, \*node\.left\);') {
+    $bad += "S37 Like operands must go through wrapToBSTR"
+}
+if ($bin237 -notmatch 'vb6_LikeX\("') {
+    $bad += "S37 coerced Like operands must be handed to vb6_LikeX"
+}
+$str237 = Get-CodeText (Join-Path $root "src\rtl\core\vb6rtl\vb6rtl_string.c")
+if ($str237 -notmatch 'int16_t vb6_LikeX\(BSTR source, BSTR pattern, int32_t mode, int32_t ownSrc, int32_t ownPat\)') {
+    $bad += "S37 vb6_LikeX must exist"
+}
+if ($str237 -notmatch 'if \(ownSrc\) vb6_BSTR_Free\(source\);') {
+    $bad += "S37 vb6_LikeX must free the temporaries it owns"
+}
+if (@([regex]::Matches($runnerText, 'b259_prec_like\\B259Res\.vbp')).Count -ne 2) {
+    $bad += "S37 b259 is not run on both arches"
+}
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table, S24 Error(n) function face, S25 vbNullString null-pointer fidelity, S26 the & operator against Null/Empty, S27 the + operator against Null/Empty, S28 the + operator between a string and a number, S29 Null in & over array elements and UDT/With members, S30 On Error GoTo 0 clears Err and keeps its resume point, S31 the Mid statement edges, S32 the Mid statement remaining edges, S33 the fixed-length string assignment paths and their grid, S34 the string comparison byte length, S35 the text-mode NUL stripping, S36 the search face against embedded NUL)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table, S24 Error(n) function face, S25 vbNullString null-pointer fidelity, S26 the & operator against Null/Empty, S27 the + operator against Null/Empty, S28 the + operator between a string and a number, S29 Null in & over array elements and UDT/With members, S30 On Error GoTo 0 clears Err and keeps its resume point, S31 the Mid statement edges, S32 the Mid statement remaining edges, S33 the fixed-length string assignment paths and their grid, S34 the string comparison byte length, S35 the text-mode NUL stripping, S36 the search face against embedded NUL, S37 the Like/Is comparison tier)"

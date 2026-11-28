@@ -902,6 +902,16 @@ int16_t vb6_Like(BSTR source, BSTR pattern) {
     return vb6_LikeC(source, pattern, 0);
 }
 
+// §11.236: 带所有权的入口 —— ownSrc/ownPat 为真时比完收回对应那枚临时串。
+// 只为「非字符串操作数」发 (发码侧 wrapToBSTR 现造的 CStr 临时值)；两侧都是常量/变量时
+// 仍走 vb6_Like / vb6_LikeC，发码形状不变。
+int16_t vb6_LikeX(BSTR source, BSTR pattern, int32_t mode, int32_t ownSrc, int32_t ownPat) {
+    int16_t r = vb6_LikeC(source, pattern, mode);
+    if (ownSrc) vb6_BSTR_Free(source);
+    if (ownPat) vb6_BSTR_Free(pattern);
+    return r;
+}
+
 // ============================================================
 // P18-E: Partition Function
 // ============================================================

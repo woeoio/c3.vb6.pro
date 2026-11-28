@@ -154,6 +154,8 @@ vb6_Like|0	0	handoff-reads:vb6_LikeC	0	open	BSTR
 vb6_Like|1	0	handoff-reads:vb6_LikeC	0	open	BSTR
 vb6_LikeC|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_LikeC|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_LikeX|0	0	handoff-reads:vb6_LikeC	0	open	BSTR
+vb6_LikeX|1	0	handoff-reads:vb6_LikeC	0	open	BSTR
 vb6_LoadPictureEx|0	0		0	open	BSTR
 vb6_LoadResData|0	1	write	0	open	VARIANT
 vb6_LoadResData|1	1	write	0	open	VARIANT
@@ -474,6 +476,8 @@ vb6_IIfBSTR|1	1	vb6_BSTR_Free	truepart
 vb6_IIfBSTR|2	1	vb6_BSTR_Free	falsepart
 vb6_IIfVariant|1	1	vb6_VariantClear	truepart
 vb6_IIfVariant|2	1	vb6_VariantClear	falsepart
+vb6_LikeX|0	1	vb6_BSTR_Free	source
+vb6_LikeX|1	1	vb6_BSTR_Free	pattern
 vb6_LSetFree|0	0	vb6_BSTR_Free	str
 vb6_MidSetV|0	0	vb6_VariantClear	target
 vb6_StrFromNumText|0	0	SysFreeString	num

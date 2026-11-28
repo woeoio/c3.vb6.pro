@@ -152,6 +152,11 @@ struct OwnedTempConsumes {
 inline const OwnedTempConsumes* ownedTempConsumes() {
     static const OwnedTempConsumes kConsumes[] = {
         { "vb6_BSTR_ConcatFree", 0, '0' },
+        // §11.236 (第二百五十四刀): vb6_LikeX 按 ownSrc/ownPat **条件性**收回两格。
+        // 发码侧那两位是字面量 0/1, 但对账表只认 (出口名, 格号) ⇒ 登记成条件性 ('1'),
+        // 两格都不许提名, 否则语句末再放一次就是双放。
+        { "vb6_LikeX",           0, '1' },
+        { "vb6_LikeX",           1, '1' },
         // 第九十九刀: 成功路把 source 交给 AssignMove（keeps=1）；中止路自己放掉。
         // 消费轴要这一格，否则调用方会再放一次（双放）。
         { "vb6_BSTR_AssignMoveIfOk", 1, '0' },

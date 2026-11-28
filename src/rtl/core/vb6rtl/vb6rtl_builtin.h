@@ -387,6 +387,10 @@ int16_t vb6_Like(BSTR source, BSTR pattern);  // Like运算符
 // <vbeclipse>: 带比较模式的 Like (mode: 0=vbBinaryCompare, 非0=文本)。
 // `Option Compare Text` 模块里 codegen 发改写调用点到这里。
 int16_t vb6_LikeC(BSTR source, BSTR pattern, int32_t mode);
+// §11.236 (第二百五十四刀): 非字符串操作数的 Like —— 真机 P375 (N1..N8) 两侧都按 CStr 折成串
+// 再比 (`1 Like "1"` True、`True Like "True"` True、`"1" Like 1` True)。这两个临时 BSTR
+// 是发码侧现造的, 必须由本函数按 ownSrc/ownPat 收回 (否则每次调用漏一枚)。
+int16_t vb6_LikeX(BSTR source, BSTR pattern, int32_t mode, int32_t ownSrc, int32_t ownPat);
 // <vbeclipse>: 文本比较的唯一口径 (CompareStringW 区域语言序, 见 vb6rtl_string.c);
 // vb6_StrComp 的 vbTextCompare 形与 Option Compare Text 模块的运算符共用它。
 int vb6_TextCmp(const wchar_t* a, const wchar_t* b);

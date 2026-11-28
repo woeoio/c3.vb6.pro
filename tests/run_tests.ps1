@@ -14306,6 +14306,32 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "W13|True")
     Test-Vbp 'b258_search_nul' "$Tests\b258_search_nul\B258Res.vbp" $b258Needles
     Test-Vbp 'b258_search_nul_x86' "$Tests\b258_search_nul\B258Res.vbp" $b258Needles -Arch "x86"
+    # §11.236 第二百五十四刀: Like / Is 的优先级 = 比较档（与 `=` 同档, 比 `&` 松），
+    # 且非字符串操作数按 CStr 折串（`1 Like "1"`）。真机 P373 / P374 / P375。
+    $b259Needles = @(
+    "Y1|False",
+    "Y2|True",
+    "Y3|True",
+    "Y4|11",
+    "Y5|True",
+    "Y6|True",
+    "Y7|True",
+    "Y8|11",
+    "Y9|11",
+    "Z1|True",
+    "Z2|11",
+    "Z3|11",
+    "Z4|True",
+    "N1|True",
+    "N2|True",
+    "N3|True",
+    "N4|False",
+    "N5|True",
+    "N6|True",
+    "N7|True",
+    "N8|11")
+    Test-Vbp 'b259_prec_like' "$Tests\b259_prec_like\B259Res.vbp" $b259Needles
+    Test-Vbp 'b259_prec_like_x86' "$Tests\b259_prec_like\B259Res.vbp" $b259Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
