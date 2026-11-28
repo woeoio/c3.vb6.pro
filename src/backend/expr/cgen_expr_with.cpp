@@ -505,10 +505,10 @@ void CCodeGen::visit(WithMemberExpr& node) {
             if (memLower == "description") { lastExpr_ = "vb6_ErrDescription()"; return; }
             if (memLower == "source")      { lastExpr_ = "vb6_ErrSource()";      return; }
             if (memLower == "lastdllerror") { lastExpr_ = "vb6_ErrLastDllError()";       return; }
-            if (memLower == "helpfile")    { lastExpr_ = "(BSTR)0";              return; }
-            if (memLower == "helpcontext") { lastExpr_ = "0";                    return; }
+            if (memLower == "helpfile")    { lastExpr_ = "vb6_ErrHelpFile()";    return; }
+            if (memLower == "helpcontext") { lastExpr_ = "vb6_ErrHelpContext()"; return; }
             if (memLower == "clear")       { lastExpr_ = "vb6_ErrClear()";       return; }
-            if (memLower == "raise")       { lastExpr_ = "vb6_ErrRaise";         return; }
+            if (memLower == "raise")       { lastExpr_ = "vb6_ErrRaiseEx";       return; }
         }
         // Fallback: unknown builtin member
         lastExpr_ = "/* With " + bn + "." + node.memberName + " */ 0";

@@ -487,6 +487,12 @@ BSTR vb6_ErrDefaultDescription(int32_t errNum);
 // `Err.Number` 不动；存一份真 BSTR）。
 void vb6_ErrSetSource(BSTR value);
 void vb6_ErrSetDescription(BSTR value);
+// §11.219 (第二百三十六刀): HelpFile / HelpContext 的读写两面 + 五参 Raise。
+BSTR vb6_ErrHelpFile(void);
+int32_t vb6_ErrHelpContext(void);
+void vb6_ErrSetHelpFile(BSTR value);
+void vb6_ErrSetHelpContext(int32_t value);
+void vb6_ErrRaiseEx(int32_t errNum, BSTR source, BSTR description, BSTR helpFile, int32_t helpContext);
 // C30-11 第七十九刀 (§B227): 错误序号 —— 每次 vb6_ErrRaise 自增。赋值站用它判
 // 断「本语句里 raise 过吗」：变了就不写目标（VB6 的语句级中止）。
 int32_t vb6_ErrSerial(void);

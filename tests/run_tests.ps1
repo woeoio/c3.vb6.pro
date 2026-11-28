@@ -13935,6 +13935,21 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "A10=[ss]/[dd]/0")
     Test-Vbp 'b242_err_assign' "$Tests\b242_err_assign\B242Res.vbp" $b242Needles
     Test-Vbp 'b242_err_assign_x86' "$Tests\b242_err_assign\B242Res.vbp" $b242Needles -Arch "x86"
+    # §11.219 第二百三十六刀: `Err.HelpFile` / `Err.HelpContext` 读写两面 + 五参 `Err.Raise`。
+    # 真机 .temp/k227p/p331.txt（九格）：赋值能存能读、Number 不动；`Err.Raise` 缺参保留两格；
+    # `Err.Raise 5,"s1","d1","hf",7` 的两格照设（改前被截成三参 ⇒ 空串/0）。
+    $b243Needles = @(
+    "B1=[h1]/42/0",
+    "B2=[h1]/42/5",
+    "B3=[]/0/0",
+    "B4=[hf]/7/5/[s1]/[d1]",
+    "B5=[]/0/0",
+    "B6=[]/9/0",
+    "B7=[]/0/0",
+    "B8=13/[]/3",
+    "B9=[]/0/0")
+    Test-Vbp 'b243_err_help' "$Tests\b243_err_help\B243Res.vbp" $b243Needles
+    Test-Vbp 'b243_err_help_x86' "$Tests\b243_err_help\B243Res.vbp" $b243Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

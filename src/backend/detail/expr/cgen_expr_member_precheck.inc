@@ -261,10 +261,10 @@
             if (_memLower == "description") { lastExpr_ = "vb6_ErrDescription()"; return; }
             if (_memLower == "source")      { lastExpr_ = "vb6_ErrSource()";      return; }
             if (_memLower == "lastdllerror") { lastExpr_ = "vb6_ErrLastDllError()"; return; }
-            if (_memLower == "helpfile")    { lastExpr_ = "(BSTR)0";              return; }
-            if (_memLower == "helpcontext") { lastExpr_ = "0";                    return; }
+            if (_memLower == "helpfile")    { lastExpr_ = "vb6_ErrHelpFile()";    return; }
+            if (_memLower == "helpcontext") { lastExpr_ = "vb6_ErrHelpContext()"; return; }
             if (_memLower == "clear")       { lastExpr_ = "vb6_ErrClear()";       return; }
-            if (_memLower == "raise")       { lastExpr_ = "vb6_ErrRaise";         return; }
+            if (_memLower == "raise")       { lastExpr_ = "vb6_ErrRaiseEx";    return; }
         }
 
         // ai/022 B09: `MyBase.<成员>` = 显式基调用 (去虚化, 直调基类会跑的那一份实现)。

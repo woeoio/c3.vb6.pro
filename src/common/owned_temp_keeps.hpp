@@ -62,6 +62,9 @@ inline const OwnedTempException* ownedTempExceptions() {
         { "vb6_DecimalToR8",      0, '1', "store" },
         { "vb6_DecSetTag",        0, 'U', "handoff-unknown:vb6_DEC_VT" },
         { "vb6_ErrRaise",         1, '1', "store" },
+        // §11.219 (第二百三十六刀): 五参 Raise 的三枚 BSTR 都落进全局 vb6_err（源/描述/helpfile）
+        // ⇒ 与三参那一枚同口径：存指针，不提名。
+        { "vb6_ErrRaiseEx",       1, '1', "store" },
         // C30-11 第六十四刀: HexV/OctV 把 vb6_Hex/Oct 的 BSTR 交给 vb6_VariantString
         // （那一枚已登记为 store ⇒ 指针落进比调用活得久的壳）⇒ 本表按 statically 推导的
         // '1'/'store' 登记 = 不提名。与 scripts/owned_temp_keeps_164.txt 的 K5/K12 同源。
@@ -75,6 +78,7 @@ inline const OwnedTempException* ownedTempExceptions() {
         { "vb6_UCaseV",           0, '1', "store" },
         { "vb6_LCaseV",           0, '1', "store" },
         { "vb6_ErrRaise",         2, '1', "store" },
+        { "vb6_ErrRaiseEx",       2, '1', "store" },
         { "vb6_ho_setVariantBstr",1, '1', "store" },
         { "vb6_IIfVariant",       1, '1', "ret+write" },
         { "vb6_IIfVariant",       2, '1', "ret+write" },

@@ -689,6 +689,11 @@ typedef struct vb6_ErrObject {
     int32_t number;
     BSTR description;
     BSTR source;
+    // §11.219 (第二百三十六刀): HelpFile / HelpContext 也是 Err 对象上真有的两格。
+    // 真机 .temp/k227p/P331：赋值能存能读（B1）、`Err.Raise` 缺参时保留（B2）、
+    // `Err.Clear` 才清（B3）、五参 `Err.Raise` 直接设这两格（B4）。
+    BSTR helpFile;
+    int32_t helpContext;
     // Fix <vbeclipse> 2026-10-06: Err.LastDllError 快照 —— DLL 调用返回那一刻的
     // GetLastError(), 由 vb6_ErrSetLastDllError 在调用点捕获; 访问 Err.LastDllError
     // 返回此快照, 而非访问那一刻的 GetLastError() (中间 RTL/打印会重置 last-error)。
@@ -810,6 +815,8 @@ BSTR vb6_ErrDescription(void) { return vb6_err.description; }
 // 快照跨过一次 Clear 存活, 与 VB6 不符。
 void vb6_ErrClear(void) {
     vb6_err.number = 0; vb6_err.description = NULL; vb6_err.source = NULL;
+    // §11.219: 文档的属性表逐项列的就是 HelpContext 0 / HelpFile ""（见上面的注释）。
+    vb6_err.helpFile = NULL; vb6_err.helpContext = 0;
     vb6_err.lastDllError = 0;
     vb6_conv_fail_serial = -1;
 }
@@ -825,6 +832,17 @@ BSTR vb6_ErrSource(void) { return vb6_err.source; }
 // Fix <vbeclipse> 2026-10-06: Err.LastDllError 快照存取 (见 vb6_ErrObject.lastDllError)
 int32_t vb6_ErrLastDllError(void) { return vb6_err.lastDllError; }
 void vb6_ErrSetLastDllError(int32_t code) { vb6_err.lastDllError = code; }
+
+// §11.219 (第二百三十六刀): Err.HelpFile / Err.HelpContext 的读写两面。
+// 真机 .temp/k227p/P331: B1 赋值后能读、B2 `Err.Raise` 缺参保留、B3 `Err.Clear` 才清、
+// B6 只给 context 时 file 仍空、B8 运行期 13 之后只改 context 时号与另一格都不动。
+BSTR vb6_ErrHelpFile(void) { return vb6_err.helpFile; }
+int32_t vb6_ErrHelpContext(void) { return vb6_err.helpContext; }
+// 所有权与 Err.Source 那两枚同口径: 存真 BSTR 副本（宽字面量读侧会读成空串）。
+void vb6_ErrSetHelpFile(BSTR value) {
+    vb6_err.helpFile = value ? vb6_BSTR_FromStr(value) : NULL;
+}
+void vb6_ErrSetHelpContext(int32_t value) { vb6_err.helpContext = value; }
 
 // C30-11 第七十九刀 (§B227): 错误序号。VB6 的 On Error Resume Next 只中止**当前语句**，
 // 出错前已求值的保留、赋值不发生；C3 现在把转换失败之后的赋值照样执行 (n=0 / s="")。
@@ -949,6 +967,19 @@ void vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description) {
 
 void vb6_ErrRaiseNumber(int32_t errNum) {
     vb6_ErrRaise(errNum, NULL, NULL);
+}
+
+// §11.219 (第二百三十六刀): VB6 的 `Err.Raise` 是**五**参（number, source, description,
+// helpfile, helpcontext）。真机 .temp/k227p/P331 的 B4 `Err.Raise 5,"s1","d1","hf",7`
+// 之后读回 [hf]/7，而 B2 省略后两参时保留已存的 h1/42。
+// 三参那一枚一字不动（仓里 34 处 raise 站点都走它），五参这一层只补最后两格：
+// ⚠ 两格必须在调用 vb6_ErrRaise **之前**写 —— 它会 longjmp（有帧时下面一行永远跑不到）。
+// 口径：helpFile 非 NULL 才写，helpContext 非 0 才写（缺参 = 保留旧值）。
+void vb6_ErrRaiseEx(int32_t errNum, BSTR source, BSTR description, BSTR helpFile,
+                    int32_t helpContext) {
+    if (helpFile) vb6_err.helpFile = vb6_BSTR_FromStr(helpFile);
+    if (helpContext != 0) vb6_err.helpContext = helpContext;
+    vb6_ErrRaise(errNum, source, description);
 }
 
 // §11.218 (第二百三十五刀): `Err.Source = v` / `Err.Description = v` 的写面。

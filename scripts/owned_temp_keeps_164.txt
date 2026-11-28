@@ -80,7 +80,11 @@ vb6_Dir|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_Environ|0	0		0	open	BSTR
 vb6_ErrRaise|1	1	store	0	open	BSTR
 vb6_ErrRaise|2	1	store	0	open	BSTR
+vb6_ErrRaiseEx|1	1	store	0	open	BSTR
+vb6_ErrRaiseEx|2	1	store	0	open	BSTR
+vb6_ErrRaiseEx|3	0	handoff-to-plain:vb6_BSTR_FromStr	0	open	BSTR
 vb6_ErrSetDescription|0	0	handoff-to-plain:vb6_BSTR_FromStr	0	open	BSTR
+vb6_ErrSetHelpFile|0	0	handoff-to-plain:vb6_BSTR_FromStr	0	open	BSTR
 vb6_ErrSetSource|0	0	handoff-to-plain:vb6_BSTR_FromStr	0	open	BSTR
 vb6_ErrSourceIsInternal|0	0		0	open	BSTR
 vb6_FileCopy|0	0	handoff-reads:vb6_path_from	U	open	BSTR
@@ -420,6 +424,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 # --- 返回侧所有权：alias = 交出去的是**别名**（指着调用方的内存或一个全局）⇒ 不许放它 ---
 [alias] vb6_CDec VARIANT
 [alias] vb6_ErrDescription BSTR
+[alias] vb6_ErrHelpFile BSTR
 [alias] vb6_ErrSource BSTR
 [alias] vb6_HexV VARIANT
 [alias] vb6_IIfBSTR BSTR

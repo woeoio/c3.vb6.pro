@@ -387,6 +387,23 @@ void CCodeGen::visit(AssignmentStmt& node) {
                 memObjLetScalar_ = savedLetScalar;
                 return;
             }
+            // §11.219 (第二百三十六刀): `Err.HelpFile = v` / `Err.HelpContext = v`。
+            // 真机 .temp/k227p/P331 的 B1/B6/B8: 赋值只动那一格文本/数，`Err.Number` 不动；
+            // 真机 B7 显式赋空串/0 就是空串/0（与 A7 同口径）。
+            if ((objAt == "err" || objAt == "lasterror") && memAt == "helpfile" &&
+                !knownLocalVars_.count(objAt)) {
+                std::string rhsHf = emitBSTRValue();
+                c_.emitLine("vb6_ErrSetHelpFile(" + rhsHf + ");");
+                memObjLetScalar_ = savedLetScalar;
+                return;
+            }
+            if ((objAt == "err" || objAt == "lasterror") && memAt == "helpcontext" &&
+                !knownLocalVars_.count(objAt)) {
+                emitExpr(*node.value);
+                c_.emitLine("vb6_ErrSetHelpContext((int32_t)(" + lastExpr_ + "));");
+                memObjLetScalar_ = savedLetScalar;
+                return;
+            }
         }
     }
 #include "backend/detail/stmt/cgen_assign_host_pseudo.inc"

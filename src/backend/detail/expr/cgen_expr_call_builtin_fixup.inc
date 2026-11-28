@@ -390,11 +390,12 @@ static const char* const kOD_Randomize[]   = { "0.0" };
     static const char* const kOD_StrConv[]     = { nullptr, nullptr, "0" };
     static const char* const kOD_FormatNum[]   = { nullptr, "-1", "-1", "0", "-1" };
     static const char* const kOD_ClipSet[]     = { nullptr, "0" };
-    static const char* const kOD_ErrRaise[]    = { nullptr, "(BSTR)0", "(BSTR)0" };
+    static const char* const kOD_ErrRaise[]    = { nullptr, "(BSTR)0", "(BSTR)0", "(BSTR)0", "0" };
     // 账 #305 第二百四十一刀 (甲): 这一族每档的 VB 形参名，口径取自仓里的 VB6 手册
-    // docs/vb6-manual/07-方法/Raise 方法.md —— `Raise number, source, description, ...`，
-    // 与 RTL 声明 vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description) 逐档同序。
-    static const char* const kNames_ErrRaise[] = { "number", "source", "description" };
+    // docs/vb6-manual/07-方法/Raise 方法.md —— `Raise number, source, description, helpfile, helpcontext`，
+    // 与 RTL 声明 vb6_ErrRaiseEx(int32_t, BSTR, BSTR, BSTR, int32_t) 逐档同序。
+    // §11.219 (第二百三十六刀): 后两档不再截掉（真机 .temp/k227p/P331 的 B4 = [hf]/7）。
+    static const char* const kNames_ErrRaise[] = { "number", "source", "description", "helpfile", "helpcontext" };
     // §B149 格③: VB6 的 DeleteSetting 有 1/2/3 参三形, RTL 出口是 3 枚必填 BSTR。
     // 两参 = 删整节 (RTL 在 key 为空时走 RegDeleteKeyW, vb6rtl_registry.c:107), 三参 = 删一个键。
     // 一参那档 (删整个应用) 刻意**不补**: RTL 在 section 为空时直接 return, 补一个空串等于
@@ -437,7 +438,7 @@ static const char* const kOD_Randomize[]   = { "0.0" };
     { "vb6_FormatCurrency", kOD_FormatNum,   sizeof(kOD_FormatNum) / sizeof(kOD_FormatNum[0]),     true  },
     { "vb6_FormatPercent",  kOD_FormatNum,   sizeof(kOD_FormatNum) / sizeof(kOD_FormatNum[0]),     true  },
         { "vb6_Clipboard_SetData", kOD_ClipSet,   sizeof(kOD_ClipSet) / sizeof(kOD_ClipSet[0]),         true  },
-        { "vb6_ErrRaise",        kOD_ErrRaise,    sizeof(kOD_ErrRaise) / sizeof(kOD_ErrRaise[0]),       true,  kNames_ErrRaise },
+        { "vb6_ErrRaiseEx",     kOD_ErrRaise,    sizeof(kOD_ErrRaise) / sizeof(kOD_ErrRaise[0]),       true,  kNames_ErrRaise },
         { "vb6_DeleteSetting",   kOD_DelSetting,  sizeof(kOD_DelSetting) / sizeof(kOD_DelSetting[0]),   false },
     };
     for (const BuiltinOptDefault& bod : kBuiltinOptDefaults) {
@@ -503,11 +504,6 @@ static const char* const kOD_Randomize[]   = { "0.0" };
     }
     // <vbeclipse>: Format(expression[, format]) 的缺省 format 补在 conv_output 段
     // (那里 args[0] 装箱后会重建 argList, 在这补会被抹掉), 见 cgen_expr_call_conv_output.inc。
-
-    if (callee == "vb6_ErrRaise" && args.size() > 3) {
-        // Truncate to 3 (Err.Raise can have up to 5 VB6 args, C RTL handles 3)
-        argList = args[0] + ", " + args[1] + ", " + args[2];
-    }
 
     // Fix 092w: StrConv(Byte数组, vbUnicode) → vb6_StrConvFromByteArray
     // 反向转换: Byte() -> String. 第一实参为已知 Byte 数组变量 (vb6_SafeArray1D*)

@@ -561,8 +561,39 @@ if ($rtl218 -notmatch 'const int sourceMissing = \(source == NULL\);') {
 $b242Cells = @([regex]::Matches($runnerText, 'b242_err_assign\\B242Res\.vbp')).Count
 if ($b242Cells -ne 2) { $bad += ("S19 b242 run cells = " + $b242Cells + " (want 2 = x64 + x86)") }
 
+# ---- S20: Err.HelpFile / Err.HelpContext + 五参 Raise (账 §11.219 第二百三十六刀) ----
+# 真机 .temp/k227p/p331.txt（九格）：赋值能存能读、Number 不动；缺参 Raise 保留两格；
+# 五参 Raise 的后两格照设（改前被截成三参 ⇒ 空串/0）。
+# 四条判据：(a) 两格在 RTL 各有一对该写；
+#           (b) HelpContext 的类型必须答 Long —— 答 String 会把整数当 BSTR 指针拼，
+#               实测就是 0xC0000005（本刀踩过）；
+#           (c) 四/五参 Raise 不截断、改走 vb6_ErrRaiseEx；(d) 夹具 b243 两套。
+$rtl219 = Get-CodeText (Join-Path $root "src\rtl\core\vb6rtl\vb6rtl.c")
+if ($rtl219 -notmatch 'BSTR vb6_ErrHelpFile\(void\)') { $bad += "S20 RTL getter vb6_ErrHelpFile is gone" }
+if ($rtl219 -notmatch 'int32_t vb6_ErrHelpContext\(void\)') { $bad += "S20 RTL getter vb6_ErrHelpContext is gone" }
+if ($rtl219 -notmatch 'void vb6_ErrSetHelpFile\(BSTR value\)') { $bad += "S20 RTL setter vb6_ErrSetHelpFile is gone" }
+if ($rtl219 -notmatch 'void vb6_ErrSetHelpContext\(int32_t value\)') { $bad += "S20 RTL setter vb6_ErrSetHelpContext is gone" }
+$ty219 = Get-CodeText (Join-Path $root "src\backend\cgen_util_type.cpp")
+if ($ty219 -notmatch 'if \(memLower == "helpcontext"\) return Vb6Type::Long;') {
+    $bad += "S20 Err.HelpContext is no longer typed as Long (concat would pass an int as a BSTR pointer)"
+}
+$fx219 = Get-CodeText (Join-Path $root "src\backend\detail\expr\cgen_expr_member_precheck.inc")
+if ($fx219 -notmatch 'lastExpr_ = "vb6_ErrRaiseEx"') {
+    $bad += "S20 Err.Raise read fold no longer answers vb6_ErrRaiseEx (the 4th/5th args get truncated)"
+}
+$fx219b = Get-CodeText (Join-Path $root "src\backend\expr\cgen_expr_with.cpp")
+if ($fx219b -notmatch 'lastExpr_ = "vb6_ErrRaiseEx"') {
+    $bad += "S20 `With Err` .Raise fold no longer answers vb6_ErrRaiseEx"
+}
+$tb219 = Get-CodeText (Join-Path $root "src\backend\detail\expr\cgen_expr_call_builtin_fixup.inc")
+if ($tb219 -notmatch '\{ "vb6_ErrRaiseEx"') {
+    $bad += "S20 the optional-defaults table lost its vb6_ErrRaiseEx row (five-slot padding is gone)"
+}
+$b243Cells = @([regex]::Matches($runnerText, 'b243_err_help\\B243Res\.vbp')).Count
+if ($b243Cells -ne 2) { $bad += ("S20 b243 run cells = " + $b243Cells + " (want 2 = x64 + x86)") }
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise)"

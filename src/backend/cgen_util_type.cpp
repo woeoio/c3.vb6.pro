@@ -660,7 +660,11 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
                     std::transform(memLower.begin(), memLower.end(), memLower.begin(), ::tolower);
                     if (memLower == "number") return Vb6Type::Long;
                     if (memLower == "description" || memLower == "source") return Vb6Type::String;
-                    if (memLower == "helppath" || memLower == "helpfile" || memLower == "helpcontext") return Vb6Type::String;
+                    if (memLower == "helppath" || memLower == "helpfile") return Vb6Type::String;
+                    // §11.219 (第二百三十六刀): HelpContext 是 **Long**, 不是 String。
+                    // 旧行把它与 HelpFile 排在一条“一律 String”的臂里 ⇒ `"n=" & Err.HelpContext`
+                    // 拼接不套 vb6_CStrLong, 整数 42 当 BSTR 指针传 ⇒ 0xC0000005（本刀探针实测）。
+                    if (memLower == "helpcontext") return Vb6Type::Long;
                     if (memLower == "lastdllerror") return Vb6Type::Long;
                 }
                 // 第二步: App 的四个 BSTR 成员 —— 删掉 C 出口名表之后, 读侧折叠
@@ -1913,6 +1917,14 @@ std::string CCodeGen::getRuntimeParamCType(const std::string& funcName, size_t p
         {"vb6_MsgBox1",         {"BSTR"}},
         // 错误处理
         {"vb6_ErrRaise",        {"int32_t", "BSTR", "BSTR"}},
+        // §11.219 (第二百三十六刀): 五参 Raise（helpfile / helpcontext）+ 那两格的读写出口。
+        {"vb6_ErrRaiseEx",      {"int32_t", "BSTR", "BSTR", "BSTR", "int32_t"}},
+        {"vb6_ErrHelpFile",     {}},
+        {"vb6_ErrHelpContext",  {}},
+        {"vb6_ErrSetSource",    {"BSTR"}},
+        {"vb6_ErrSetDescription", {"BSTR"}},
+        {"vb6_ErrSetHelpFile",  {"BSTR"}},
+        {"vb6_ErrSetHelpContext", {"int32_t"}},
         {"vb6_ErrNumber",       {}},
         {"vb6_ErrDescription",  {}},
         {"vb6_ErrSource",       {}},

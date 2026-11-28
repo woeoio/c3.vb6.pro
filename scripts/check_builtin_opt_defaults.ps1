@@ -169,7 +169,9 @@ $notPadding = @{
     'vb6_LBound'         = '同上'
     'vb6_InStr'          = '双形态 (start 在前 / 字符串在前) 要**重排**实参并按 compare 换 callee = vb6_InStrC'
     'vb6_InStrB'         = '与 InStr 同一段'
-    'vb6_ErrRaise'       = '反向那一格: VB6 最多 5 参而 RTL 只吃 3 参 ⇒ 截断'
+    # 账 #305 第二百三十六刀 (§11.219): Err.Raise 不再在发码侧截断 —— 读侧那两处折叠直接给
+    #   callee = vb6_ErrRaiseEx，五档的缺省全由 kOD_ErrRaise 那张表补。此名册中对应的一条随之撤除
+    #   （段没了就不该再留一条永不会命中的理由；否则名册就成了一份自己跟自己对话的清单）。
     'vb6_StrConv'        = '首参是已知 Byte 数组时改 callee = vb6_StrConvFromByteArray'
     'vb6_StrPtr'         = '首参是已知 Byte 数组时改 callee = vb6_SafeArrayDataPtr'
     # C30-10 第四十九刀 (2026-11-17): Str$(Single) 改 callee = vb6_StrSng。vb6_Str 的形参是
