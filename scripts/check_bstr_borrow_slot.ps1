@@ -94,7 +94,7 @@ if ($bodyQ4 -eq '') {
 # `return 调用(...)` 是转手、`result` 那种先 alloc 再交是自有; 整份 RTL 的数据流普查(90 枚 BSTR
 # 出口逐枚定档)是手工那一趟, 读数与口径记在台账 §B167, 这条规则钉的是「从此再新增一枚借来的,
 # 名单不跟着长就红」。
-$WantBorrowed = 3
+$WantBorrowed = 4
 $LIST_RE = 'static const char\*\s+kBorrowedBstrExports167\s*\[\s*\]\s*=\s*\{(.*?)\};'
 $NAME_RE = '"(vb6_[A-Za-z0-9_]+)"'
 $DEF_RE = '(?m)^BSTR\s+(vb6_[A-Za-z0-9_]+)\s*\([^)]*\)\s*\{'
@@ -172,5 +172,5 @@ if ($bad.Count -gt 0) {
     $bad | ForEach-Object { Write-Host ('   - ' + $_) }
     exit 1
 }
-Write-Host ('PASS bstr_borrow_slot: 那一问 1 枚定义 / ' + $callQ1 + ' 处调用 / 借用三腿齐 / 硬填站点 ' + $hardTrue) -ForegroundColor Green
+Write-Host ('PASS bstr_borrow_slot: 那一问 1 枚定义 / ' + $callQ1 + ' 处调用 / 借用四腿齐 / 硬填站点 ' + $hardTrue) -ForegroundColor Green
 exit 0

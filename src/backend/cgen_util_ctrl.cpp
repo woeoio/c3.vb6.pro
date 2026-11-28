@@ -3531,9 +3531,12 @@ static bool b167TopIsCall(const std::string& s, size_t at) {
 // `return vb6_err.description;` / `return vb6_err.source;` / `return v->bstrVal;`, 既不 SysAllocString
 // 也不 Copy), 由第 58 道哨兵的 Q6 与 RTL 双向对钉(漏一名、多一名、名单外的新借名都当场红)。
 // 这三枚都不许被当成现造的: 槽一旦接管, 槽的 Clear 放掉的是 Err / 宿主自己那只块。
+// §11.219 (第二百三十六刀): 第五枚同形 —— `vb6_ErrHelpFile` 也是 `return vb6_err.helpFile;`
+// (与 description/source 那对同一个结构体、同一条“赋值存副本、读侧交回原件”的口径)。
 static const char* kBorrowedBstrExports167[] = {
     "vb6_ErrDescription",
     "vb6_ErrSource",
+    "vb6_ErrHelpFile",
     "vb6_ho_variantToBstr",
 };
 

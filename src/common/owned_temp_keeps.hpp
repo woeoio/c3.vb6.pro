@@ -119,7 +119,7 @@ inline const char* const* ownedTempClosedExits() {
 // check_bstr_borrow_slot.ps1 的 Q6 从 RTL 双向推导钉住）。
 inline const char* const* ownedTempBorrowedExits() {
     static const char* const kBorrowed[] = {
-        "vb6_ErrDescription", "vb6_ErrSource", "vb6_ho_variantToBstr",
+        "vb6_ErrDescription", "vb6_ErrSource", "vb6_ErrHelpFile", "vb6_ho_variantToBstr",
         0,                                // 空哨兵（遍历靠它收尾；0 = 空指针常量）
     };
     return kBorrowed;

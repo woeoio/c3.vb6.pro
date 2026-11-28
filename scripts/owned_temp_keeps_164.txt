@@ -273,6 +273,7 @@ vb6_Write|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 # --- 借用轴（返回侧）：这一枚出口交出去的指针是借来的，不归调用方所有 ⇒ 不许放它 ---
 [borrow] vb6_ErrDescription
+[borrow] vb6_ErrHelpFile
 [borrow] vb6_ErrSource
 [borrow] vb6_ho_variantToBstr
 # --- 返回侧所有权：owned = 这一枚交出去的是**新造且归调用方所有**（调用方可以放它）---

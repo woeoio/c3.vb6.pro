@@ -8809,14 +8809,15 @@ if ($Category -in @("all", "run", "vbp")) {
     # 账 #305 第二百四十一刀 (甲): 折叠内置那一族的 named 实参按**名字**落位 (VB6 的命名实参绑形参名)。
     # 判据取真语料里唯一成规模的那一发 Err.Raise Number:= + Description:= —— 改前文案交进 RTL 的第 2 档
     # (source)、Err.Description 留空 (第二百四十刀 A1 的真跑证人)；书写序反着写则两档互换 (ERR-9 那一发)。
+    # §11.219 (第二百三十六刀): 出口名换成五参的 vb6_ErrRaiseEx, 后两档由表补缺省 ((BSTR)0 / 0)。
     Test-EmitcShape "b241_named_arg_slot" @("$Tests\test_err_obj.bas") @(
-        'vb6_ErrRaise(7001, (BSTR)0, vb6_BSTR_FromStr(L"DESC7"))',   # 跳过 source 那一档 = 补它的缺省档
-        'vb6_ErrRaise(7003, vb6_BSTR_FromStr(L"SRC9"), vb6_BSTR_FromStr(L"DESC9"))',  # 书写序与声明序相反也要归位
-        'vb6_ErrRaise(7002, vb6_BSTR_FromStr(L"SRC8"), vb6_BSTR_FromStr(L"DESC8"))'   # 按声明序写: 不许被这刀改坏
+        'vb6_ErrRaiseEx(7001, (BSTR)0, vb6_BSTR_FromStr(L"DESC7"), (BSTR)0, 0)',   # 跳过 source 那一档 = 补它的缺省档
+        'vb6_ErrRaiseEx(7003, vb6_BSTR_FromStr(L"SRC9"), vb6_BSTR_FromStr(L"DESC9"), (BSTR)0, 0)',  # 书写序与声明序相反也要归位
+        'vb6_ErrRaiseEx(7002, vb6_BSTR_FromStr(L"SRC8"), vb6_BSTR_FromStr(L"DESC8"), (BSTR)0, 0)'   # 按声明序写: 不许被这刀改坏
     )
     Test-EmitcAbsent "b241_named_arg_lesion" @("$Tests\test_err_obj.bas") @(
-        'vb6_ErrRaise(7001, vb6_BSTR_FromStr(L"DESC7"), (BSTR)0)',   # 改前: 按书写序把文案塞进 source
-        'vb6_ErrRaise(7003, vb6_BSTR_FromStr(L"DESC9"), vb6_BSTR_FromStr(L"SRC9"))'   # 改前: 两档整个互换
+        'vb6_ErrRaiseEx(7001, vb6_BSTR_FromStr(L"DESC7"), (BSTR)0,',   # 改前: 按书写序把文案塞进 source
+        'vb6_ErrRaiseEx(7003, vb6_BSTR_FromStr(L"DESC9"), vb6_BSTR_FromStr(L"SRC9"),'   # 改前: 两档整个互换
     )
     # 账 #305 第二百四十四刀: 「把一条 C 表达式折成 VB6 的真值」收成唯一主人 conditionTruthExpr。
     # 改前裸 `If <晚绑定调用> Then` 发成 if (vb6_ComCall(...)) —— 测的是堆上 VARIANT 的指针 => 恒真
