@@ -241,8 +241,18 @@ void CCodeGen::visit(BinaryExpr& node) {
         if (mixStrNum113g) {
             std::string strSide = leftStr113g ? left : right;
             std::string numSide = leftStr113g ? right : left;
-            lastExpr_ = "vb6_CStrDbl(vb6_Val(" + strSide + ") + (double)("
-                      + numSide + "))";
+            // §11.227 (第二百四十五刀): String 与数值的 `+` 是**数值加法**（真机
+            // .temp/k233p/P355full E13–E17: "1" + 2 ⇒ 3、n = "1" + 2 ⇒ 3、
+            // s = "1" + 2 ⇒ "3"、"x" + 1.5 ⇒ **13**），不是「把串当 0 的 CStrDbl」。
+            // 改前这一站发 vb6_CStrDbl(vb6_Val(串) + 数) ⇒ 数值目标把 BSTR 指针交给
+            // vb6_ChkLong（运行期 6）、Variant 目标直接 C2440。
+            // 整式交 vb6_VarAddV：串侧装 BSTR 后由 oleaut32 解析（非数字交 13），
+            // 数值侧的档由 VarAdd 自己定 —— 与 VB6 同一个引擎。
+            auto box227 = [&](const std::string& cExpr) -> std::string {
+                if (cExpr.compare(0, 11, "vb6_Variant") == 0) return cExpr;
+                return "vb6_VariantFromValue(" + cExpr + ")";
+            };
+            lastExpr_ = "vb6_VarAddV(" + box227(strSide) + ", " + box227(numSide) + ")";
             return;
         }
     }

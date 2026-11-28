@@ -6,7 +6,8 @@ Option Explicit
 '   ① 任一侧 Null ⇒ 结果 Null：String/Long 目标 94 且目标不变，Variant 目标 IsNull=True；
 '   ② Empty 当 0 / 空串（"x" + Empty ⇒ "x"、1 + Empty ⇒ 1、Empty + Empty ⇒ 0）；
 '   ③ 两侧都是 Null 也是 Null（与 `&` 的「两侧都 Null 才 Null」不同）。
-' E13–E17 是 String+数值那一族（113g），本刀不动，读数留在 .temp/k233p/p355full.txt。
+' E13–E17 是 String+数值那一族：`+` 是**数值加法**（串侧按数值解析，非数字报 13），
+' 读数取自 .temp/k233p/p355full.txt 的同名格。
 Public Sub Main()
     Dim s As String, v As Variant, w As Variant, n As Long
     On Error Resume Next
@@ -50,7 +51,23 @@ Public Sub Main()
     Err.Clear
     s = "x" + Empty
     Debug.Print "E12|num=" & CStr(Err.Number) & "|s=[" & s & "]"
-    ' ④ 变体槽两侧
+    ' ④ String + 数值：数值加法（串侧解析失败 ⇒ 13）
+    Err.Clear
+    v = "1" + "2"
+    Debug.Print "E13|num=" & CStr(Err.Number) & "|[" & CStr(v) & "]"
+    Err.Clear
+    v = "1" + 2
+    Debug.Print "E14|num=" & CStr(Err.Number) & "|[" & CStr(v) & "]"
+    Err.Clear
+    n = "1" + 2
+    Debug.Print "E15|num=" & CStr(Err.Number) & "|n=" & CStr(n)
+    Err.Clear
+    s = "1" + 2
+    Debug.Print "E16|num=" & CStr(Err.Number) & "|s=[" & s & "]"
+    Err.Clear
+    v = "x" + 1.5
+    Debug.Print "E17|num=" & CStr(Err.Number) & "|[" & Err.Description & "]"
+    ' ⑤ 变体槽两侧
     Err.Clear
     v = Null
     w = 1

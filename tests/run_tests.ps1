@@ -14095,7 +14095,12 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "E10|num=0|[0]",
     "E11|num=0|n=1",
     "E12|num=0|s=[x]",
-    "E18|num=94|n=1",
+    "E13|num=0|[12]",
+    "E14|num=0|[3]",
+    "E15|num=0|n=3",
+    "E16|num=0|s=[3]",
+    "E17|num=13|[Type mismatch]",
+    "E18|num=94|n=3",
     "E19|num=94|[Invalid use of Null]",
     "E20|num=0|n=2")
     Test-Vbp 'b250_add_null_face' "$Tests\b250_add_null_face\B250Res.vbp" $b250Needles

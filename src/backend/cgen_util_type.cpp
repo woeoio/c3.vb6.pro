@@ -342,6 +342,25 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
             // 字面量）时，发码交 vb6_VarAddV，C 表达式是整只 vb6_VARIANT ⇒ 这里必须答
             // Variant。与发码站同问 addNeedsVarArith226（一枚判据，两处同一个答案）。
             if (addNeedsVarArith226(expr)) return Vb6Type::Variant;
+            // §11.227 (第二百四十五刀): 一侧 String、另一侧数值的 `+` 是**数值加法**
+            // （发码站交 vb6_VarAddV），结果档由 VarAdd 自己定 ⇒ 这里必须答 Variant。
+            // 不接这一句时 String 目标会把一枚 VARIANT 当 BSTR 用（或反着）。
+            if (bin.op == BinaryOp::Add) {
+                const Vb6Type lt227 = inferExprType(*bin.left);
+                const Vb6Type rt227 = inferExprType(*bin.right);
+                auto num227 = [](Vb6Type t) {
+                    return t == Vb6Type::Long || t == Vb6Type::Integer
+                        || t == Vb6Type::Byte || t == Vb6Type::Boolean
+                        || t == Vb6Type::Double || t == Vb6Type::Single
+                        || t == Vb6Type::Currency || t == Vb6Type::LongPtr
+                        || t == Vb6Type::ULong || t == Vb6Type::SByte
+                        || t == Vb6Type::UInteger || t == Vb6Type::ULongLong
+                        || t == Vb6Type::LongLong;
+                };
+                if ((lt227 == Vb6Type::String && num227(rt227))
+                    || (rt227 == Vb6Type::String && num227(lt227)))
+                    return Vb6Type::Variant;
+            }
             // 比较运算符 → Boolean
             if (bin.op == BinaryOp::Eq || bin.op == BinaryOp::Neq ||
                 bin.op == BinaryOp::Lt || bin.op == BinaryOp::Gt ||
