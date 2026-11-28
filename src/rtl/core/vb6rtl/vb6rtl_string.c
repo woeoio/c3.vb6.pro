@@ -701,21 +701,56 @@ BSTR vb6_Tab(int32_t column) {
 // `StrComp(a,b,vbTextCompare)=0` 会给出不同答案)。CompareStringW 才是 VB6 用的
 // 区域性语言序; 非 Windows / API 失败退到逐字符大小写折叠 (不引 _wcsicmp,
 // 那是不带 C 标准的 MSVC 扩展, 会让非 Win 目标编不过)。
+// §11.234 (第二百五十二刀): 文本档的同一族口径 —— 真机 (.temp/k234p/P368+P369, 29 格)
+// 与 Binary 档**不同**:
+//   T3 `"a" = "a" & Chr$(0)` **True**   (文本档把 NUL **剔掉**再比, 不是当普通字符)
+//   U6 `"ab" = "a" & Chr$(0) & "b"` True   (中段 NUL 也不挡)
+//   U5 `"ab" = "a" & Chr$(0)` False        (剔完长度不同)
+//   U2/U7 `z = ""` / `"" = z & z` False、U8/U9 StrComp = -1/+1
+//        ⇒ 一侧长度 0 而另一侧非 0 一律"不等且空的小", 连剔 NUL 之后相等也不认
+//   T2/T6 `"a" = "a "` False / `"a" < "a "` True  (空格不补)
+static int vb6_TextCmpSpan(const wchar_t* a, int32_t la, const wchar_t* b, int32_t lb) {
+#ifdef _WIN32
+    int r = CompareStringW(LOCALE_USER_DEFAULT, NORM_IGNORECASE,
+                           (LPCWCH)a, (int)la, (LPCWCH)b, (int)lb);
+    if (r >= 1) return (int)r - 2;   // 1=小于 2=相等 3=大于 → -1/0/1
+#endif
+    int32_t n = la < lb ? la : lb;
+    for (int32_t i = 0; i < n; i++) {
+        wchar_t ca = (wchar_t)towlower(a[i]), cb = (wchar_t)towlower(b[i]);
+        if (ca != cb) return (ca < cb) ? -1 : 1;
+    }
+    if (la == lb) return 0;
+    return la < lb ? -1 : 1;
+}
+
 int vb6_TextCmp(const wchar_t* a, const wchar_t* b) {
     if (!a) a = L"";
     if (!b) b = L"";
-#ifdef _WIN32
-    int r = CompareStringW(LOCALE_USER_DEFAULT, NORM_IGNORECASE,
-                           (LPCWCH)a, -1, (LPCWCH)b, -1);
-    if (r == 1) return -1;
-    if (r >= 2) return (int)r - 2;   // 2=相等 3=大于 → 0/1
-#endif
-    for (;;) {
-        wchar_t ca = (wchar_t)towlower(*a), cb = (wchar_t)towlower(*b);
-        if (ca != cb) return (ca < cb) ? -1 : 1;
-        if (ca == L'\0') return 0;
-        a++; b++;
+    int32_t la = vb6_BSTR_Len((BSTR)a);
+    int32_t lb = vb6_BSTR_Len((BSTR)b);
+    // 空 vs 非空: 先判, 且不看内容 (真机 U2 `Chr$(0) = ""` False / U7 `"" = Chr$(0) & Chr$(0)`
+    // False —— 若只按"剔 NUL 后比", 这两格会错成相等)。
+    if (la == 0 || lb == 0) {
+        if (la == lb) return 0;
+        return la == 0 ? -1 : 1;
     }
+    int hasNulA = wmemchr(a, L'\0', (size_t)la) != NULL;
+    int hasNulB = wmemchr(b, L'\0', (size_t)lb) != NULL;
+    if (!hasNulA && !hasNulB) return vb6_TextCmpSpan(a, la, b, lb);
+    // 文本档剔掉所有内嵌 NUL 再比 (CompareStringW 要连续缓冲, 只能落临时缓冲; 有 NUL 才走)。
+    wchar_t* sa = (wchar_t*)malloc(((size_t)la + 1) * sizeof(wchar_t));
+    wchar_t* sb = (wchar_t*)malloc(((size_t)lb + 1) * sizeof(wchar_t));
+    if (!sa || !sb) {
+        free(sa); free(sb);
+        return vb6_TextCmpSpan(a, la, b, lb);
+    }
+    int32_t ka = 0, kb = 0;
+    for (int32_t i = 0; i < la; i++) if (a[i] != L'\0') sa[ka++] = a[i];
+    for (int32_t i = 0; i < lb; i++) if (b[i] != L'\0') sb[kb++] = b[i];
+    int r = vb6_TextCmpSpan(sa, ka, sb, kb);
+    free(sa); free(sb);
+    return r;
 }
 
 int32_t vb6_StrComp(BSTR s1, BSTR s2, int32_t compare) {

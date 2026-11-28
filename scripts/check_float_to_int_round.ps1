@@ -937,8 +937,28 @@ if (@([regex]::Matches($runnerText, 'b256_strcmp_nul\\B256Res\.vbp')).Count -ne 
     $bad += "S34 b256 is not run on both arches"
 }
 
+# ---- S35: Option Compare Text 档的同一族口径 (账 §11.234 第二百五十二刀) ----
+# 真机 P368/P369: 文本档内嵌 NUL **剔掉**再比 (`"a" = "a" & Chr$(0)` True)，但一侧长度 0
+# 而另一侧非 0 一律不等 (`Chr$(0) = ""` False)；空格依旧不补 (`"a" = "a "` False)。
+$str235 = Get-CodeText (Join-Path $root "src\rtl\core\vb6rtl\vb6rtl_string.c")
+if ($str235 -notmatch 'int vb6_TextCmp\(const wchar_t\* a, const wchar_t\* b\)') {
+    $bad += "S35 vb6_TextCmp must exist"
+}
+if ($str235 -notmatch 'if \(la == 0 \|\| lb == 0\) \{') {
+    $bad += "S35 text compare must answer empty-vs-nonempty before content"
+}
+if (-not $str235.Contains("if (a[i] != L'\0') sa[ka++] = a[i];")) {
+    $bad += "S35 text compare must strip embedded NULs"
+}
+if ($str235 -match 'CompareStringW\(LOCALE_USER_DEFAULT, NORM_IGNORECASE,\s*\(LPCWCH\)a, -1') {
+    $bad += "S35 text compare must not fall back to NUL-terminated CompareStringW"
+}
+if (@([regex]::Matches($runnerText, 'b257_text_cmp_nul\\B257Res\.vbp')).Count -ne 2) {
+    $bad += "S35 b257 is not run on both arches"
+}
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table, S24 Error(n) function face, S25 vbNullString null-pointer fidelity, S26 the & operator against Null/Empty, S27 the + operator against Null/Empty, S28 the + operator between a string and a number, S29 Null in & over array elements and UDT/With members, S30 On Error GoTo 0 clears Err and keeps its resume point, S31 the Mid statement edges, S32 the Mid statement remaining edges, S33 the fixed-length string assignment paths and their grid, S34 the string comparison byte length)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table, S24 Error(n) function face, S25 vbNullString null-pointer fidelity, S26 the & operator against Null/Empty, S27 the + operator against Null/Empty, S28 the + operator between a string and a number, S29 Null in & over array elements and UDT/With members, S30 On Error GoTo 0 clears Err and keeps its resume point, S31 the Mid statement edges, S32 the Mid statement remaining edges, S33 the fixed-length string assignment paths and their grid, S34 the string comparison byte length, S35 the text-mode NUL stripping)"

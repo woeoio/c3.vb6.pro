@@ -14237,6 +14237,41 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "D6|varPad=MISS")
     Test-Vbp 'b256_strcmp_nul' "$Tests\b256_strcmp_nul\B256Res.vbp" $b256Needles
     Test-Vbp 'b256_strcmp_nul_x86' "$Tests\b256_strcmp_nul\B256Res.vbp" $b256Needles -Arch "x86"
+    # §11.234 第二百五十二刀: Option Compare Text 档的同一族口径 —— 与 Binary 不同：内嵌 NUL
+    # **剔掉**再比（`"a" = "a" & Chr$(0)` True），但一侧长度 0 而另一侧非 0 一律不等；
+    # 空格依旧不补。真机 P368 / P369。
+    $b257Needles = @(
+    "T1|True",
+    "T2|False",
+    "T3|True",
+    "T4|False",
+    "T5|True",
+    "T6|True",
+    "T7|0",
+    "T8|-1",
+    "T9|0",
+    "T10|1",
+    "T11|True",
+    "T12|False",
+    "T13|False",
+    "T14|varNul=HIT",
+    "T15|varPad=MISS",
+    "U1|True",
+    "U2|False",
+    "U3|False",
+    "U4|True",
+    "U5|False",
+    "U6|True",
+    "U7|False",
+    "U8|-1",
+    "U9|1",
+    "U10|False",
+    "U11|True",
+    "U12|2",
+    "U13|False",
+    "U14|False")
+    Test-Vbp 'b257_text_cmp_nul' "$Tests\b257_text_cmp_nul\B257Res.vbp" $b257Needles
+    Test-Vbp 'b257_text_cmp_nul_x86' "$Tests\b257_text_cmp_nul\B257Res.vbp" $b257Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
