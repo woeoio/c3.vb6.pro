@@ -16511,3 +16511,75 @@ C3 是 **True**。那一格量的不是定长串的收口，而是字符串比�
 
 `Like` 与 NUL 的交互；`InStr` 的文本档（`compare=1`）是否也走同一套剔 NUL 口径；
 `Option Compare Text` 下的非 ASCII 折叠（`ß`/`İ` 这类）—— 都还没量，留在背账。
+
+### §11.235 第二百五十三刀：搜索面遇内嵌 NUL —— `InStr`/`InStrRev` 不截断，`Like` 两侧都按真实长度
+
+§11.233/§11.234 把**比较面**（`=`/`<`/`StrComp`/Select Case）量完了，**搜索面**还空着：
+`InStr`、`InStrRev`、`Like` 遇内嵌 NUL 时是不是也把 NUL 当串尾？
+
+**真机读数**（`.temp/k235p/P370` 15 格、`P371` 13 格，默认 Binary 模块）
+
+| 格 | 表达式 | 真机 | 改前 C3 |
+| --- | --- | --- | --- |
+| V1 | `InStr("a" & Chr$(0), "a")` | 1 | 1 |
+| V2 | `InStr("a" & Chr$(0), Chr$(0))` | **2** | 2 |
+| V3 | `InStr("a" & Chr$(0) & "b", "b")` | **3** | 3 |
+| V5 | `InStrRev("a" & Chr$(0) & "b", "b")` | 3 | 3 |
+| V6 | `InStrRev("a" & Chr$(0) & "b", Chr$(0))` | **2** | 2 |
+| V11 | `InStr("", "")` | **0** | 0 |
+| V12 | `InStrRev("abc", "")` | **3** | 3 |
+| V14 | `InStr(Chr$(0) & Chr$(0) & "x", "x")` | 3 | 3 |
+| V8 | `("a" & Chr$(0) & "b") Like "ab"` | False | False |
+| V9 | `("a" & Chr$(0)) Like "a?"` | **True** | **False** |
+| W1 | `("a" & Chr$(0) & "b") Like "a?b"` | True | True |
+| W2 | `("a" & Chr$(0)) Like "a"` | False | False |
+| W4 | `Chr$(0) Like "?"` | **True** | **False** |
+| W5 | `("a" & Chr$(0)) Like "a[!b]"` | **True** | **False** |
+| W6 | `(Chr$(0) & "5") Like "#5"` | False | False |
+| W7 | `("a" & Chr$(0) & "b") Like "a#b"` | False | False |
+| W9 | `("a" & Chr$(0)) Like ("a" & Chr$(0))` | **True** | **False** |
+| W10 | `("a" & Chr$(0) & "b") Like "a[!x]b"` | **True** | **False** |
+| W11 | `Chr$(0) Like "[]"` | False | False |
+| W12 | `("x" & Chr$(0)) Like ("*" & Chr$(0))` | **True** | **False** |
+
+**规则**
+
+`InStr`/`InStrRev` 本来就是按长度扫的（C3 这 15 格改前全对，只是没进夹具 —— 本刀把它钉住）。
+真正错的是 `Like`：真机把 NUL 当**普通字符**，源串与模式两侧都算 ——
+`?` 吃 NUL、`[!b]` 认 NUL、模式里的 NUL 也照位匹配；只有 `#`（数字）不认，因为它本来只认 `0`-`9`。
+"空 haystack / 空 needle" 的老口径不变（`InStr("","") = 0`、`InStrRev("abc","") = 3`）。
+
+**根因**（`src/rtl/core/vb6rtl/vb6rtl_string.c`）
+
+`likeMatch` 逐指针扫到 `L'\0'` 为止：`?` 看到 NUL 直接答"不匹配"，模式里的 NUL 直接把模式截断。
+
+**改动**
+
+- 新 `likeMatchSpan(src, sn, pat, pn, mode)`：源串与模式都带长度，`*`/`?`/`#`/`[...]` 全按
+  `si < sn` / `pi < pn` 判界；`*` 递归按剩余长度分流。
+- `vb6_LikeC` 从 BSTR 头取两侧长度喂进去（`source`/`pattern` 为 NULL 时长度 0）。
+- 文本形（`mode != 0`）的大小写折叠原样保留。
+
+**附带发现（没在本刀修）**：真机里 `&` 的优先级**高于** `Like`，C3 恰好相反。
+`.temp/k235p/P372`：`VarType(("a" & Chr$(0)) Like "a" & Chr$(0))` 真机 = **11（Boolean）**、
+`Len(CStr(...))` = **4**（"True"），即整句按 `("a"&z) Like ("a"&z)` 解；C3 发码是
+`ConcatFree(CStrBool(Like("a"+z, "a")), z)` ⇒ 答 String。`"ab" Like "a" & "b"` 真机 True（Boolean）、
+`("a" & z) Like "a"` 的 CStr 长 5（"False"）都印证同一个优先级。夹具里凡"模式带 NUL"的格
+一律加括号把优先级隔离掉；这一条进背账，另开一刀。
+
+**验证**
+
+- 夹具 `tests/b258_search_nul`（28 格 = V1..V15 + W1..W13，双架构）：全部按真机读数钉针；
+  改前 6 格错（V9、W4、W5、W9、W10、W12），改后 x64 / x86 逐行一致。
+- 门禁 **S36**：`likeMatchSpan` 带两侧长度、`vb6_LikeC` 喂长度、旧 NUL-terminated `likeMatch`
+  必须已经消失、b258 双架构。
+- `check_owned_temp_keeps`：`vb6_LikeC|0` / `|1` 两行按新形登记为
+  `handoff-reads:vb6_BSTR_Len`（读长度头，与其它读长度函数同档），重 bless 后全绿。
+- 本机 S1..S36 全绿 + `check_owned_temp_keeps` 绿。
+- CI：head `5a5f1d4f` 首跑只红清单两格（+2 新夹具），登记后 `587e067b` → GA **46187435680 = 23/23**。
+
+**留着没动的**
+
+`Like` 与 `&` 的优先级（上面那一条，真机 `&` 紧）；`Like` 的 `*` 在中段 NUL 之后是否回溯
+更深（本刀只量到 W1/W10/W12 这一档）；`InStr` 文本形遇 NUL 是否也走剔 NUL 的文本口径
+（本刀默认 Binary 模块，Text 模块未量）。
