@@ -121,13 +121,25 @@ bool CCodeGen::concatOperandCanBeNull(const Expr& e) const {
         const auto& ma = static_cast<const MemberAccessExpr&>(e);
         std::string lower = ma.memberName;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        return classVariantMembers_.count(lower) != 0;
+        if (classVariantMembers_.count(lower)) return true;
+        // §11.228 (第二百四十八刀): UDT 成员声明成 Variant 也算（真机 P358 F3/F4:
+        // `u.V = Null` 时 `"x" & u.V` ⇒ "x"、两侧都是 Null 时结果 Null）。
+        return inferUdtFieldVb6Type(&e) == Vb6Type::Variant;
+    }
+    // §11.228: `With .V` —— 与成员读同一条类型表（只认 UDT 那一支）。
+    if (e.kind == ASTNodeKind::WithMemberExpr) {
+        return inferUdtFieldVb6Type(&e) == Vb6Type::Variant;
     }
     // 调用/索引: 只认「callee 声明返回 Variant」的那一形 (`f()` / `Property Get f() As Variant`)。
     if (e.kind == ASTNodeKind::IndexOrCallExpr) {
         const auto& call = static_cast<const IndexOrCallExpr&>(e);
         if (call.callee && call.callee->kind == ASTNodeKind::IdentifierExpr) {
             const auto& cid = static_cast<const IdentifierExpr&>(*call.callee);
+            // §11.228: 数组元素 —— 数组声明成 Variant() 时元素能是 Null
+            // （真机 P358 F5/F6: 两侧都是 Null 元素 ⇒ Variant 目标 IsNull=True、String 目标 94）。
+            auto itArr228 = arrayElemTypes_.find(Symbol::toLower(cid.name));
+            if (itArr228 != arrayElemTypes_.end() && itArr228->second == Vb6Type::Variant)
+                return true;
             const Symbol* sym = symTab_.lookup(cid.name);
             if (sym && (sym->kind == SymbolKind::Function
                         || sym->kind == SymbolKind::PropertyGet)) {

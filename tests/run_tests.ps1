@@ -14105,6 +14105,19 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "E20|num=0|n=2")
     Test-Vbp 'b250_add_null_face' "$Tests\b250_add_null_face\B250Res.vbp" $b250Needles
     Test-Vbp 'b250_add_null_face_x86' "$Tests\b250_add_null_face\B250Res.vbp" $b250Needles -Arch "x86"
+    # §11.228 第二百四十八刀: `&` 里 Null 的数组元素 / UDT 成员 / With 成员。
+    # 真机 .temp/k233p/P358：一侧 Null 当空串（F1–F4）、两侧都 Null ⇒ Null（F5 True / F6 94）。
+    $b251Needles = @(
+    "F1|num=0|[x]",
+    "F2|num=0|[y]",
+    "F3|num=0|[x]",
+    "F4|num=0|[x]",
+    "F5|num=0|isnull=True",
+    "F6|num=94|[Invalid use of Null]",
+    "F7|num=0|[xa]",
+    "F8|num=0|[xb]")
+    Test-Vbp 'b251_amp_null_member' "$Tests\b251_amp_null_member\B251Res.vbp" $b251Needles
+    Test-Vbp 'b251_amp_null_member_x86' "$Tests\b251_amp_null_member\B251Res.vbp" $b251Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
