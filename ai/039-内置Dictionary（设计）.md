@@ -16001,3 +16001,61 @@ Null 交回 `NULL` 而不是空 BSTR：`vb6_BSTR_Concat` 把 NULL 当长度 0，
 3. `Mid(s, 1) = ""`（`s` 为零长串）真机报 **5**、程序停；C3 该支未量。
 4. `Null` 参与 `&` 的**成员/数组元素/`With` 成员**那几形仍走旧的 94 口径（`concatOperandCanBeNull` 只认声明过的形 + 标识符/成员/调用/Concat 壳）。
 5. 传 `NULL` 给 Declare 的 `ByVal String` / `ByRef String` 的形（传 0 还是空串指针）未量。
+
+### §11.226 第二百四十四刀：`+` 与 Null / Empty（Null 传播，与 `&` 相反）
+
+上一刀的背账第 1 条：`+` 遇 Null 是另一族，C3 在 `1 + Null` 这一形报 **C2440**。量完发现这一族的形状比背账写的更宽 —— **String 一侧 + Null** 才是编不过的那几格（6 格），而数值侧 + Null 早就走 `vb6_VarAddV` 了。
+
+**真机量了 21 格**（`.temp/k233p/P350` 的 A12 起点 + 新 `P355` 的 15 格 + `P355full` 的 E13–E17）：
+
+| 格 | 语句 | 真机 |
+| --- | --- | --- |
+| E1 | `s = "x" + Null` | `err=94`、`s` 保持原值 |
+| E2 | `s = Null + ""` | `err=94` |
+| E3 | `v = "x" + Null` | `IsNull=True` |
+| E4 | `v = 1 + Null` | `IsNull=True` |
+| E5 | `v = Null + Null` | `IsNull=True` |
+| E6 | `v = Null + ""` | `IsNull=True` |
+| E7 | `v = Null + 1` | `IsNull=True` |
+| E8 | `v = "x" + Empty` | `IsNull=False`、`"x"` |
+| E9 | `v = 1 + Empty` | `1`（Integer） |
+| E10 | `v = Empty + Empty` | `0` |
+| E11 | `n = 1 + Empty` | `1` |
+| E12 | `s = "x" + Empty` | `"x"` |
+| E18 | `n = v + w`（v=Null、w=1） | `err=94`、`n` 不变 |
+| E19 | `s = v + w`（两侧 Null） | `err=94`、`[Invalid use of Null]` |
+| E20 | `n = v + w`（v=Empty、w=2） | `2` |
+| A12 | `v = "1" + Null` | `IsNull=True` |
+
+一句话：**`+` 是 Null 单向传播** —— 任一侧 Null，结果就是 Null；String/Long 目标报 94 且目标一字不动，Variant 目标拿到 `IsNull=True`。这与 `&` 恰好相反（`&` 只有**两侧都** Null 才 Null，一侧 Null 当空串）。`Empty` 在 `+` 里当 0 或空串（由另一侧决定：`"x" + Empty` ⇒ `"x"`、`1 + Empty` ⇒ `1`、`Empty + Empty` ⇒ `0`）。
+
+**改前（C3）**：`1 + Null` / `Null + 1` / `Null + Null` 已经走 `vb6_VarAddV`（正确）；但**只要有一侧是 String 字面量**，整式就掉进 113g 的数值臂：
+
+```c
+vb6_BSTR_AssignMove(&s, vb6_CStrDbl(vb6_Val(vb6_BSTR_FromStr(L"x")) + (double)(vb6_VariantNull())));
+```
+
+`vb6_VARIANT` 没有到 `double` 的转换 ⇒ P355 里 **6 格 C2440**；`v = "x" + Empty` 还会把 `vb6_CStrDbl(...)` 这枚 BSTR 直接赋给 `vb6_VARIANT`（同一条 C2440 的另一面）。
+
+**实现：一枚判据，两个问主**
+
+- `addNeedsVarArith226`（`cgen_expr_binary_util.cpp`）：`+` 且**任一侧能是 Null**（Null 字面量 / 声明成 Variant，复用 §11.225 的 `concatOperandCanBeNull`）**或任一侧是 Empty 字面量**。Empty 必须一起收：`"x" + Empty` 的正确答案 `"x"` 只有 VarAdd 给得出（113g 的 `Val("x")` 是 0）。
+- 发码站（`cgen_expr_binary.cpp`）：整式交 `vb6_VarAddV(box(左), box(右))`，发生在 113g **之前**。oleaut32 的 `VarAdd` 就是 VB6 的 Variant 加法引擎（Null 传播、Empty 折算、`"x"+1.5 ⇒ 13` 都是它自己的口径）。装箱照 `isVariantSlot` 分派，`vb6_VariantNull()` / `vb6_VariantEmpty()` 原样递。
+- 类型 oracle（`cgen_util_type.cpp`）：同一枚判据答 **Variant**（C 表达式是整只槽，oracle 必须跟着）；String 目标因此走既有的变体严格出口（94、目标不变），Long 目标走 `vb6_VariantToLong`（94、目标不变）。三条路都由既有的赋值站收口，本刀没有新开出口。
+
+**验证**
+
+- 探针 `P355`（15 格）改后与真机**逐格相同**（x64/x86 一致）；`P350` 的 A12 也一并对上。
+- 夹具 `tests/b250_add_null_face`（15 格，工程名 `B250Res`），针脚取自同一份源码的 VB6 孪生 `P355`。
+- `check_float_to_int_round.ps1` 新增 **S27**（现 S1..S27）：`addNeedsVarArith226` 恰好一处定义、必须与 `concatOperandCanBeNull` 同源、发码站必须问它并发 `vb6_VarAddV`、`inferExprType` 问同一枚、b250 两架构都在跑。
+- 本机 16 条门禁全绿。
+- CI 走了一趟弯路：第一版夹具（head `f79bfa5f`）用 `Print #f` 落文件，而 harness 只收 `Debug.Print` 的 **stdout** ⇒ `Tests (vbp #3)` / `Tests (vbp #4)` 两个分片都报 `b250 ... FAIL (output mismatch)`、`Got:` 为空。夹具改成 `Debug.Print`（head `aef11847`，孪生仍用 `Print #f`）后两个分片全绿 —— **夹具跟 harness 说话，探针跟文件说话**，这一条记下来。
+- head `aef11847` → 21/23（只剩 `Emit manifest (shape oracle)` 与 `[STATIC] manifest_coverage`）→ 按 CI 清单 `c756e201` 登记（改写 **12** 行、新增 2 行）→ head `18023f14` → GA **46135201191 = 23/23 success**（12 个 vbp 分片全绿）。
+
+那 12 份形状变化全落在「Variant 参与 `+` 而另一侧是 String」的族上，正好印证判据的边界：`b238_variant_store_abort`（bas+vbp）、`p2_array_variant`（bas+vbp）、`test_fe_slot_leak`、`test_joinfilter`、`test_variant_boxing`、`vb6probe/NullOpsProbe`、`VbQRCodegen`（bas+vbp）、`ucSlider_2022`、`Charts 2020`。
+
+**背账**
+
+1. **String + 数值（113g）那一族仍未动**，读数在 `.temp/k233p/p355full.txt`：`v = "1" + 2` 与 `v = "x" + 1.5` 在 C3 里仍 **C2440**（BSTR → VARIANT）；`n = "1" + 2` 把 BSTR 交给 `vb6_ChkLong`（真机 3）；`s = "1" + 2` 侥幸打出 `"3"`；`"x" + 1.5` 真机报 13、C3 打 `"1.5"`。这一族该不该整体换到 `vb6_VarAddV`（连带 `"abc" + 1` 从宽松 0 变成 13）要单独一刀拍。
+2. `+` 里 Empty 与非 String 侧（`Empty + #1/1/2000#`、`Empty + True`）未量。
+3. §11.225 的其余背账仍在：`On Error GoTo 0` 不清 Err、`Mid(s,1) = ""`（零长串）报 5、成员/数组元素的 Null 走旧口径、Declare 传 NULL。
