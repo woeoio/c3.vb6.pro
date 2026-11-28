@@ -16200,3 +16200,50 @@ vb6_CStrDbl(vb6_Val(<str>) + (double)(<num>))
 2. 处理器体内的 `On Error ...` 仍不发 resume 点（handler 不在保护区内，VB6 里能不能从 handler 再 `Resume Next` 回一条 `On Error` 语句没量）。
 3. `Error` 语句（`Error 5`）与 `On Error GoTo 0` 相邻、`On Error GoTo -1`（VB.NET 形）等边角未量。
 4. §11.226/§11.227 余下的背账仍在：String+数值 的结果子类型、`Empty + 日期/布尔`、`Mid(s,1) = ""`（零长串报 5）、`Declare` 传 NULL。
+
+### §11.230 第二百四十八刀：Mid 语句的边角（零长串 / 越界起点 / 显式长度 0 / 负长 / Variant 目标）
+
+交接账上「`Mid(s,1) = ""` 零长串报 5」这一条一直没接。本刀把 Mid 语句整片边角逐格复量，发现 C3 与真机差的不止那一格。
+
+**真机读数**（`.temp/k233p/P359`，14 格，`Print #f` 落文件）
+
+| 格 | 语句（`s` 的值） | 真机 |
+| --- | --- | --- |
+| M1 | `s=""`：`Mid(s,1)=""` | **5**，`s` 仍 `""` |
+| M2 | `s=""`：`Mid(s,1)="x"` | **5**，不动 |
+| M3 | `s=""`：`Mid(s,1,0)="x"` | **5**，不动 |
+| M4 | `s="abc"`：`Mid(s,2)=""` | 0，`abc`（缺省长度 + 空替换 = 不动作） |
+| M5 | `s="abc"`：`Mid(s,2,0)="z"` | **0，`abc`**（显式长度 0 = 不动作、不报错） |
+| M6 | `s="abc"`：`Mid(s,0)="z"` | **5**，不动 |
+| M7 | `s="abc"`：`Mid(s,5)="z"` | **5**，不动 |
+| M8 | `s="abc"`：`Mid(s,4)=""` | **5**，不动（起点 = Len+1 也是 5，与替换串无关） |
+| M9 | `s="abc"`：`Mid(s,2)="z"` | 0，`azc` |
+| M10 | `s="abc"`：`Mid(s,2,5)="z"` | 0，`azc`（长度向剩余字符夹紧） |
+| M11 | `s="abc"`：`Mid(s,-1)="z"` | **5** |
+| M12 | `s="abc"`：`Mid(s,2,-1)="z"` | **5，`abc`**（负长度 = 5 且不动作） |
+| M13 | `v=Null`：`Mid(v,1)="z"` | **94**，`v` 仍是 Null（vt=1） |
+| M14 | `v=""`：`Mid(v,1)=""` | **5**，`v` 仍是 `""`（vt=8） |
+
+**改前 C3**：M1/M2/M3/M6/M7/M8/M11 全答 0（静默返回），M5 打成 `azc`（把显式 0 当成「省略」），M12 打成 `azc`（负长照样替换），M13/M14 直接**中断**（`vb6_MidSet(&v, ...)` 把 VARIANT 地址当 `BSTR*` 写）。
+
+**实现**
+
+- `vb6_MidSet` 改返回 `int32_t` 并多一枚 `hasLen`：零长目标、起点越界、负长三条都 `vb6_RaiseError(5, ...)` 后**不写目标**；`hasLen && len==0` 直接不动作。旧签名用 `len==0` 兼表「省略」与「显式 0」，M5 的病根就在这里。
+- 新增 `vb6_MidSetV`：Null 先报 94；其余在**工作拷贝**上改，`vb6_MidSet` 返回非 0（Resume Next 下报错返回）就丢弃拷贝、目标保持原值；成功才 `VariantClear` + 写回 BSTR 档。
+- 发码两站（`visit(MidStmt)` 与 AssignmentStmt 回退）都传 `hasLen`；目标是 Variant 标识符/成员时走 `MidSetV`（`&v` 的地址形状才对）。
+
+**验证**
+
+- 真机孪生 `P359`：14 格 x64/x86 **逐字一致**（改前差 8 格且 M13/M14 不打印）。
+- 夹具 `tests/b253_mid_stmt_edges`（14 格，双架构）；`b251` 8 格、`b252` 9 格无回归。
+- 门禁新增 **S31**（现 S1..S31）：`hasLen` 形参、显式 0 不动作、负长报 5、Null⇒94、`MidSetV`、b253 双架构。
+- **KEEPS 表连带**：`check_owned_temp_keeps.ps1` 的 K5/K13d 先红 —— 形参从 4 变 5、新函数 `vb6_MidSetV` 的 `VariantClear(target)` 落在消费轴上。按口径处理：`kConsumes` 增 `vb6_MidSetV|0`（出参清一次是语义要求，免得发码侧再放一次），快照重登。
+- CI：head `83fb7655` → `manifest_coverage`（b253 未登记）+ `owned_temp_keeps`（K5/K13d）两处红 → 补表后 head `0e165960` → 只剩 `manifest_coverage` → 按清单 `7ca5d1d0` 登记（4 行）→ head `c3710491` → GA **46152021396 = 23/23 success**。
+
+**背账**
+
+1. 定长串目标（`Dim s As String * 10`）与 `Mid$` / `Mid` 两写法未量。
+2. Variant **Empty**（不是 `""`）目标未量；现在按零长串 ⇒ 5。
+3. 替换串本身是 Null（`Mid(s,1)=NullVar`）未量。
+4. 显式长度 >0 但替换串为空（`Mid("abc",2,2)=""`）未量；现口径是先按替换串长夹紧 ⇒ 不动作。
+5. §11.226/§11.227 余项原样保留：String+数值结果子类型、`Empty + 日期/布尔`、`Declare` 传 NULL。
