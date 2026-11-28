@@ -101,17 +101,42 @@ bool CCodeGen::concatOperandCanBeNull(const Expr& e) const {
         // 只有 Null 字面量能是 Null。Empty（以及数值/串/日期）永远不是 Null。
         return lit.literalKind == LiteralKind::Null;
     }
-    // inferExprType 的形参是历史签名 (Expr&)，常量性对推断结果无影响 —— 不改它。
-    if (inferExprType(const_cast<Expr&>(e)) != Vb6Type::Variant) return false;
-    // inferExprType 对**未知符号**也答 Variant（历史回退口径），而未知符号里大量是真
-    // BSTR 变量 —— 那族已被 wrapToBSTR 用 knownBstrVars_ 洗过一轮，这里同口径跟随，
-    // 否则 `s & t` 这种普通串拼接会整片改道（= 发码面翻面的风险远大于收益）。
+    // 其余只认**真声明成 Variant** 的那几形。猜错代价不对称:
+    //   · 把「未必是 Null」当成能 Null ⇒ 串走 AmpStr，静态档也跟着变 Variant ⇒
+    //     控件属性 getter 那类「inferExprType 回退 Variant」的表达式整片改道（实测
+    //     tests/ctrlsstab 的 TabCaption/TabToolTipText 四条检查点全丢，值成了空串）；
+    //   · 把真 Variant 当成不能 Null ⇒ 只是维持改前的旧口径（94），不新增错值。
+    // 所以这里宁可窄: 只收声明过的那几形，inferExprType 的 Variant 回退不参与判断。
     if (e.kind == ASTNodeKind::IdentifierExpr) {
-        std::string lower = static_cast<const IdentifierExpr&>(e).name;
+        const auto& id = static_cast<const IdentifierExpr&>(e);
+        std::string lower = id.name;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
         if (knownBstrVars_.count(lower)) return false;
+        if (knownVariantVars_.count(lower)) return true;
+        const Symbol* sym = symTab_.lookup(id.name);
+        return sym && sym->type == Vb6Type::Variant;
     }
-    return true;
+    // 成员读: 只认工程里声明成 Variant 的成员 (与赋值站 classVariantMembers_ 同源)。
+    if (e.kind == ASTNodeKind::MemberAccessExpr) {
+        const auto& ma = static_cast<const MemberAccessExpr&>(e);
+        std::string lower = ma.memberName;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        return classVariantMembers_.count(lower) != 0;
+    }
+    // 调用/索引: 只认「callee 声明返回 Variant」的那一形 (`f()` / `Property Get f() As Variant`)。
+    if (e.kind == ASTNodeKind::IndexOrCallExpr) {
+        const auto& call = static_cast<const IndexOrCallExpr&>(e);
+        if (call.callee && call.callee->kind == ASTNodeKind::IdentifierExpr) {
+            const auto& cid = static_cast<const IdentifierExpr&>(*call.callee);
+            const Symbol* sym = symTab_.lookup(cid.name);
+            if (sym && (sym->kind == SymbolKind::Function
+                        || sym->kind == SymbolKind::PropertyGet)) {
+                return sym->type == Vb6Type::Variant;
+            }
+        }
+        return false;
+    }
+    return false;
 }
 
 std::string CCodeGen::concatOperandToBSTR(const std::string& expr, Expr& node) {
@@ -123,6 +148,18 @@ std::string CCodeGen::concatOperandToBSTR(const std::string& expr, Expr& node) {
         return "vb6_AmpStr(vb6_VariantEmpty())";
     }
     if (!concatOperandCanBeNull(node)) return wrapToBSTR(expr, node);
+    // COM 后期绑定读数回来的**不是** vb6_VARIANT 本体（vb6_ComCall / vb6_ComGetProp 交的是
+    // `void*` 指向的 VARIANT，vb6_ComCallObject 交的是 IDispatch*）—— 直接套
+    // VariantFromValue 会把指针当值。与 wrapToBSTR 那几支同口径先折成 vb6_VARIANT。
+    if (expr.compare(0, 18, "vb6_VariantFromComResult(") == 0) return "vb6_AmpStr(" + expr + ")";
+    if (expr.compare(0, 12, "vb6_ComCall(") == 0
+        || expr.compare(0, 20, "vb6_ComCallByDispid(") == 0
+        || expr.compare(0, 15, "vb6_ComGetProp(") == 0) {
+        return "vb6_AmpStr(vb6_VariantFromComResult(" + expr + "))";
+    }
+    if (expr.compare(0, 18, "vb6_ComCallObject(") == 0) {
+        return "vb6_AmpStr(vb6_VariantFromComResult(vb6_ComGetDefaultValue(" + expr + ")))";
+    }
     // 字面量 Null / 真 Variant 槽: 折成 vb6_AmpStr（Null⇒NULL、Empty⇒""、其余 CStr）。
     // 已是 vb6_VARIANT 的表达式原样进；其余（未知符号回退的）用 VariantFromValue 包一层
     // —— 与 wrapToBSTR 的 Variant 臂同一个包法（_Generic 按 C 实参类型分派）。
