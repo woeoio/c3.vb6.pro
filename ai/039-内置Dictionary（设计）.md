@@ -15689,3 +15689,83 @@ x86  P1=FFFFFFFF/37777777777/lenb=4     ← 本来就是 8 位（碰巧对）
 1. `Hex(ObjPtr(x))` 这类把**对象指针**塞进 Hex 的形（`ObjPtr` 的静态档若答 `LongPtr`）今天也会走 16 位那一档 —— twinBASIC 未量此形，按同一规则推的。
 2. `ULongLong` 仍无台面读数（twinBASIC 认不出这个类型名）。
 3. `Err.Description` 默认表里未量过的号仍是空串。
+
+
+### §11.222 第二百四十刀：`Err.Description` 的默认表 —— 11 枚补到 87 枚
+
+**判据是真机一键扫**（`.temp/k230p/P335`，VB6Mini）：
+
+```vb
+For n = 1 To 4000
+    Err.Clear
+    Err.Raise n
+    If Len(Err.Description) > 0 Then Print #f, CStr(n) & "|" & Err.Description
+Next
+```
+
+4000 个号里**只有 87 个**给的是自己的文本，其余 3913 个一律是同一句兜底话 ——
+`Application-defined or object-defined error`。也就是说 VB6 的错误表不是「稀疏地补几句」，
+而是「一张 87 行的表 + 一句兜底」。C3 之前只有 11 行、其余给空串，与真机三处不同。
+
+**87 行表（节选，全表在 `vb6rtl.c`）**
+
+| 号 | 文本 |
+| --- | --- |
+| 3 | `Return without GoSub` |
+| 7 | `Out of memory` |
+| 28 | `Out of stack space` |
+| 35 | `Sub or Function not defined` |
+| 48 | `Error in loading DLL` |
+| 51 | `Internal error` |
+| 52 / 53 / 54 / 55 / 57 / 58 / 59 / 61 / 62 / 63 / 67 | 文件一族（`Bad file name or number` … `Too many files`） |
+| 68 / 70 / 71 / 74 / 75 / 76 | 设备与路径一族 |
+| 91 / 92 / 93 / 94 / 96 / 97 / 98 | 对象与 Null 一族 |
+| 321 / 322 / 325 | 资源与临时文件 |
+| 380 / 381 / 382 / 383 / 385 / 387 / 393 / 394 | 属性一族 |
+| 422 / 423 / 424 / 429 / 430 / 432 / 438 / 440 / 442 / 443 | Automation 一族 |
+| 445 … 463 | 同上（`Object doesn't support this action` … `Class not registered on local machine`） |
+| 481 / 482 / 735 / 744 / 746 | 图片 / 打印 / TEMP / 查找替换 |
+
+既有那 11 行（5/6/9/11/13/20/94/438/450/457/481）逐字与扫描结果相同 —— 没漂。
+
+**三条边缘（P336 / P337 / P338）**
+
+| 格 | 语句 | 真机 |
+| --- | --- | --- |
+| G1 | `Err.Raise 9999` | `9999` / `Application-defined or object-defined error` |
+| H4 | `Err.Raise -1, "s3", "d3"` | `-1` / `d3` / `s3`（显式值原样留） |
+| H5 | `Err.Raise -1` | `-1` / `Automation error` |
+| H6 | `Err.Raise 9999, "s6", ""` | `9999` / **空串**（显式空串算「有值」，不被兜底句替掉） |
+| H1/H2 | `Err.Raise 0`（带不带参） | **`5`** / `Invalid procedure call or argument` / 工程名 —— 连 `s0`/`d0` 都丢 |
+| H3 | `Err.Raise 65536, "s2", "d2"` | 同上 |
+| K1..K3 | 非法号前先放 `Err.HelpFile = "hf0"` / `HelpContext = 77` | 两格**原样留着**（新给的 `hf2`/`99` 不生效） |
+| K4 | 合法号的五参 | 正常写 |
+
+所以「非法号」不是「静默忽略」，而是**换成一次新的 5 号错误**：号与描述都换，help 两格不动。
+
+**改法**
+
+1. `vb6_ErrDefaultDescription`：11 个 `case` → **87 个**；负数号先分出去答 `Automation error`；`default` 从 `NULL` 改成兜底句。
+2. `vb6_ErrRaiseEx`：开头加一道号门
+
+   ```c
+   if (errNum == 0 || errNum > 65535) { vb6_ErrRaise(5, NULL, NULL); return; }
+   ```
+
+   位置刻意在写 `helpFile`/`helpContext` **之前** —— 真机 K2 就是这条位置关系的证据（新给的 hf2/99 不生效、旧的 hf1/88 留着）。三参的 `vb6_ErrRaise` 不动（仓里 34 处 raise 站点都走它，内部 raise 不做号校验）。
+3. 描述文本是 VB6 运行期资源里的 en-US 文本（CI 也是 en-US）；别的语言 VB6 会给别的文本，本表不追，也不做本地化。
+
+**验证**
+
+- 探针 `.temp/k230p/P339`（改后 C3）：13 格与 P336/P337/P338 逐格相同，含 `G5`/`G6` 的 `5 / Invalid procedure call or argument / hf 保留 / src=工程名`。
+- 夹具 `tests/b246_err_default_desc`（13 格，工程名 `B246Res`），双架构针脚相同（描述文本与架构无关）。
+- 既有三份 Err 夹具复跑，读数一字未动：`b241` E1..E10、`b242` A1..A10、`b243` B1..B9（兜底句只在「未登记号且没给描述」时才出现，这三份不落那一格）。
+- `check_float_to_int_round.ps1` 新增 **S23**（现 S1..S23）：(a) 表里 case 数 ≥ 80；(b) 负数号答 `Automation error`；(c) `default` 是兜底句而不是 `NULL`；(d) 号门存在且位置在 `helpFile` 写之前；(e) b246 两架构都在跑。
+- 本机 16 条门禁全绿。
+- CI：head `6b7c095d` → 21/23（只剩 `Emit manifest` + `compile #1` 的 `manifest_coverage` K1 —— b246 两份输入未登记）；按 CI 清单 `5d64799b` 登记（**只多出 b246 那 2 行**，既有 984 行一行未动 —— 兜底句住在 RTL、不进 `--emit-c`，所以语料发码形状不受影响）→ head `c002b4fd` → GA **46111661206 = 23/23 success**（12 个 vbp 分片全绿，说明既有夹具没有一格依赖「未登记号给空串」）。
+
+**背账**
+
+1. 表里的 87 行取自 **en-US** VB6 资源；多语言 VB6 的文本差异未量、不追。
+2. 号 > 65535 的「改报 5」只做在五参 `vb6_ErrRaiseEx` 上 —— 三参 `vb6_ErrRaise` 是内部站点专用，未加校验（真机无从对照）。
+3. `Err.Raise` 的号门在**拒绝**这次 raise 时，`HelpFile`/`HelpContext` 保留旧值是量过的；但 `Err.Number`/`Description` 被换成 5 那套之后，`Err.Source` 走的是工程名播种 —— negative 号那一支的 `Source` 未单独量。
