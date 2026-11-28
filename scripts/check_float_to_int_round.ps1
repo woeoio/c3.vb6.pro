@@ -655,8 +655,35 @@ if (@([regex]::Matches($runnerText, 'b245_hex_oct_longptr\\B245Res\.vbp')).Count
     $bad += "S22 b245 is not run on both arches (the two rungs differ per arch)"
 }
 
+# ---- S23: Err.Description 的默认表 (账 §11.222 第二百四十刀) ----
+# 判据是真机一键扫 (.temp/k230p/P335: 1..4000 里只有 87 个号给的不是兑底句)。
+# 四条：(a) 表里至少 80 个 case（少一枚就是回退）；(b) 负数号走 Automation error；
+#       (c) default 是兑底句而不是 NULL/空串；(d) `Err.Raise` 的号校验在写 help 两格**之前**
+#       （真机 P338 K2: 非法号时新给的 hf2/99 不生效、旧的 hf1/88 留着）。
+$rtl222 = Get-CodeText (Join-Path $root "src\rtl\core\vb6rtl\vb6rtl.c")
+$descCases = @([regex]::Matches($rtl222, 'case +\d+: +return vb6_BSTR_FromStr\(L"')).Count
+if ($descCases -lt 80) { $bad += ("S23 Err default-description table = " + $descCases + " cases (want >= 80, real machine says 87)") }
+if ($rtl222 -notmatch 'if \(errNum < 0\) return vb6_BSTR_FromStr\(L"Automation error"\)') {
+    $bad += "S23 negative error numbers no longer answer 'Automation error'"
+}
+if ($rtl222 -notmatch 'default: +return vb6_BSTR_FromStr\(L"Application-defined or object-defined error"\)') {
+    $bad += "S23 unregistered numbers must answer the generic sentence, not NULL"
+}
+if ($rtl222 -notmatch 'if \(errNum == 0 \|\| errNum > 65535\) \{ vb6_ErrRaise\(5, NULL, NULL\); return; \}') {
+    $bad += "S23 the number gate of Err.Raise is gone (0 / >65535 must become error 5)"
+}
+$raiseExAt = $rtl222.IndexOf('void vb6_ErrRaiseEx')
+$gateAt = $rtl222.IndexOf('vb6_ErrRaise(5, NULL, NULL); return;')
+$helpAt = if ($raiseExAt -ge 0) { $rtl222.IndexOf('vb6_err.helpFile = vb6_BSTR_FromStr(helpFile);', $raiseExAt) } else { -1 }
+if ($raiseExAt -lt 0 -or $gateAt -lt 0 -or $helpAt -lt 0 -or $gateAt -gt $helpAt) {
+    $bad += "S23 the number gate must run before the helpFile write (a rejected raise keeps both help cells)"
+}
+if (@([regex]::Matches($runnerText, 'b246_err_default_desc\\B246Res\.vbp')).Count -ne 2) {
+    $bad += "S23 b246 is not run on both arches"
+}
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table)"

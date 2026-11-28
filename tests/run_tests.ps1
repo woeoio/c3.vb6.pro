@@ -13997,6 +13997,25 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "P9=FFFF/177777")
     Test-Vbp 'b245_hex_oct_longptr' "$Tests\b245_hex_oct_longptr\B245Res.vbp" $b245x64
     Test-Vbp 'b245_hex_oct_longptr_x86' "$Tests\b245_hex_oct_longptr\B245Res.vbp" $b245x86 -Arch "x86"
+    # §11.222 第二百四十刀: Err.Description 的默认表（11 枚 → 87 枚 + 三条边缘）。
+    # 真机一键扫 .temp/k230p/P335: 1..4000 里只有 87 个号不是兑底句；
+    # P336/P337: 9999 兑底、-1 Automation error、0 与 65536 改报 5；P338: 非法号不动 help 两格。
+    $b246Needles = @(
+    "D1=3/Return without GoSub",
+    "D2=28/Out of stack space",
+    "D3=53/File not found",
+    "D4=91/Object variable or With block variable not set",
+    "D5=424/Object required",
+    "D6=481/Invalid picture",
+    "D7=746/Replacements too long",
+    "D8=9999/Application-defined or object-defined error",
+    "D9=-1/Automation error",
+    "D10=-1/d3/s3",
+    "D11=9999/[]",
+    "D12=5/Invalid procedure call or argument/hf=hf0/hc=77/src=B246Res",
+    "D13=5/Invalid procedure call or argument/hf=hf1/hc=88/src=B246Res")
+    Test-Vbp 'b246_err_default_desc' "$Tests\b246_err_default_desc\B246Res.vbp" $b246Needles
+    Test-Vbp 'b246_err_default_desc_x86' "$Tests\b246_err_default_desc\B246Res.vbp" $b246Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

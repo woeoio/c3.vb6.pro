@@ -888,20 +888,106 @@ int vb6_ErrSourceIsInternal(BSTR src) {
 
 // 号 → 默认描述: 只在调用方没给描述时用（真机 E9 = 11/"Division by zero"）。
 // 表只登记**已经量过**的那几枚，没量的宁可留空 —— 编一句没读数的文本比空串更坏。
+// §11.222 (第二百四十刀): 表从 11 枚补到 **87 枚** —— 判据是真机一键扫出来的
+// (.temp/k230p/P335: For n = 1 To 4000: Err.Clear: Err.Raise n: ? Err.Description)：
+// 4000 个号里只有 87 个给的是自己的文本，其余一律 VB6 的兜底句。三条边缘读数 (.temp/k230p/P336/P337/P338):
+//   (a) 未登记的 1..65535 号 ⇒ "Application-defined or object-defined error"（不是空串）；
+//   (b) 负数号 ⇒ "Automation error"（P336 的 -1/-5、P337 的 H5）；
+//   (c) 号 = 0 或 > 65535 时 VB6 **不认这个 raise**，改报 5（P336 0/65536、P337 的 H1/H3），
+//       连显式描述的 s0/d0 也丢掉；先前那两格 help 值原样留着（P338 的 K1/K2/K3）。
+// 这些文本来自 VB6 运行期资源，是 en-US 的（CI 也是 en-US）；别的语言 VB6 会给别的文本，本表不追。
 BSTR vb6_ErrDefaultDescription(int32_t errNum) {
+    // (b) 负数号：VB6 把负数一律当 Automation 错误。
+    if (errNum < 0) return vb6_BSTR_FromStr(L"Automation error");
     switch (errNum) {
-        case 5:   return vb6_BSTR_FromStr(L"Invalid procedure call or argument");
-        case 6:   return vb6_BSTR_FromStr(L"Overflow");
-        case 9:   return vb6_BSTR_FromStr(L"Subscript out of range");
-        case 11:  return vb6_BSTR_FromStr(L"Division by zero");
-        case 13:  return vb6_BSTR_FromStr(L"Type mismatch");
-        case 20:  return vb6_BSTR_FromStr(L"Resume without error");
-        case 94:  return vb6_BSTR_FromStr(L"Invalid use of Null");
-        case 438: return vb6_BSTR_FromStr(L"Object doesn't support this property or method");
-        case 450: return vb6_BSTR_FromStr(L"Wrong number of arguments or invalid property assignment");
-        case 457: return vb6_BSTR_FromStr(L"This key is already associated with an element of this collection");
-        case 481: return vb6_BSTR_FromStr(L"Invalid picture");
-        default:  return NULL;
+        case    3: return vb6_BSTR_FromStr(L"Return without GoSub");
+        case    5: return vb6_BSTR_FromStr(L"Invalid procedure call or argument");
+        case    6: return vb6_BSTR_FromStr(L"Overflow");
+        case    7: return vb6_BSTR_FromStr(L"Out of memory");
+        case    9: return vb6_BSTR_FromStr(L"Subscript out of range");
+        case   10: return vb6_BSTR_FromStr(L"This array is fixed or temporarily locked");
+        case   11: return vb6_BSTR_FromStr(L"Division by zero");
+        case   13: return vb6_BSTR_FromStr(L"Type mismatch");
+        case   14: return vb6_BSTR_FromStr(L"Out of string space");
+        case   16: return vb6_BSTR_FromStr(L"Expression too complex");
+        case   17: return vb6_BSTR_FromStr(L"Can't perform requested operation");
+        case   18: return vb6_BSTR_FromStr(L"User interrupt occurred");
+        case   20: return vb6_BSTR_FromStr(L"Resume without error");
+        case   28: return vb6_BSTR_FromStr(L"Out of stack space");
+        case   35: return vb6_BSTR_FromStr(L"Sub or Function not defined");
+        case   47: return vb6_BSTR_FromStr(L"Too many DLL application clients");
+        case   48: return vb6_BSTR_FromStr(L"Error in loading DLL");
+        case   49: return vb6_BSTR_FromStr(L"Bad DLL calling convention");
+        case   51: return vb6_BSTR_FromStr(L"Internal error");
+        case   52: return vb6_BSTR_FromStr(L"Bad file name or number");
+        case   53: return vb6_BSTR_FromStr(L"File not found");
+        case   54: return vb6_BSTR_FromStr(L"Bad file mode");
+        case   55: return vb6_BSTR_FromStr(L"File already open");
+        case   57: return vb6_BSTR_FromStr(L"Device I/O error");
+        case   58: return vb6_BSTR_FromStr(L"File already exists");
+        case   59: return vb6_BSTR_FromStr(L"Bad record length");
+        case   61: return vb6_BSTR_FromStr(L"Disk full");
+        case   62: return vb6_BSTR_FromStr(L"Input past end of file");
+        case   63: return vb6_BSTR_FromStr(L"Bad record number");
+        case   67: return vb6_BSTR_FromStr(L"Too many files");
+        case   68: return vb6_BSTR_FromStr(L"Device unavailable");
+        case   70: return vb6_BSTR_FromStr(L"Permission denied");
+        case   71: return vb6_BSTR_FromStr(L"Disk not ready");
+        case   74: return vb6_BSTR_FromStr(L"Can't rename with different drive");
+        case   75: return vb6_BSTR_FromStr(L"Path/File access error");
+        case   76: return vb6_BSTR_FromStr(L"Path not found");
+        case   91: return vb6_BSTR_FromStr(L"Object variable or With block variable not set");
+        case   92: return vb6_BSTR_FromStr(L"For loop not initialized");
+        case   93: return vb6_BSTR_FromStr(L"Invalid pattern string");
+        case   94: return vb6_BSTR_FromStr(L"Invalid use of Null");
+        case   96: return vb6_BSTR_FromStr(L"Unable to sink events of object because the object is already firing events to the maximum number of event receivers that it supports");
+        case   97: return vb6_BSTR_FromStr(L"Can not call friend function on object which is not an instance of defining class");
+        case   98: return vb6_BSTR_FromStr(L"A property or method call cannot include a reference to a private object, either as an argument or as a return value");
+        case  321: return vb6_BSTR_FromStr(L"Invalid file format");
+        case  322: return vb6_BSTR_FromStr(L"Can't create necessary temporary file");
+        case  325: return vb6_BSTR_FromStr(L"Invalid format in resource file");
+        case  380: return vb6_BSTR_FromStr(L"Invalid property value");
+        case  381: return vb6_BSTR_FromStr(L"Invalid property array index");
+        case  382: return vb6_BSTR_FromStr(L"Set not supported at runtime");
+        case  383: return vb6_BSTR_FromStr(L"Set not supported (read-only property)");
+        case  385: return vb6_BSTR_FromStr(L"Need property array index");
+        case  387: return vb6_BSTR_FromStr(L"Set not permitted");
+        case  393: return vb6_BSTR_FromStr(L"Get not supported at runtime");
+        case  394: return vb6_BSTR_FromStr(L"Get not supported (write-only property)");
+        case  422: return vb6_BSTR_FromStr(L"Property not found");
+        case  423: return vb6_BSTR_FromStr(L"Property or method not found");
+        case  424: return vb6_BSTR_FromStr(L"Object required");
+        case  429: return vb6_BSTR_FromStr(L"ActiveX component can't create object");
+        case  430: return vb6_BSTR_FromStr(L"Class does not support Automation or does not support expected interface");
+        case  432: return vb6_BSTR_FromStr(L"File name or class name not found during Automation operation");
+        case  438: return vb6_BSTR_FromStr(L"Object doesn't support this property or method");
+        case  440: return vb6_BSTR_FromStr(L"Automation error");
+        case  442: return vb6_BSTR_FromStr(L"Connection to type library or object library for remote process has been lost. Press OK for dialog to remove reference.");
+        case  443: return vb6_BSTR_FromStr(L"Automation object does not have a default value");
+        case  445: return vb6_BSTR_FromStr(L"Object doesn't support this action");
+        case  446: return vb6_BSTR_FromStr(L"Object doesn't support named arguments");
+        case  447: return vb6_BSTR_FromStr(L"Object doesn't support current locale setting");
+        case  448: return vb6_BSTR_FromStr(L"Named argument not found");
+        case  449: return vb6_BSTR_FromStr(L"Argument not optional");
+        case  450: return vb6_BSTR_FromStr(L"Wrong number of arguments or invalid property assignment");
+        case  451: return vb6_BSTR_FromStr(L"Property let procedure not defined and property get procedure did not return an object");
+        case  452: return vb6_BSTR_FromStr(L"Invalid ordinal");
+        case  453: return vb6_BSTR_FromStr(L"Specified DLL function not found");
+        case  454: return vb6_BSTR_FromStr(L"Code resource not found");
+        case  455: return vb6_BSTR_FromStr(L"Code resource lock error");
+        case  457: return vb6_BSTR_FromStr(L"This key is already associated with an element of this collection");
+        case  458: return vb6_BSTR_FromStr(L"Variable uses an Automation type not supported in Visual Basic");
+        case  459: return vb6_BSTR_FromStr(L"Object or class does not support the set of events");
+        case  460: return vb6_BSTR_FromStr(L"Invalid clipboard format");
+        case  461: return vb6_BSTR_FromStr(L"Method or data member not found");
+        case  462: return vb6_BSTR_FromStr(L"The remote server machine does not exist or is unavailable");
+        case  463: return vb6_BSTR_FromStr(L"Class not registered on local machine");
+        case  481: return vb6_BSTR_FromStr(L"Invalid picture");
+        case  482: return vb6_BSTR_FromStr(L"Printer error");
+        case  735: return vb6_BSTR_FromStr(L"Can't save file to TEMP");
+        case  744: return vb6_BSTR_FromStr(L"Search text not found");
+        case  746: return vb6_BSTR_FromStr(L"Replacements too long");
+        default:  return vb6_BSTR_FromStr(L"Application-defined or object-defined error");
     }
 }
 
@@ -977,6 +1063,12 @@ void vb6_ErrRaiseNumber(int32_t errNum) {
 // 口径：helpFile 非 NULL 才写，helpContext 非 0 才写（缺参 = 保留旧值）。
 void vb6_ErrRaiseEx(int32_t errNum, BSTR source, BSTR description, BSTR helpFile,
                     int32_t helpContext) {
+    // §11.222 (第二百四十刀): `Err.Raise` 的号先过一道门，而且必须在写任何一格**之前**。
+    // 真机 .temp/k230p/P338 的 K1/K2/K3：非法号（0 或 > 65535）时 VB6 改报 5 ——
+    // 号与描述都换成 5 那一套（连显式给的 d0 也丢），而先前存的 help 两格**原样留着**
+    // （K2 给的 hf2/99 不生效，读回仍是旧的 hf1/88）。所以这里只接一次新 raise 5、直接返回，
+    // 三个写入都不做。
+    if (errNum == 0 || errNum > 65535) { vb6_ErrRaise(5, NULL, NULL); return; }
     if (helpFile) vb6_err.helpFile = vb6_BSTR_FromStr(helpFile);
     if (helpContext != 0) vb6_err.helpContext = helpContext;
     vb6_ErrRaise(errNum, source, description);
