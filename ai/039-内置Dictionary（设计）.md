@@ -16287,3 +16287,79 @@ vb6_CStrDbl(vb6_Val(<str>) + (double)(<num>))
 2. `Mid` 语句目标为**控件属性**（`Mid(Text1.Text, 1) = "x"`）、对象成员那几档未量。
 3. `MidB` 字节版（ANSI 语义）按 MEMORY 应走 TwinBASIC 判据，本刀未碰。
 4. §11.226/§11.227 余项原样保留：String+数值结果子类型、`Empty + 日期/布尔`、`Declare` 传 NULL。
+
+### §11.232 第二百五十刀：定长串 (`As String * N`) 的各条赋值路径 —— 数组元素、未赋值初值、二维 Variant 元素
+
+§11.231 的背账第一条是「定长串超长赋值 / 短赋值」没量过。本刀先把这一族逐格复量，再补三处真实的差。
+
+**真机读数**（三份探针，全部 `Print #f` 落文件）
+
+| 探针 | 格数 | 覆盖面 | 改前 C3 |
+| --- | --- | --- | --- |
+| `.temp/k233p/P361` | 16 | 局部标量：超长 / 短 / 空串 / 数 / 布尔 / Empty / Null / UDT 字段 / 定长串之间 / LSet / String$ / 拼接 | **16 格全一致** |
+| `.temp/k233p/P362` | 13 | 模块级标量、UDT 字段收 Variant、模块级 Mid/LSet、**一维定长串数组元素** | B10/B11 不一致 |
+| `.temp/k233p/P363` | 9 | 未赋值元素、二维定长串数组、空串比较 | C1/C7/C8 不一致（C7/C8 直接编不过） |
+
+标量那 16 格本来就对（`vb6_LSet` 的 fit + 语句级中止门都已在册），所以本刀没有动它们一行 —— 这条背账是**量完即销**。
+
+**四处真实的差**
+
+1. **定长串数组元素被当成普通动态串槽**。真机 P362：
+
+   | 格 | 语句 | 真机 | 改前 C3 |
+   | --- | --- | --- | --- |
+   | B10 | `Dim a(1 To 2) As String * 5` / `a(1) = "abcdefgh"` | `[abcde]` len=5 | `[abcdefgh]` len=8 |
+   | B11 | `a(2) = "ab"` | `[ab   ]` len=5 | `[ab]` len=2 |
+
+   根因在 `resolveArrayElemType`：`FixedStringTypeRef` 不是 `SimpleTypeRef`，一路落到最底下的
+   `Vb6Type::Variant`。于是数组是 Variant 数组，元素赋值走 `vb6_VariantAssign`，宽度这条口子
+   根本没人问。
+
+2. **`fixedStrLenOfExpr` 没有数组元素这一档**。就算元素档改对了，赋值站也答不出「这个目标宽 N」，
+   仍然不会发收口。补第 ④ 支：`IndexOrCallExpr` 的 callee 是标识符、基名在
+   `fixedStrArrayElemLen_` 里 ⇒ 交回元素宽度。这张表与 `knownFixedStringLen_` **刻意分两张**：
+   后者的每个读者都按「这是一枚定长串标量」用，数组混进去会让 `LSet`/`Len` 那些标量站也命中。
+
+3. **定长串数组的出厂值**。真机 P363 C1：未赋值元素 `Len=5 / Asc=0 / VarType=8` —— 是 **N 个
+   NUL**，不是空串，也不是空格；C2 `a(1) = ""` 为 **False** 正是「NUL 补位不等于空格补位」的
+   旁证（这一格本身属比较那一族，见下）。RTL 补两枚创建出口
+   `vb6_SafeArrayCreate1D_FixedStr` / `vb6_SafeArrayCreateND_FixedStr`：元素仍是 BSTR 槽
+   （与模块级 `Private g As String * N` 同一模型），但建数组时逐格填 `vb6_BSTR_FixedSTR(N)`。
+   放在创建表达式里而不是「建完再补」—— Static / 序言提升那两档的创建是带 `if (x==NULL)` 守卫的，
+   建完再补会在每次进来把内容重置一遍。
+
+4. **二维 Variant 数组元素的 `Len`/`Asc` 直接 C2440**。`isVariantSlot` 的文本判据只有 1 维那一形
+   `VB6_SA_AT(vb6_VARIANT`，于是 `Dim b(1 To 2, 1 To 2) As Variant` 的 `Len(b(1,2))` 发成
+   `vb6_Len(vb6_VARIANT)`（真机 P363 改前的 C7/C8 就是这样编不过）。补
+   `VB6_SA_ND_AT2/AT3/AT4/ATN(vb6_VARIANT` 四条前缀，与 1 维同一条 `vb6_CStrStrict` 包装。
+
+**改动清单**
+
+- `src/backend/expr/cgen_expr_array.cpp`：`resolveArrayElemType` 的 `FixedStringTypeRef` → `String`。
+- `src/backend/detail/util/cgen_state.inc`：新增 `fixedStrArrayElemLen_` / `moduleFixedStrArrayElemLen_`
+  两张表（元素宽度），与标量那份分开。
+- `src/backend/detail/base/cgen_base_generate_state_scan.inc`：模块级定长串数组进第二张表（不再
+  混进 `moduleFixedStringLen_`），模块扫描开头清表。
+- `src/backend/decl/cgen_decl_func.cpp` / `cgen_decl_proc.cpp` / `cgen_decl_prop.cpp`：过程入口
+  清局部表、插回模块表（与 `knownFixedStringLen_` 同一处、同一时机）。
+- `src/backend/decl/cgen_localdecl.cpp` / `cgen_decl_var.cpp`：声明处求宽度表达式、登记、
+  一维/多维创建走 `*_FixedStr`（`trackOnly_` 那一趟不求值，与既有 bounds 的做法一致）。
+- `src/backend/cgen_util_classtype.cpp`：`fixedStrLenOfExpr` 第 ④ 支（数组元素）。
+- `src/backend/cgen_util_type.cpp`：`isVariantSlot` 认多维 `vb6_VARIANT` 元素。
+- `src/rtl/core/vb6rtl/vb6rtl_array.{c,h}`：两枚 `*_FixedStr` 创建口。
+
+**验证**
+
+- 夹具 `tests/b255_fixedstr_array`（36 格，双架构）：P361 的 16 格 + P362 的 12 格 + P363 的 8 格，
+  全部按真机读数钉针。
+- 门禁 **S33**：元素档、两张宽度表、两个创建口、`fixedStrLenOfExpr` 的数组分支、多维 Variant
+  判据、b255 双架构，各一条。
+- 本机 S1..S33 全绿 + `check_owned_temp_keeps` 绿。
+- CI：head `a5ee908a` 只有 `manifest_coverage` 一处红（b255 两份新输入 + 一处发码形状），
+  按清单 `8312c841` 登记（改写 1 / 新增 2） → head `9d664410` → GA **46171170588 = 23/23**。
+
+**量了但留在背账**
+
+真机 P363 C2 的 `a(1) = ""`：VB6 是 **False**，C3 是 **True**。这不是定长串收口的问题，是
+`vb6_StrCmp` 走 `wcscmp` —— 遇内嵌 NUL 就截断，而 VB6 的比较按「短的一侧补空格、比到较长者的长度」
+走，NUL ≠ 空格。同一族还有 `"a" = "a "` 这类补空格比较，一并留到字符串比较那一刀。
