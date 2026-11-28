@@ -49,11 +49,15 @@ void vb6_Beep(void);
 
 // P18-C: Option Compare (Text/Binary)
 extern int g_vb6_optionCompareText;  // 0=Binary(default), 1=Text
-int vb6_StrCmp(const wchar_t* a, const wchar_t* b);  // respects Option Compare
-// <vbeclipse>: Option Compare 是**按模块**的编译期属性, 所以 codegen 在 Text 模块里
+int vb6_StrCmp(const wchar_t* a, const wchar_t* b);  // respects Option Compare// <vbeclipse>: Option Compare 是**按模块**的编译期属性, 所以 codegen 在 Text 模块里
 // 直接把字符串比较改发到这条恒文本入口 (而不是靠进程唯一的全局去切语义)。
 int vb6_StrCmpT(const wchar_t* a, const wchar_t* b);  // 恒 vbTextCompare 口径
 
+// §11.233 (第二百五十一刀): **二元比较**的 VB6 口径 —— 比到两侧的真实长度, 前缀相同则长者大。
+// wcscmp 遇内嵌 NUL 就截断, 于是 `"a" = "a" & Chr$(0)` / `"" = Chr$(0)` 这类全答 True;
+// 真机 P364b: C3/C4/C5 = False、C7 (`"a" < "a "`) = True、C11 (`StrComp("a","a ",0)`) = -1。
+// 入参仍是 BSTR（发码侧两侧都已折成串）, 长度取 BSTR 头。
+int vb6_StrCmpL(const wchar_t* a, const wchar_t* b);
 // Fix 048: Missing runtime functions that were generating C4013 warnings
 
 // vb6_SA_Destroy — generic SafeArray destroyer (used by COM class destructor codegen)

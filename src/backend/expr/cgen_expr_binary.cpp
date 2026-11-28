@@ -607,7 +607,10 @@ void CCodeGen::visit(BinaryExpr& node) {
             }
             // <vbeclipse>: 本模块 Option Compare Text ⇒ 走恒文本入口 vb6_StrCmpT
             // (VB6 的比较模式是按模块的编译期属性, 不能靠进程唯一的全局)
-            lastExpr_ = "(-(vb6_StrCmp" + std::string(optionCompareText_ ? "T" : "")
+            // §11.233 (第二百五十一刀): 二元那一档改走 vb6_StrCmpL —— 按真实长度比,
+            // 内嵌 NUL 不当串尾 (真机 P364b: `"a" = "a" & Chr$(0)` False)。
+            // Text 那一档维持 vb6_StrCmpT (NUL 下的文本口径未量, 不顺手改)。
+            lastExpr_ = "(-(vb6_StrCmp" + std::string(optionCompareText_ ? "T" : "L")
                         + "(" + left + ", " + right + ") " + cmpOp + "))";
             return;
         }

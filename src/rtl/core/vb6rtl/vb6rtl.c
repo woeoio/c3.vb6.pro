@@ -291,6 +291,27 @@ int vb6_StrCmpT(const wchar_t* a, const wchar_t* b) {
     return vb6_TextCmp(a, b);
 }
 
+// §11.233 (第二百五十一刀): 二元比较的 VB6 口径 —— 按**两侧真实长度**逐字符比, 前缀相同则
+// 长者大。真机读数 (.temp/k233p/P364b, 17 格):
+//   C1 `"a" = "a "` False   C7 `"a" < "a "` True    (不补空格, 长度参与)
+//   C3 `"a" = "a" & Chr$(0)` False   C4/C5/C13 同理 (NUL 是普通字符, 不是串尾)
+//   C6 `Len(Chr$(0))` = 1   C11 `StrComp("a","a ",0)` = -1
+// 旧实现走 wcscmp ⇒ 遇 NUL 截断, 上面那一族全错成 True。长度从 BSTR 头取 (两侧都是 BSTR,
+// 发码侧已包过 vb6_BSTR_FromStr / CStr 族)。
+int vb6_StrCmpL(const wchar_t* a, const wchar_t* b) {
+    if (!a) a = L"";
+    if (!b) b = L"";
+    int32_t la = vb6_BSTR_Len((BSTR)a);
+    int32_t lb = vb6_BSTR_Len((BSTR)b);
+    int32_t n = la < lb ? la : lb;
+    // 逐字符比 (不能 memcmp: 小端下高位字节先比, U+0100 vs U+00FF 会答反)。
+    for (int32_t i = 0; i < n; i++) {
+        if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1;
+    }
+    if (la == lb) return 0;
+    return la < lb ? -1 : 1;
+}
+
 // ============================================================
 // 类支持: 实例分配/释放
 // ============================================================

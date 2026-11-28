@@ -14204,6 +14204,37 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "A36|lb=1|ub=2|lb2=1|ub2=2")
     Test-Vbp 'b255_fixedstr_array' "$Tests\b255_fixedstr_array\B255Res.vbp" $b255Needles
     Test-Vbp 'b255_fixedstr_array_x86' "$Tests\b255_fixedstr_array\B255Res.vbp" $b255Needles -Arch "x86"
+    # §11.233 第二百五十一刀: 字符串二元比较与 Select Case 的 VB6 口径 —— 按真实长度比而不是
+    # wcscmp 截到 NUL（不补空格；NUL 是普通字符）。真机 P364b / P365 / P366 / P367。
+    $b256Needles = @(
+    "C1|False",
+    "C2|False",
+    "C3|False",
+    "C4|False",
+    "C5|False",
+    "C6|1",
+    "C7|True",
+    "C8|False",
+    "C9|True",
+    "C10|False",
+    "C11|-1",
+    "C12|False",
+    "C13|False",
+    "C14|True",
+    "C15|True",
+    "C16|False",
+    "C17|False",
+    "C18|False|len=2",
+    "C19|False|False",
+    "C20|True|True",
+    "C21|False",
+    "D1|pad=MISS",
+    "D3|emptyVsNul=MISS",
+    "D4|range=HIT",
+    "D5|varNul=MISS",
+    "D6|varPad=MISS")
+    Test-Vbp 'b256_strcmp_nul' "$Tests\b256_strcmp_nul\B256Res.vbp" $b256Needles
+    Test-Vbp 'b256_strcmp_nul_x86' "$Tests\b256_strcmp_nul\B256Res.vbp" $b256Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

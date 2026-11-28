@@ -915,8 +915,30 @@ if (@([regex]::Matches($runnerText, 'b255_fixedstr_array\\B255Res\.vbp')).Count 
     $bad += "S33 b255 is not run on both arches"
 }
 
+# ---- S34: 字符串比较的 VB6 口径 (账 §11.233 第二百五十一刀) ----
+# 真机 P364b/P366: `"a" = "a "` False (不补空格)、`"a" = "a" & Chr$(0)` False、
+# `"a" < "a "` True、`StrComp("a","a ",0)` = -1；P365/P367: Select Case 同口径。
+$rtl234 = Get-CodeText (Join-Path $root "src\rtl\core\vb6rtl\vb6rtl.c")
+if ($rtl234 -notmatch 'int vb6_StrCmpL\(const wchar_t\* a, const wchar_t\* b\)') {
+    $bad += "S34 vb6_StrCmpL must exist"
+}
+if ($rtl234 -notmatch 'if \(a\[i\] != b\[i\]\) return a\[i\] < b\[i\] \? -1 : 1;') {
+    $bad += "S34 vb6_StrCmpL must compare every character (no NUL truncation, no memcmp)"
+}
+$bin234 = Get-CodeText (Join-Path $root "src\backend\expr\cgen_expr_binary.cpp")
+if ($bin234 -notmatch 'optionCompareText_ \? "T" : "L"') {
+    $bad += "S34 binary comparison must go through vb6_StrCmpL"
+}
+$sel234 = Get-CodeText (Join-Path $root "src\backend\stmt\cgen_select.cpp")
+if (@([regex]::Matches($sel234, 'optionCompareText_ \? "vb6_StrCmpT\(" : "vb6_StrCmpL\("')).Count -lt 3) {
+    $bad += "S34 Select Case string comparison must go through vb6_StrCmpL"
+}
+if (@([regex]::Matches($runnerText, 'b256_strcmp_nul\\B256Res\.vbp')).Count -ne 2) {
+    $bad += "S34 b256 is not run on both arches"
+}
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table, S24 Error(n) function face, S25 vbNullString null-pointer fidelity, S26 the & operator against Null/Empty, S27 the + operator against Null/Empty, S28 the + operator between a string and a number, S29 Null in & over array elements and UDT/With members, S30 On Error GoTo 0 clears Err and keeps its resume point, S31 the Mid statement edges, S32 the Mid statement remaining edges, S33 the fixed-length string assignment paths and their grid)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table, S24 Error(n) function face, S25 vbNullString null-pointer fidelity, S26 the & operator against Null/Empty, S27 the + operator against Null/Empty, S28 the + operator between a string and a number, S29 Null in & over array elements and UDT/With members, S30 On Error GoTo 0 clears Err and keeps its resume point, S31 the Mid statement edges, S32 the Mid statement remaining edges, S33 the fixed-length string assignment paths and their grid, S34 the string comparison byte length)"
