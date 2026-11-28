@@ -147,6 +147,26 @@ bool CCodeGen::concatOperandCanBeNull(const Expr& e) const {
     return false;
 }
 
+bool CCodeGen::addNeedsVarArith226(const Expr& e) const {
+    // §11.226 (第二百四十四刀): `+` 与 Null/Empty 的口径 —— 与 `&` 相反，`+` 是
+    // **Null 传播**（真机 .temp/k233p/P355）:
+    //   "x" + Null ⇒ 94（String 目标，目标不变）; v = "x" + Null ⇒ IsNull=True;
+    //   v = 1 + Null / Null + 1 / Null + "" ⇒ Null; n = v + w（两侧 Null）⇒ 94 且 n 不变;
+    //   "x" + Empty ⇒ "x"; 1 + Empty ⇒ 1; Empty + Empty ⇒ 0。
+    // 判据 = **任一侧能是 Null**（Null 字面量 / 声明成 Variant）**或任一侧是 Empty 字面量**。
+    // 这两种形整式交 vb6_VarAddV（oleaut32 的 VarAdd = VB6 的 Variant 加法引擎），
+    // 发码站与 inferExprType 共用这一枚 —— 一处答「发 VarAdd」，一处答「结果是 Variant」。
+    if (e.kind != ASTNodeKind::BinaryExpr) return false;
+    const auto& bin = static_cast<const BinaryExpr&>(e);
+    if (bin.op != BinaryOp::Add) return false;
+    auto isEmptyLit226 = [](const Expr& x) {
+        return x.kind == ASTNodeKind::LiteralExpr
+            && static_cast<const LiteralExpr&>(x).literalKind == LiteralKind::Empty;
+    };
+    return concatOperandCanBeNull(*bin.left) || concatOperandCanBeNull(*bin.right)
+        || isEmptyLit226(*bin.left) || isEmptyLit226(*bin.right);
+}
+
 std::string CCodeGen::concatOperandToBSTR(const std::string& expr, Expr& node) {
     // Empty 不是 Null，但它在 `&` 里恒当**空串**（真机 B6 `Empty & Empty` ⇒ ""，
     // A2 `"x" & Empty` ⇒ "x"）。改前这一格落 wrapToBSTR 的数值臂 ⇒

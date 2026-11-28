@@ -603,6 +603,10 @@
     // 不走过 wrapToBSTR：后者对 Null 是 94（String 形参口径），`&` 恰好相反。
     std::string concatOperandToBSTR(const std::string& expr, Expr& node);
 
+    // §11.226 (第二百四十四刀): `+` 是否会走 Variant 加法出口 (vb6_VarAddV)。
+    // 唯一主人：发码站 (cgen_expr_binary.cpp) 与 inferExprType 各问一次，两边同源。
+    bool addNeedsVarArith226(const Expr& e) const;
+
     // B11 第三批: Print # / Write # 的**单项文本**出口 (按真 VB6 实测字节)。
     // writeMode=false → " " + CStr + " " (Print #); true → Str 去前导 0/空格 (Write #)。
     // 返回的 C 表达式是 BSTR; 类型判不准时回退旧数值路径 (vb6_Str(int32_t))。

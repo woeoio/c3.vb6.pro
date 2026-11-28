@@ -176,6 +176,22 @@ void CCodeGen::visit(BinaryExpr& node) {
         return;
     }
 
+    // §11.226 (第二百四十四刀): `+` 是 **Null 传播**（与 `&` 相反）。只要任一侧能是
+    // Null（Null 字面量 / 声明成 Variant）或任一侧是 Empty 字面量，整式交 vb6_VarAddV。
+    // 必须放在下面 113g 之前：那一站只认 String 侧，对 Null 侧会发成
+    // `(double)(vb6_VariantNull())` ⇒ C2440，或把 BSTR 交给数值目标。
+    // 判据只有一枚（addNeedsVarArith226），inferExprType 问的是同一枚。
+    if (addNeedsVarArith226(node)) {
+        auto box226 = [&](const std::string& cExpr, Expr* ast) -> std::string {
+            if (cExpr.compare(0, 11, "vb6_Variant") == 0) return cExpr;
+            if (isVariantSlot(cExpr, ast)) return cExpr;
+            return "vb6_VariantFromValue(" + cExpr + ")";
+        };
+        lastExpr_ = "vb6_VarAddV(" + box226(left, node.left.get()) + ", "
+                  + box226(right, node.right.get()) + ")";
+        return;
+    }
+
     // Fix 113g: VB6 `+` 语义 — 一侧是 String 而另一侧是**数值**时, VB6 把字符串
     // 按数值解释后做**数值加法** (经典陷阱: "2000" + i 得 2005 而非 "2000i"),
     // 结果再在目标上下文按需转字符串.

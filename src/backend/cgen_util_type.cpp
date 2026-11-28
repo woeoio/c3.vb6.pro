@@ -338,6 +338,10 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
                     return Vb6Type::Variant;
                 return Vb6Type::String;
             }
+            // §11.226 (第二百四十四刀): `+` 的 Null 传播 —— 任一侧能是 Null（或 Empty
+            // 字面量）时，发码交 vb6_VarAddV，C 表达式是整只 vb6_VARIANT ⇒ 这里必须答
+            // Variant。与发码站同问 addNeedsVarArith226（一枚判据，两处同一个答案）。
+            if (addNeedsVarArith226(expr)) return Vb6Type::Variant;
             // 比较运算符 → Boolean
             if (bin.op == BinaryOp::Eq || bin.op == BinaryOp::Neq ||
                 bin.op == BinaryOp::Lt || bin.op == BinaryOp::Gt ||

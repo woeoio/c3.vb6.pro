@@ -772,8 +772,33 @@ if (@([regex]::Matches($runnerText, 'b249_amp_null_face\\B249Res\.vbp')).Count -
     $bad += "S26 b249 is not run on both arches"
 }
 
+# ---- S27: `+` 与 Null/Empty 的口径 (账 §11.226 第二百四十四刀) ----
+# 真机 .temp/k233p/P355: 任一侧 Null ⇒ 结果 Null（String/Long 目标 94 且目标不变、Variant 目标
+# IsNull=True）；Empty 当 0/空串。判据只有一枚 addNeedsVarArith226，发码站与 inferExprType 同问。
+$util227 = Get-CodeText (Join-Path $root "src\backend\expr\cgen_expr_binary_util.cpp")
+if (@([regex]::Matches($util227, 'bool CCodeGen::addNeedsVarArith226\(const Expr& e\)')).Count -ne 1) {
+    $bad += "S27 addNeedsVarArith226 must have exactly one definition"
+}
+if ($util227 -notmatch '(?s)addNeedsVarArith226.{0,800}concatOperandCanBeNull') {
+    $bad += "S27 the + gate must share concatOperandCanBeNull"
+}
+$eb227 = Get-CodeText (Join-Path $root "src\backend\expr\cgen_expr_binary.cpp")
+if ($eb227 -notmatch 'addNeedsVarArith226\(node\)') {
+    $bad += "S27 the add station must ask addNeedsVarArith226"
+}
+if ($eb227 -notmatch 'vb6_VarAddV\(') {
+    $bad += "S27 the add station must emit vb6_VarAddV for the Null face"
+}
+$ty227 = Get-CodeText (Join-Path $root "src\backend\cgen_util_type.cpp")
+if ($ty227 -notmatch 'addNeedsVarArith226\(expr\)') {
+    $bad += "S27 the result type must come from the same gate"
+}
+if (@([regex]::Matches($runnerText, 'b250_add_null_face\\B250Res\.vbp')).Count -ne 2) {
+    $bad += "S27 b250 is not run on both arches"
+}
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table, S24 Error(n) function face, S25 vbNullString null-pointer fidelity, S26 the & operator against Null/Empty)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung, S22 Hex/Oct pointer-width rung, S23 Err default-description table, S24 Error(n) function face, S25 vbNullString null-pointer fidelity, S26 the & operator against Null/Empty, S27 the + operator against Null/Empty)"
