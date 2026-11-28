@@ -16146,3 +16146,57 @@ vb6_CStrDbl(vb6_Val(<str>) + (double)(<num>))
 1. **`On Error GoTo 0` 与 Err 仍是悬案**：VB6Mini 探针 `P357` 答 A2=**0**（清）、A5=0；同一段代码用 Windows 自带 VBScript（`cscript`，`err0.vbs`）也是 A2=**0**、A5=0。但 MS 文档只把 Resume / Exit Sub 等列进清空点，VBA 常见写法（`On Error GoTo 0` 之后查 `Err.Number`）又依赖它**不**清；C3 现在不清，`tests/test_bstr_concat_scalar.bas` 也钉着 `a=5`。三份证据对不上，本机没有真 VB6 可判，本刀**不动代码**，记为待真 VB6 复量。
 2. 类的 `With`（`With obj: .P`，属性返回 Variant）没量也没接；对象属性 `o.V`（非 UDT、非 `classVariantMembers_` 声明）同样没接。
 3. `Mid(s,1) = ""`（零长串报 5）、`Declare` 传 NULL、String+数值的结果子类型、`Empty + 日期/布尔` 等 §11.226/§11.227 的背账原样保留。
+
+### §11.229 第二百四十七刀：`On Error GoTo 0` 也清 Err（并修好 Resume Next 跳过它）
+
+§11.227 的背账第 4 条写的是「`On Error GoTo 0` 不清 Err」。那是从 `tests/test_bstr_concat_scalar.bas` 的旧针脚（`a=5`）反推出来的，而那个针脚本身没有真机读数撑着。本刀先复量，再改码。
+
+**真机读数**（`.temp/k233p/P357`，9 格，`Print #f` 落文件）：
+
+| 格 | 语句 | 真机 |
+| --- | --- | --- |
+| A1 | `On Error Resume Next` / `Err.Raise 5` 之后 | 5，`[Invalid procedure call or argument]`，`src=P357` |
+| A2 | 再过一句 `On Error GoTo 0` | **0，`[]`，`src=`（空）** |
+| A3 | 没出错时再执行一次 `On Error GoTo 0` | 0 |
+| A4 | 重开 Resume Next 再 `Err.Raise 6` | 6 |
+| A5 | 再过一句 `On Error GoTo 0` | **0** |
+| A6 | 重开 Resume Next 再 `Err.Raise 7` | 7 |
+| A7 | `Err.Clear` 对照 | 0 |
+| B2 | 带标签处理器里读到 | 5，描述在 |
+| B1 | handler 里 `Resume Next` 回到出错语句的下一条 | 0 |
+
+三条属性一起清（Number / Description / Source），与 `Err.Clear` 那格同值。旁证：同一段逻辑用 Windows 自带 VBScript（`cscript err0.vbs`）也是 A2=0、A5=0。**随后按本仓口径（VB6Mini = 真 VB6）把它定为结论**，不再按 MS 文档那句「Resume / Exit Sub 才清」推断。
+
+**两层根因**
+
+1. RTL 的 `vb6_ErrGoToZero` 只恢复调用方错误帧（账 #611 那一刀），没清 Err。
+2. 更隐蔽的一层：`emitStmtList` 给受保护区里的每条语句发 resume 点，**偏偏排除 `OnErrorStmt`**。于是
+
+   ```vb
+   On Error Resume Next
+   Err.Raise 5          ' 報错 ⇒ 派发到「下一句」的 resume 点
+   On Error GoTo 0      ' 这一句没有编号 ⇒ 被整句跳过
+   s = "a=" & Err.Number
+   ```
+
+   Resume Next 落到的是**下一条被编号的语句**（`s = ...`），`On Error GoTo 0` 根本没执行 —— 真机执行它、因此清 Err，C3 不执行、于是 `a=5`。旧夹具的 `a=5` 与旧注释「GoTo 0 不清」就是这么互相印证出来的一个假事实。
+
+**实现**
+
+- `vb6_ErrGoToZero` 开头 `vb6_ErrClear()`（与帧恢复同一主人，发码站不另发一句）；`cgen_jumps.cpp` 顶注改回「ResumeNext / GoToLabel / GoToZero 三条都清」，并把旧注释的来历写清。
+- `cgen_stmt.cpp` 的 resume 点判据去掉 `OnErrorStmt` 排除：`On Error ...` 也只是一条语句，Resume Next 回到的就是它，所以它必须有编号（`LabelStmt` 仍然排除）。
+
+**验证**
+
+- 真机孪生：`P357` 9 格 x64/x86 **逐字一致**（改前 A2/A5 是 5，差两格）。
+- 夹具 `tests/b252_onerror_goto0`（9 格，双架构）；`tests/b251_amp_null_member` 8 格未被牵连。
+- `tests/test_bstr_concat_scalar.bas` 的针脚按真机改成 `a=0`（该夹具本身就是这组序列，真机结果见 `.temp/k233p/bcs`，16 项仍全中：`BCS:16/16`）。
+- 门禁新增 **S30**（现 S1..S30）：`vb6_ErrGoToZero` 必先 `vb6_ErrClear()`、resume 点判据不得再排除 `OnErrorStmt`、BCS 必钉 `a=0`、b252 双架构。
+- CI：head `2190e940` → 只有 `Emit manifest` 与 `manifest_coverage` 两处红（新增 b252 两份输入），**没有一个 vbp 分片报行为错** → 按清单 `31fd065e` 登记（**87 改 / 85 增删**，85 份输入的形状因 resume 编号前移而变，行为未变）→ head `c1664930` → GA **46148217113 = 23/23 success**。
+
+**背账**
+
+1. **resume 编号前移**是这次清单大改的唯一原因：受保护区里每遇到一条 `On Error ...`，它后面的语句编号都要 +1。形状变了、读数没变（全部分片绿），但「resume 点编号与源码语句序号的对应」没有单独的文件级说明，下次动这一带要先看 `cgen_stmt.cpp` 顶注与 §11.178 的标签次序理由。
+2. 处理器体内的 `On Error ...` 仍不发 resume 点（handler 不在保护区内，VB6 里能不能从 handler 再 `Resume Next` 回一条 `On Error` 语句没量）。
+3. `Error` 语句（`Error 5`）与 `On Error GoTo 0` 相邻、`On Error GoTo -1`（VB.NET 形）等边角未量。
+4. §11.226/§11.227 余下的背账仍在：String+数值 的结果子类型、`Empty + 日期/布尔`、`Mid(s,1) = ""`（零长串报 5）、`Declare` 传 NULL。
