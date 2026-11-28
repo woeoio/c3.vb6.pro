@@ -7768,7 +7768,9 @@ if ($Category -in @("all", "run", "vbp")) {
         # VARIANT 再 `vb6_CStr(...)` 折回串 (`vb6_CStr(vb6_VariantFromValue(...))`)。
         # 现在 `vb6_ComGetStringProp(` 登记在 isBstrReturningCall 那张表里，直通给 StrCmp：
         # 值仍是 RTL 内部 VariantChangeType(…, VT_BSTR) 的产物，一次多余的折叠没有了。
-        'vb6_StrCmp(vb6_ComGetStringProp(_rrv',
+        # §11.233 (第二百五十一刀): 二元比较改名 vb6_StrCmpL —— 按真实长度逐字符比
+        # (不再 wcscmp 截到内嵌 NUL)。形状针跟着换成 `L` 的入口，比较那一站没有别的变化。
+        'vb6_StrCmpL(vb6_ComGetStringProp(_rrv',
         # 同一条判据的选择性那一半: 数值成员走**数值档**，不许被改成 BSTR 档 ——
         # 它的作用是挡住"为了修字符串把两档一起改成 BSTR"那种反向过度修正。
         # C30-11 后记（遗留问题②）: 关系比较的晚绑定属性改按 Double 解封 ——
