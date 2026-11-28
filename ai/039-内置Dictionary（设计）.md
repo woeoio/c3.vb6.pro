@@ -16059,3 +16059,47 @@ vb6_BSTR_AssignMove(&s, vb6_CStrDbl(vb6_Val(vb6_BSTR_FromStr(L"x")) + (double)(v
 1. **String + 数值（113g）那一族仍未动**，读数在 `.temp/k233p/p355full.txt`：`v = "1" + 2` 与 `v = "x" + 1.5` 在 C3 里仍 **C2440**（BSTR → VARIANT）；`n = "1" + 2` 把 BSTR 交给 `vb6_ChkLong`（真机 3）；`s = "1" + 2` 侥幸打出 `"3"`；`"x" + 1.5` 真机报 13、C3 打 `"1.5"`。这一族该不该整体换到 `vb6_VarAddV`（连带 `"abc" + 1` 从宽松 0 变成 13）要单独一刀拍。
 2. `+` 里 Empty 与非 String 侧（`Empty + #1/1/2000#`、`Empty + True`）未量。
 3. §11.225 的其余背账仍在：`On Error GoTo 0` 不清 Err、`Mid(s,1) = ""`（零长串）报 5、成员/数组元素的 Null 走旧口径、Declare 传 NULL。
+
+### §11.227 第二百四十五刀：String 与数值的 `+` 是数值加法
+
+§11.226 的背账第 1 条：`v = "1" + 2` / `v = "x" + 1.5` 在 C3 里仍 **C2440**，`n = "1" + 2` 把 BSTR 交给 `vb6_ChkLong`。查下来这不是「Null 那一族漏了几格」，而是 **113g 那一站本身的形状错**：它把「String + 数值」当成「把串当 0 的浮点加法，再转回 BSTR」。
+
+**真机读数**（`.temp/k233p/P355full` 的 E13–E17，同一份源码）：
+
+| 格 | 语句 | 真机 |
+| --- | --- | --- |
+| E13 | `v = "1" + "2"` | `"12"`（两侧都是串 ⇒ 拼接，**不归本刀**） |
+| E14 | `v = "1" + 2` | `3`（Variant 里是**数**） |
+| E15 | `n = "1" + 2` | `3` |
+| E16 | `s = "1" + 2` | `"3"` |
+| E17 | `v = "x" + 1.5` | **`13` Type mismatch** |
+
+一句话：`+` 只要有一侧是数值，另一侧的串就**按数值解析**（解析不了报 13），结果是**数**；只有两侧都是串才是拼接。C3 的 113g 发的是：
+
+```c
+vb6_CStrDbl(vb6_Val(<str>) + (double)(<num>))
+```
+
+三个面同时错：**数值目标**把 BSTR 指针直接交给 `vb6_ChkLong`（探针 `T227` 实测运行期 **6 Overflow**）；**Variant 目标** BSTR → `vb6_VARIANT` **C2440**（E14/E17 编不过）；**非数字串** `vb6_Val` 静默给 0（`"x" + 1.5` 打成 `"1.5"`，真机是 13）。
+
+**实现**
+
+- 发码站（`cgen_expr_binary.cpp` 的 `mixStrNum113g` 分支）：整式改交 `vb6_VarAddV(box(串侧), box(数侧))`。串侧装成 BSTR 的 Variant，由 oleaut32 解析（非数字交 TYPEMISMATCH ⇒ 13），数值侧保留自己的档 —— 与结果档都是 VB6 那台引擎自己定的，发码层不再替它猜。
+- 类型 oracle（`cgen_util_type.cpp`）：`+` 一侧 `String`、另一侧数值时答 **Variant**（与发码同一份答案）。String 目标因此走既有的变体收口（`vb6_BSTR_AssignFromVariant`），Long 目标走 `vb6_VariantToLong`，函数形参的 String 口也能接 Variant（探针 `T227b`：`TakeS vv` 打出 `S=3`）。
+- **两侧都是串**仍走上面的 Concat 站（`"1" + "2"` ⇒ `"12"`），本刀一行未动。
+
+**验证**
+
+- 夹具 `tests/b250_add_null_face` 从 15 格扩到 **20 格**（E13–E17 并入，针脚取自 `P355full` 同名格）；x64/x86 与真机**逐字一致**（含 E17 的 `num=13|[Type mismatch]` 与 E18 的 `n=3`）。
+- `check_float_to_int_round.ps1` 新增 **S28**（现 S1..S28）：那一站不许再出现 `vb6_CStrDbl(vb6_Val(`、必须发 `vb6_VarAddV`、`inferExprType` 的 String+数值 分支必须答 Variant。
+- 本机 16 条门禁全绿。
+- CI：head `02a57ee4` → **22/23**（唯一红点是 `Emit manifest (shape oracle)`，**没有一个 vbp 分片报行为错**）→ 按 CI 清单 `a0fe9f0a` 登记（只改 **4** 行：`Charts 2020/Proyecto1.vbp`、`ucPieChart/Proyecto1.vbp`、b250 的 bas+vbp）→ head `a8936bbc` → GA **46137640791 = 23/23 success**。
+
+清单只动 4 行这件事本身就是证据：全语料里走 113g 的只有那两个 Charts 工程（当初 113g 就是为 `ucPieChart1.AddItem "2000" + i` 那一形开的刀），换道之后它们的 `"2000" + i` 也照样打出 `2005`、AddItem 的 String 形参正常接收 Variant。
+
+**背账**
+
+1. String+数值 的结果**子类型**未量：真机 `VarType("1" + 2)` 是 Integer/Long 还是 Double 没打印；现在由 VarAdd 定档，可能与 VB6 差一档（只在 `VarType` 面上可见）。
+2. `+` 里 Empty 与非 String 侧（`Empty + #1/1/2000#`、`Empty + True`）、日期串参与数值加法（`"1/1/2000" + 1`）未量。
+3. 非数字串现在**中途报 13**（与真机一致），但「两个操作数的求值次序 / 报错后目标是否保持」没有单独量。
+4. §11.225/§11.226 的其余背账仍在：`On Error GoTo 0` 不清 Err、`Mid(s,1) = ""`（零长串）报 5、成员/数组元素的 Null 走旧口径、Declare 传 NULL。
