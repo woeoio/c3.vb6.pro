@@ -6,7 +6,7 @@ End Type
 
 Private arr(0 To 1) As Variant
 
-' §11.228 (第二百四十八刀): `&` 里 Null 的**数组元素 / UDT 成员 / With 成员**。
+' §11.228 (第二百四十六刀): `&` 里 Null 的**数组元素 / UDT 成员 / With 成员**。
 ' 判据是真机 .temp/k233p/P358（VB6Mini，Print #f 落文件），夹具与孪生逐格对照
 ' （同一份源码，只把 Print #f 换成 Debug.Print）。
 ' 口径与 §11.225 一致：一侧 Null 当空串、两侧都 Null ⇒ 结果 Null（String 目标 94）。

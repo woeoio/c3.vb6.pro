@@ -122,7 +122,7 @@ bool CCodeGen::concatOperandCanBeNull(const Expr& e) const {
         std::string lower = ma.memberName;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
         if (classVariantMembers_.count(lower)) return true;
-        // §11.228 (第二百四十八刀): UDT 成员声明成 Variant 也算（真机 P358 F3/F4:
+        // §11.228 (第二百四十六刀): UDT 成员声明成 Variant 也算（真机 P358 F3/F4:
         // `u.V = Null` 时 `"x" & u.V` ⇒ "x"、两侧都是 Null 时结果 Null）。
         return inferUdtFieldVb6Type(&e) == Vb6Type::Variant;
     }

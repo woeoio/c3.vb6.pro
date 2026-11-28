@@ -813,7 +813,7 @@ if ($ty228 -notmatch 'lt227 == Vb6Type::String && num227\(rt227\)') {
     $bad += "S28 the String+number + result type must be Variant"
 }
 
-# ---- S29: `&` 里 Null 的数组元素 / UDT 成员 / With 成员 (账 §11.228 第二百四十八刀) ----
+# ---- S29: `&` 里 Null 的数组元素 / UDT 成员 / With 成员 (账 §11.228 第二百四十六刀) ----
 # 真机 .temp/k233p/P358: F1–F4 一侧 Null 当空串、F5/F6 两侧都 Null ⇒ Null（String 目标 94）。
 # 判据仍然只认**声明过的形**：数组元素看 arrayElemTypes_==Variant、UDT/With 看
 # inferUdtFieldVb6Type==Variant；不许回到文本前缀或推断回退。
