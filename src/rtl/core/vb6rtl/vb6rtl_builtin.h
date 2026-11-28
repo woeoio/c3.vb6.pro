@@ -594,6 +594,13 @@ BSTR vb6_HexInt(int32_t n);
 BSTR vb6_HexByte(int32_t n);
 BSTR vb6_OctInt(int32_t n);
 BSTR vb6_OctByte(int32_t n);
+// §11.220 (第二百三十七刀): 阶梯的**第四阶** —— 64 位载体 (LongLong / ULongLong)。
+// VB6 没有 LongLong，所以这一阶没有真机读数，判据用 twinBASIC（用户 2026-11-28 指定）：
+//   Hex(CLngLng(-1)) = "FFFFFFFFFFFFFFFF" (16 位) / Oct = 22 位；
+//   正值仍不补零 (2^32 → "100000000")，负值掩到 64 位 (2^32 的相反数 → "FFFFFFFF00000000")。
+// 与前三阶同一条递推：位数 = 载体的存储宽度（Byte 2 / Integer 4 / Long 8 / LongLong 16）。
+BSTR vb6_HexLng64(int64_t n);
+BSTR vb6_OctLng64(int64_t n);
 // 整只变体槽那一形（发码里 `Hex(v)` 在**字符串上下文**落成
 // `vb6_Hex(vb6_VariantToLong(v))`，宽度信息在槽的 vt 上）：这两枚只读一次槽。
 BSTR vb6_HexW(int32_t n, int32_t vartype);

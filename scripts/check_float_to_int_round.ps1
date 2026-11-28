@@ -592,8 +592,47 @@ if ($tb219 -notmatch '\{ "vb6_ErrRaiseEx"') {
 $b243Cells = @([regex]::Matches($runnerText, 'b243_err_help\\B243Res\.vbp')).Count
 if ($b243Cells -ne 2) { $bad += ("S20 b243 run cells = " + $b243Cells + " (want 2 = x64 + x86)") }
 
+# ---- S21: Hex/Oct 的 64 位载体阶 (账 §11.220 第二百三十七刀) ----
+# VB6 没有 LongLong（Hex 在 VB6 里永远收窄到 Long：真机 .temp/k228p/p332.txt 的 C5
+# `Hex(CCur(922337203685477.5807))` 直接 Error 6），所以这一阶的读数由 twinBASIC 台出
+# （用户 2026-11-28 指定）：Hex(CLngLng(-1)) = "FFFFFFFFFFFFFFFF" (16 位) / Oct 22 位；
+# 2^32 → "100000000"；-2^32 → "FFFFFFFF00000000"；变体槽装 VT_I8 时同值。
+# 四条判据：(a) RTL 两枚 64 位出口各定义一次、用的就是 64 位格式；
+#           (b) 槽那两面按 vt 问 I8/UI8 且落在 VariantToLong 兜底**之前**；
+#           (c) 发码站按**静态档**（inferExprType）选 Lng64，不是猜文本；
+#           (d) 夹具 b244 两套都在跑。
+$rtl220 = Get-CodeText (Join-Path $root "src\rtl\core\vb6rtl\vb6rtl_conv.c")
+if (@([regex]::Matches($rtl220, 'BSTR vb6_HexLng64\(int64_t n\)\s*\{')).Count -ne 1) {
+    $bad += "S21 RTL vb6_HexLng64 definition is not exactly one"
+}
+if (@([regex]::Matches($rtl220, 'BSTR vb6_OctLng64\(int64_t n\)\s*\{')).Count -ne 1) {
+    $bad += "S21 RTL vb6_OctLng64 definition is not exactly one"
+}
+if ($rtl220 -notmatch 'swprintf\(buf, 24, L"%llX"') { $bad += "S21 vb6_HexLng64 no longer formats 64 bits" }
+if ($rtl220 -notmatch 'swprintf\(buf, 24, L"%llo"') { $bad += "S21 vb6_OctLng64 no longer formats 64 bits" }
+# 槽那两面：I8/UI8 必须在 vb6_VariantToLong 兜底之前（截断那一行之后就没有宽度了）
+foreach ($fn in @('vb6_HexSlot', 'vb6_OctSlot')) {
+    $body = [regex]::Match($rtl220, 'BSTR ' + $fn + '\(vb6_VARIANT v\) \{(?s).*?\n\}').Value
+    if (-not $body) { $bad += ("S21 RTL " + $fn + " body not found"); continue }
+    $i8 = $body.IndexOf('vt == VT_I8')
+    $fb = $body.LastIndexOf('vb6_VariantToLong(v)')
+    if ($i8 -lt 0) { $bad += ("S21 " + $fn + " lost the VT_I8 branch"); continue }
+    if ($fb -lt 0) { $bad += ("S21 " + $fn + " lost its scalar fallback"); continue }
+    if ($i8 -gt $fb) { $bad += ("S21 " + $fn + " checks VT_I8 only after the 32-bit truncation" ) }
+    if ($body -notmatch 'VT_UI8') { $bad += ("S21 " + $fn + " dropped the VT_UI8 face") }
+}
+$at220 = Get-CodeText (Join-Path $root "src\backend\detail\expr\cgen_expr_call_builtin_argtype.inc")
+if ($at220 -notmatch 't209 == Vb6Type::LongLong \|\| t209 == Vb6Type::ULongLong') {
+    $bad += "S21 the argtype station no longer routes the 64-bit carriers to Lng64"
+}
+if ($at220 -notmatch 'callee \+= "Lng64";') {
+    $bad += "S21 the Lng64 callee suffix is gone (the 64-bit rung collapsed onto the 32-bit exit)"
+}
+$b244Cells = @([regex]::Matches($runnerText, 'b244_hex_oct_longlong\\B244Res\.vbp')).Count
+if ($b244Cells -ne 2) { $bad += ("S21 b244 run cells = " + $b244Cells + " (want 2 = x64 + x86)") }
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round() in vb6_RoundHalfEven, S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate, S9 Round banker + 0..22, S10 Hex/Oct narrow through CLng at the call site, S11 Hex/Oct width follows the carrier, S12 Sgn gate is the strict extract, S13 whole-array Hex/Oct is error 13, S14 Abs/Int/Fix strict on every non-Variant face, S15 Variant store aborts the whole statement on any raise, S16 CStr of a whole Variant slot is the strict extract on every consumer face, S17 Hex/Oct text carrier goes through the strict parse, S18 Err.Source is the project name on every runtime raise, S19 Err.Source/Err.Description assignment face, S20 Err.HelpFile/HelpContext + five-argument Raise, S21 Hex/Oct 64-bit carrier rung)"

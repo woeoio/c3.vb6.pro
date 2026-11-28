@@ -1293,6 +1293,27 @@ BSTR vb6_Hex(int32_t n) { return vb6_HexW(n, vb6_vtLong); }
 BSTR vb6_HexInt(int32_t n) { return vb6_HexW(n, vb6_vtInteger); }
 BSTR vb6_HexByte(int32_t n) { return vb6_HexW(n, vb6_vtByte); }
 
+// §11.220 (第二百三十七刀): 阶梯的第四阶 —— 64 位载体。VB6 本身没有 LongLong
+// （Hex/Oct 在 VB6 里永远收窄到 Long：真机 .temp/k228p/p332.txt 的 C2 `Hex(CCur(-1))`
+// = "FFFFFFFF"，而 C5 `Hex(CCur(922337203685477.5807))` 直接 Error 6 —— 8 位封顶），
+// 所以这一阶的读数只能由 twinBASIC 台出（用户 2026-11-28 指定的判据源）：
+//   L1 `Hex(CLngLng(-1))` = "FFFFFFFFFFFFFFFF" (16) / Oct = "1777777777777777777777" (22)
+//   L3 16 → "10" / L4 2^31 → "80000000" / L5 2^32 → "100000000"（正值不补零）
+//   L6 -2^32 → "FFFFFFFF00000000"（负值掩到 64 位）
+//   L11/L12 变体槽装着 VT_I8 时同值；L9/L10 Long/Integer 两阶不变
+// 与前三阶同一条递推：位数 = 载体的存储宽度。两份各自 24 字符缓冲：
+// 十六进制满档 16 位，八进制满档 22 位（-1）。
+BSTR vb6_HexLng64(int64_t n) {
+    wchar_t buf[24];
+    swprintf(buf, 24, L"%llX", (unsigned long long)n);
+    return vb6_BSTR_FromStr(buf);
+}
+BSTR vb6_OctLng64(int64_t n) {
+    wchar_t buf[24];
+    swprintf(buf, 24, L"%llo", (unsigned long long)n);
+    return vb6_BSTR_FromStr(buf);
+}
+
 // §11.212 (第二百二十九刀): 整枚数组进 Hex/Oct 的实参位 —— 真机报 13 (Type mismatch),
 // 且目标不动。读数 .temp/k225p/P320/P321 (VB6Mini 真机):
 //   A1 `s = "keep": s = Hex(a)`  ⇒ [keep]/13（a() As Long, 已 ReDim）
@@ -1330,6 +1351,13 @@ BSTR vb6_HexSlot(vb6_VARIANT v) {
     if (vt == vb6_vtBSTR) {
         return vb6_HexW(vb6_CLng(vb6_DblStrict(v)), vt);
     }
+    /* §11.220 (第二百三十七刀): 64 位载体档 —— 槽里是 VT_I8 / VT_UI8 时宽度是 16 位（八进制 22）。
+       twinBASIC 读数 L11 `v = CLngLng(-1)` → "FFFFFFFFFFFFFFFF" / L12 2^32 → "100000000"。
+       这两条必须落在宽子那一行**之前**：vb6_VariantToLong 对 VT_I8 是 C 截断（§Task #44），
+       交到 vb6_HexW 就只剩低 32 位（本刀探针 L11 改前 = "FFFFFFFF"、L12 = "0"）。
+       UI8 那档同一枚出口：按位交回，正值高位看得见。 */
+    if (vt == VT_I8) return vb6_HexLng64(v.llVal);
+    if (vt == (int32_t)VT_UI8) return vb6_HexLng64((int64_t)v.ullVal);
     return vb6_HexW(vb6_VariantToLong(v), vt);
 }
 BSTR vb6_Oct(int32_t n) { return vb6_OctW(n, vb6_vtLong); }
@@ -1348,6 +1376,9 @@ BSTR vb6_OctSlot(vb6_VARIANT v) {
     if (vt == vb6_vtBSTR) {
         return vb6_OctW(vb6_CLng(vb6_DblStrict(v)), vt);
     }
+    /* §11.220: 与 HexSlot 同一枚判据（64 位载体档）。两个出口只差最后那一步的底数。 */
+    if (vt == VT_I8) return vb6_OctLng64(v.llVal);
+    if (vt == (int32_t)VT_UI8) return vb6_OctLng64((int64_t)v.ullVal);
     return vb6_OctW(vb6_VariantToLong(v), vt);
 }
 

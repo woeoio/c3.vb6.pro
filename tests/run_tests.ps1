@@ -13951,6 +13951,26 @@ Test-Vbp 'b192_format_literal_x86' "$Tests\b192_format_literal\B192Res.vbp" $b19
     "B9=[]/0/0")
     Test-Vbp 'b243_err_help' "$Tests\b243_err_help\B243Res.vbp" $b243Needles
     Test-Vbp 'b243_err_help_x86' "$Tests\b243_err_help\B243Res.vbp" $b243Needles -Arch "x86"
+    # §11.220 第二百三十七刀: Hex/Oct 的第四阶 —— 64 位载体 (LongLong / ULongLong)。
+    # VB6 没有 LongLong，读数由 twinBASIC 台出 (.temp/k228p/tbhex, 0.15.1047):
+    # Hex(CLngLng(-1)) = 16 位 / Oct 22 位；正值不补零；负值掩到 64 位；变体槽装 I8 时同值。
+    $b244Needles = @(
+    "L1=FFFFFFFFFFFFFFFF/1777777777777777777777/len=16",
+    "L2=0/0/len=1",
+    "L3=10/20/len=2",
+    "L4=80000000/20000000000/len=8",
+    "L5=100000000/40000000000/len=9",
+    "L6=FFFFFFFF00000000/1777777777740000000000/len=16",
+    "L9=FFFFFFFF/37777777777",
+    "L10=FFFF/177777",
+    "L11=FFFFFFFFFFFFFFFF/1777777777777777777777",
+    "L12=100000000/40000000000",
+    "L13=FFFFFFFFFFFFFFFF/1777777777777777777777",
+    "L14=12345678/2215053170",
+    "L15=100000000/40000000000",
+    "L16=FFFFFFFFFFFFFFFF/1777777777777777777777")
+    Test-Vbp 'b244_hex_oct_longlong' "$Tests\b244_hex_oct_longlong\B244Res.vbp" $b244Needles
+    Test-Vbp 'b244_hex_oct_longlong_x86' "$Tests\b244_hex_oct_longlong\B244Res.vbp" $b244Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

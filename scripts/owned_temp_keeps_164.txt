@@ -340,6 +340,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_Hex BSTR
 [own] vb6_HexByte BSTR
 [own] vb6_HexInt BSTR
+[own] vb6_HexLng64 BSTR
 [own] vb6_HexSlot BSTR
 [own] vb6_HexW BSTR
 [own] vb6_InputB BSTR
@@ -366,6 +367,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_Oct BSTR
 [own] vb6_OctByte BSTR
 [own] vb6_OctInt BSTR
+[own] vb6_OctLng64 BSTR
 [own] vb6_OctSlot BSTR
 [own] vb6_OctW BSTR
 [own] vb6_PA_GetBSTR BSTR

@@ -192,6 +192,16 @@
                 if (t209 == Vb6Type::Byte) callee += "Byte";
                 else if (t209 == Vb6Type::Integer || t209 == Vb6Type::Boolean
                          || isNarrowIntExpr(node.positional[0].get())) callee += "Int";
+                // §11.220 (第二百三十七刀): 前三阶之后的第四阶 —— 64 位载体 (LongLong / ULongLong)。
+                // VB6 没有 LongLong（所以 Hex 在 VB6 里永远收窄到 Long：真机 .temp/k228p/p332.txt
+                // 的 C5 `Hex(CCur(922337203685477.5807))` = Error 6），这一阶的读数由 twinBASIC 台出：
+                // Hex(CLngLng(-1)) = "FFFFFFFFFFFFFFFF" (16 位) / Oct 22 位；2^32 → "100000000"。
+                // 改前 C 把 int64_t 递进 vb6_Hex(int32_t) 的形参：低 32 位静默截断
+                // （本刀探针 L1 = "FFFFFFFF"、L5 2^32 = "0"、L6 = "0"）。
+                // 宽度仍然只有一位主人（RTL 的 vb6_HexLng64 / vb6_OctLng64），这里只选名字。
+                else if (t209 == Vb6Type::LongLong || t209 == Vb6Type::ULongLong) {
+                    callee += "Lng64";
+                }
             }
         }
         // §11.213 (第二百三十刀): 这一族在**非变体消费面**上都要严格。

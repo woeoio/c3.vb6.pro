@@ -307,6 +307,10 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_HexByte",
         "vb6_HexW",
         "vb6_HexSlot",
+        // §11.220 (第二百三十七刀): 第四阶（64 位载体）也是 vb6_BSTR_FromStr 的产物，
+        // 与前三阶同一张“新造 BSTR”表。
+        "vb6_HexLng64",
+        "vb6_OctLng64",
         "vb6_InputB",
         "vb6_InputBox",
         "vb6_InputString",
