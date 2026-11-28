@@ -15635,3 +15635,57 @@ L13=FFFFFFFF/37777777777
 1. `LongPtr` 那一档还没量：x64 上 `intptr_t` 是 64 位、x86 上是 32 位，按本刀的递推应当是「跟着载体宽度走」，但发码站今天只认 `LongLong` / `ULongLong` 两档，`Hex(某 LongPtr)` 仍走 32 位出口。
 2. `ULongLong` 在 twinBASIC 里认不出（`TB5079 Unrecognized datatype symbol 'ULongLong'`），所以 L15/L16 没有台面读数，是按「同一条位数规则 + 按位同值」定的 —— 真机口径待补。
 3. `Err.Description` 默认表里未量过的号仍是空串。
+
+
+### §11.221 第二百三十八刀：`Hex/Oct` 的第五阶 —— 指针宽载体
+
+**判据仍是 twinBASIC，这一次两个架构各量一遍**（`.temp/k229p/tbptr`，twinBASIC 0.15.1047）：
+
+| 格 | 语句 | win64 | win32 |
+| --- | --- | --- | --- |
+| P1 | `Dim p As LongPtr: p = -1` 的 `Hex(p)` / `Oct(p)` | `FFFFFFFFFFFFFFFF` / `1777777777777777777777`（`lenb=8`） | `FFFFFFFF` / `37777777777`（`lenb=4`） |
+| P2 | `p = 16` | `10` / `20` | 同左 |
+| P3 | `p = CLngPtr(305419896)` | `12345678` / `2215053170` | 同左 |
+| P4 | `Hex(CLngPtr(-1))` | 16 位 | 8 位 |
+| P5 | `Hex(CLngLng(-1))`（第四阶对照） | 16 位 | 16 位 |
+| P6 | `v = p` 的 `Hex(v)`（`VarType`） | `12345678`（`vt=20`） | 同值（`vt=3`） |
+
+一句话：**位数 = 载体宽度，而 `LongPtr` 的宽度就是 `intptr_t` 的宽度** —— x64 16 位十六进制 / 22 位八进制，x86 8 位 / 11 位。正值两架构同形（P2/P3 完全一样），所以差别只出现在「负值掩到几位」上，夹具必须按架构分两套针。
+
+**改前（C3 探针 `.temp/k229p/P334`）**
+
+```
+x64  P1=FFFFFFFF/37777777777/lenb=8     ← 指针 8 字节，打出来只有 8 位
+x86  P1=FFFFFFFF/37777777777/lenb=4     ← 本来就是 8 位（碰巧对）
+```
+
+病灶同第四阶：`vb6_Hex(int32_t)` 的形参宽度比载体窄，`intptr_t` 实参进 C 的隐式转换就被截到低 32 位。x86 上「碰巧对」正是因为那台机器的载体本来就只有 32 位 —— 也是本刀必须**两架构各守一条**的原因：只按一种架构改，另一种就会错。
+
+**改法：不新开格式，也不让发码知道架构**
+
+1. **RTL 两枚**（`vb6rtl_conv.c`）：
+
+   ```c
+   BSTR vb6_HexLngPtr(intptr_t n) {
+       if (sizeof(intptr_t) == 8) return vb6_HexLng64((int64_t)n);
+       return vb6_HexW((int32_t)n, vb6_vtLong);
+   }
+   ```
+
+   两条分支都编得过（`sizeof` 在编译期常量化），宽度主人仍只有 `vb6_HexLng64` 与 `vb6_HexW` 两处 —— 本刀只是按指针宽把它们接起来。用 `sizeof` 而不是 `#ifdef` 的好处：同一份源码两条腿都在，哨兵能同时看到，不会出现「某个架构下那半段被预处理删掉、门禁读不到」。
+2. **发码站**（`cgen_expr_call_builtin_argtype.inc`）：`t209 == LongPtr` ⇒ `callee += "LngPtr"`。**刻意不按 `--arch` 分叉**：目标架构的判断留在 RTL 一处（也正是「宽度 = 载体宽度」这条规则该住的地方），发码只认静态档。
+3. **槽那一面不用动**：`Variant` 从 `LongPtr` 装箱时，x64 装 `VT_I8`、x86 装 `VT_I4`（twinBASIC P6 的 `vt=20` / `vt=3` 就是这个），而 §11.220 那两条 `VT_I8`/`VT_UI8` 分支已经在槽上；`VT_I4` 本来就走 Long 档。所以 P6/P7 两架构自然分开、不用再加分支。
+
+**验证**
+
+- 探针 `.temp/k229p/P334` 改后：x64 `P1=FFFFFFFFFFFFFFFF/1777777777777777777777`、x86 `P1=FFFFFFFF/37777777777`，与 twinBASIC 两个架构的 P1..P6 逐格相同。
+- 夹具 `tests/b245_hex_oct_longptr`（9 格，工程名 `B245Res`），**两套针按架构分开**（P1/P4/P7 随架构不同，其余各格同值）。
+- `check_float_to_int_round.ps1` 新增 **S22**（现 S1..S22）：(a) 两枚出口各在 RTL、按 `sizeof(intptr_t)` 接前两阶、32 位那半段也还在；(b) 发码站按静态档认 `LongPtr` 选 `LngPtr`；(c) b245 两套针都在跑。
+- 本机 16 条门禁全绿（`check_owned_temp_keeps` 把两枚新出口登记进「新造 BSTR」表，快照 `-Bless`）。
+- CI：head `a326b5b9` → 21/23（只剩 `Emit manifest` + `compile #1` 的 `manifest_coverage` K1 —— b245 两份输入未登记）；按 CI 清单 `f3268786` 登记（**只多出 b245 那 2 行**，既有 982 行一行未动 —— 语料里没有把 `LongPtr` 塞进 Hex/Oct 的形，本刀只动新阶）→ head `09c8635b` → GA **46108084813 = 23/23 success**。
+
+**背账**
+
+1. `Hex(ObjPtr(x))` 这类把**对象指针**塞进 Hex 的形（`ObjPtr` 的静态档若答 `LongPtr`）今天也会走 16 位那一档 —— twinBASIC 未量此形，按同一规则推的。
+2. `ULongLong` 仍无台面读数（twinBASIC 认不出这个类型名）。
+3. `Err.Description` 默认表里未量过的号仍是空串。
