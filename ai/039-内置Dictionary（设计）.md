@@ -15415,3 +15415,79 @@ if (vt == vb6_vtBSTR) {
 1. `Err.Source` 的**用户赋值面**（`Err.Source = "..."` / `Err.Description = "..."`）本刀未做：C3 现在把它发成 `error C2106: '=' 左操作数必须为左值`（探针里那两段就是这么去掉的）。
 2. `Err.Description` 表里未量过的号仍是空串（如 424/429/53 等 RTL 自带描述的那一族不受影响）。
 3. `Hex/Oct` 的 `LongLong` 16 位宽那一档。
+
+### §11.218 第二百三十五刀：`Err.Source` / `Err.Description` 的写面
+
+**读数（真机 `.temp/k226p/P330`，十格，工程名 `P330`）**
+
+| 格 | 语句 | 真机 | 改前 C3 |
+| --- | --- | --- | --- |
+| A1 | `Err.Source = "s1": Err.Description = "d1"` | `[s1]/[d1]/0` | 编不过（`error C2106`） |
+| A2 | 接着 `Err.Raise 5`（省掉源与描述） | `[s1]/[d1]/5` | 编不过 |
+| A3 | `Err.Clear` | `[]/[]/0` | 编不过 |
+| A4 | 只赋 `Description` | `[]/[only desc]/0` | 编不过 |
+| A5 | 只赋 `Source` | `[only src]/[]/0` | 编不过 |
+| A6 | `Err.Raise 5,"rs","rd"` 之后覆盖 `Source` | `[over]/[rd]/5` | 编不过 |
+| A7 | 两格都赋空串 | `[]/[]/0` | 编不过 |
+| A8 | 运行期 13 之后赋 `Description` | `13/[P330]/[after13]` | 编不过 |
+| A9 | 赋 `Description="x"` 之后 `Err.Raise 5` | `[P330]/[x]/5` | 编不过 |
+| A10 | 两格都赋 | `[ss]/[dd]/0` | 编不过 |
+
+一句话：**赋值只动那一格文本，`Err.Number` 一个字不动**（A1/A4–A7/A10 号仍是 0，A8 赋描述之后号仍是 13）；只有 `Err.Clear` 才把两格一起清掉。而 `Err.Raise 5` **缺参不是清空**：已经存在的那两格原样留着（A2 的 `[s1]/[d1]`、A9 的 `[x]`），source 空的时候才补工程名（A9 的 `[P330]`）。
+
+**病灶：把读取侧的折算当左值**
+
+读侧 `Err.Source` / `Err.Description` 折成 `vb6_ErrSource()` / `vb6_ErrDescription()`（`cgen_expr_member_precheck.inc` 的 err/lasterror 那一臂）。写侧没有对应的出口，于是 `Err.Source = "x"` 被发成
+
+```c
+vb6_ErrSource() = vb6_BSTR_FromStr(L"x");   /* error C2106: '=' 左操作数必须为左值 */
+```
+
+整份工程编不过 —— 探针 `.temp/k225p/P329` 里那两段赋值就是这么被去掉的（§11.217 的背账第 1 条）。
+
+**改了三处**
+
+1. **写侧出口**（`cgen_assign.cpp`，与 `App.Title = v` 那条分支并排）：认 `err` / `lasterror` 接收者的 `source` / `description`，换成 `vb6_ErrSetSource(...)` / `vb6_ErrSetDescription(...)`；局部同名变量优先（与读侧同一判据 `knownLocalVars_`）。
+2. **RTL 两枚 setter**（`vb6rtl.c`）：各存一份**真 BSTR**（`vb6_BSTR_FromStr`）—— 理由同 §11.217 那个坑：读侧按 BSTR 取长度前缀，宽字面量会读成空串。`Err.Number` 不碰。
+3. **缺参 raise 的口径**（`vb6_ErrRaise`）：新增 `sourceMissing` 一格 —— 只有「调用方根本没给」才谈保留：
+
+   ```c
+   const int sourceMissing = (source == NULL);
+   if (sourceMissing) source = (vb6_err.source && *vb6_err.source) ? vb6_err.source : vb6_err_source_seed;
+   else if (vb6_ErrSourceIsInternal(source)) source = vb6_err_source_seed;
+   if (!description) {
+       description = (sourceMissing && vb6_err.description && *vb6_err.description)
+                         ? vb6_err.description : vb6_ErrDefaultDescription(errNum);
+   }
+   ```
+
+   内部 raise（传了 `VBA.*` 位置标签的那一族）**不算缺参**：它是一次新的运行期错误，source 照旧翻成工程名、description 走默认表（§11.217 的 E7/E9 逐字不变）。
+
+**踩到的坑：`check_app_title_authority` 的 R7 数形状**
+
+第一版把 `wrapToBSTR(std::move(lastExpr_), *node.value)` 在 Err 分支里抄了一遍，CI 当场红在
+
+```
+FAIL R7 rhs wraps to BSTR = 2 (want 1)
+```
+
+那条哨兵问的是「右值按 BSTR 交给 setter」的写侧出口只有一处。抄一遍等于长出第二位主人，虽然行为对、口径却破了。收法是抽一枚 `emitBSTRValue` lambda，`App.Title` 与 Err 两格都调它：折算仍只走 `wrapToBSTR`，出口仍只有一处（R7 = 1）。这条也说明静态哨兵数的是**形状**，新写面要顺着既有形状接，不能平行复制。
+
+**夹具与哨兵**
+
+- 新夹具 `tests/b242_err_assign`（10 行，逐格对应 P330，工程名 `B242Res`），x64 + x86。
+- `scripts/check_float_to_int_round.ps1` 新增 **S19**（现 S1..S19）：(a) 赋值站按 `err`/`lasterror` 接管 `source`/`description` 并走 RTL setter；(b) 两枚 setter 在 RTL 各定义一次；(c) 缺参分支 `sourceMissing` 那条保留下来的路还在；(d) b242 两套在跑。
+- KEEPS 快照按脚本登记 2 行（`vb6_ErrSetSource|0` / `vb6_ErrSetDescription|0`，两枚 setter 都存指针 ⇒ `keeps_pointer=1`）。
+- 清单：本次发码**只多出夹具那 2 行**（inputs 976 → 978，`.vbp=387 / .bas=591`）—— 语料里没有 `Err.Source/Description` 的赋值，所以既有 976 行的哈希一行未动。
+
+**验证**
+
+- 夹具 x64 / x86 十格与真机 P330 逐行相同（A8/A9 的源是 `B242Res`）。
+- b241（8 格）复跑不变；本机 13 条门禁 + `check_app_title_authority` 全绿。
+- CI：head `90660568` → 22/23（`Emit manifest` + `compile #1` 的 `app_title_authority` R7）；按 CI 清单登记（`517dd387`）→ 收形状（`988f8e11`）→ GA **46091063782 = 23/23 success**。
+
+**背账**
+
+1. `Err.HelpFile` / `Err.HelpContext` 的读写两面向来是常量（读侧折成 `(BSTR)0` / `0`），写面本刀未做。
+2. `Err.Description` 默认表里未量过的号仍是空串。
+3. `Hex/Oct` 的 `LongLong` 16 位宽那一档。
