@@ -15851,3 +15851,68 @@ lastExpr_ = "vb6_ErrorFunc(" + errArg + ")";
 1. `s = Error(0)` 之后 `StrPtr(s)`：VB6 = 0，C3 非 0 —— vbNullString 绑到 String 变量那一面还没统一。
 2. 负数号的描述在 `Error(n)` 与 `Err.Raise` 两处**故意不同**，别再拿一处去套另一处。
 3. `Error()`（空括号）真机是编译错，C3 未单独报错。
+
+
+### §11.224 第二百四十二刀：`vbNullString` 的空指针语义
+
+上一刀的背账里有一格：`s = Error(0)` 之后 `StrPtr(s)`，真机是 0、C3 不是 0。这一格背后是一整族的失真 —— **NULL BSTR 在 C3 里第一次赋值就被洗成空 BSTR**。
+
+**真机量了 16 格**（`.temp/k232p/P348`，另加夹具孪生 `P349`）：
+
+| 格 | 语句 | 真机 |
+| --- | --- | --- |
+| N1 | `s = vbNullString` | `StrPtr=0`、`Len=0`、`LenB=0` |
+| N2 | `s = ""` | **非 0** |
+| N3 | `s = "abc": s = vbNullString` | 0 |
+| N4 | `t = "x" & s`（s 为 NULL） | `t="x"`、非 0 |
+| N5 | `s = ""` / `Len(s & "y")` | `True` / `1` |
+| N6 | `StrPtr(RetNull())` / `StrPtr(RetEmpty())` | 0 / 非 0 |
+| N7 | `StrPtr(PassThrough(vbNullString))` / 传 `""` | 0 / 非 0 |
+| N8 | `s = RetNull()` | 0 |
+| N9 | `v = vbNullString: StrPtr(CStr(v))` | **0**（`VarType=8`） |
+| N10 | `v = "": StrPtr(CStr(v))` | 非 0 |
+| N11 | `s = Error(0)` | 0 |
+| N12 | `s = Left("abc", 0)` | **非 0**（真空串） |
+| N13 | `s = Mid("abc", 2, 0)` | 非 0 |
+| N14 | `s = Space(0)` | 非 0 |
+| N15 | `s = Trim("")` | 非 0 |
+
+一句话：**NULL 只从 `vbNullString` 那一族流过去**（赋值、函数返回、String 形参透传、变体槽、`Error(0)`），而**字符串函数算出来的空串是真 BSTR**。这两件事在 VB6 里靠 `StrPtr` 分得清清楚楚，混掉任何一边都会和 Win32 API 那一侧对不上（`NULL` 与 `""` 对 `FindFirstFile`、`OpenProcess` 之类的差别是实打实的）。
+
+**改前（C3 探针）**：N1/N3/N6/N7/N8/N9/N11 全部非 0 —— 也就是说 `vbNullString` 一路下来跟 `""` 没区别。
+
+**两处病根，都在 RTL**
+
+1. `vb6_BSTR_Assign`（`vb6rtl_bstr.h`）：
+
+   ```c
+   BSTR copy = source ? vb6_BSTR_FromBSTR(source) : vb6_BSTR_Empty();   // 改前
+   BSTR copy = source ? vb6_BSTR_FromBSTR(source) : NULL;               // 改后
+   ```
+
+   这是所有 String 变量赋值/形参落地/返回值落地的必经之路，所以一处改动把 N1/N3/N6/N7/N8/N11 全接上了。
+
+2. `vb6_CStr`（`vb6rtl_conv.c`）：它原来直通 `vb6_Format`，把变体里的 NULL 串洗成空串。加一句提前返回：
+
+   ```c
+   if (x.vt == vb6_vtBSTR && !x.bstrVal) return NULL;
+   ```
+
+   N9 因此对上（N10 的 `""` 不走这一支，仍非 0）。
+
+注意 `vb6_BSTR_AssignMove` **本来就不洗**（转移所有权那一支只 Free 旧值再存 source），所以本刀只补了「复制语义」那一支 —— 这也解释了为什么有些路径早就对了。
+
+**验证**
+
+- 探针 `P348` 改后 16 格与真机逐格相同（0/非 0 全对上）。
+- 夹具 `tests/b248_null_bstr_face`（15 格，只钉 `StrPtr(...) = 0` 的 True/False 与 `Len`，地址本身不钉），针脚取自同一份源码的 VB6 孪生 `P349`，x64/x86 一致。
+- 回归抽查：`b239_cstr_null_face`、`b240_hex_oct_text`、`b221_cstr_now_date`、`b235_sgn_null_gate`、`b236_hex_oct_array_arg` 五份复跑，读数与本刀前一致。
+- `check_float_to_int_round.ps1` 新增 **S25**（现 S1..S25）：(a) `vb6_BSTR_Assign` 不许再把 NULL 洗成 Empty；(b) `vb6_CStr` 必须有 VT_BSTR+空指针的提前返回；(c) b248 两架构都在跑。
+- 本机 16 条门禁全绿。
+- CI：head `3a4e58d4` → 21/23（只剩 b248 两份输入未登记的 manifest K1）→ 按 CI 清单 `d6c00d6b` 登记（**只多出 b248 那 2 行** —— 本刀只动 RTL 头文件与转换站，`--emit-c` 的字面不变）→ head `969164d1` → GA **46118061145 = 23/23 success**（12 个 vbp 分片全绿，等于又报了一遍：全套语料里没有一处依赖「NULL 被洗成空串」）。
+
+**背账**
+
+1. 夹具里原有一格 `Mid(s, 1) = ""`（s 为零长串）在真机上直接报 5、把程序停掉 —— 说明 **Mid 语句遇零长串是错误**，这一支 C3 未单独量，先从句里摘掉，记在这里。
+2. `&` 运算符对 NULL 的传播（N4）走的是 `vb6_BSTR_Concat`，本刀没动它 —— 真机 N4 是 `t="x"`，C3 也早就是；但 `Null`（varianted）参与 `&` 的传播属另一族，未量。
+3. 传 `NULL` 给 Declare 的 `ByVal String` / `ByRef String` 在 VB6 里的具体形（传 0 还是传空串指针）未单独量。
